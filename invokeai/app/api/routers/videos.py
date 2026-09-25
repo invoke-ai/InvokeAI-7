@@ -27,6 +27,7 @@ from invokeai.app.api.routers._access import (
 from invokeai.app.api.routers._access import (
     assert_board_write_access as _assert_board_write_access,
 )
+from invokeai.app.api.routers._access import assert_project_owned
 from invokeai.app.api.routers._access import (
     assert_video_owner as _assert_video_owner,
 )
@@ -442,10 +443,17 @@ async def upload_video(
     is_intermediate: bool = Query(description="Whether this is an intermediate video"),
     board_id: Optional[str] = Query(default=None, description="The board to add this video to, if any"),
     session_id: Optional[str] = Query(default=None, description="The session ID associated with this upload, if any"),
+    project_id: Optional[str] = Query(
+        default=None,
+        min_length=1,
+        max_length=255,
+        description="The caller's project this upload originates in, if any; recorded for intermediates cleanup",
+    ),
 ) -> VideoDTO:
     """Uploads a video for the current user."""
     # Check board access for uploads to a specific board.
     board = await run_in_threadpool(_assert_board_write_access, board_id, current_user)
+    await run_in_threadpool(assert_project_owned, project_id, current_user)
 
     # Stream the upload straight into a tmp file so we can probe it and then hand its path
     # to the service. Reading the full body into memory first risked exhausting RAM on
@@ -546,6 +554,7 @@ async def upload_video(
                     graph=extracted.invokeai_graph,
                     is_intermediate=is_intermediate,
                     user_id=current_user.user_id,
+                    project_id=project_id,
                 )
             )
         except Exception:

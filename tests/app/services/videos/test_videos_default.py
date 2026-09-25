@@ -326,3 +326,30 @@ class TestCreateBoardAttachFallback:
         assert "deleted-board" in invoker.services.logger.warning.call_args.args[0]
         # Nothing was attached, so nothing should be unwound.
         invoker.services.board_video_records.remove_video_from_board.assert_not_called()
+
+
+def test_create_records_the_project_and_measured_size(video_service: VideoService, tmp_path) -> None:
+    invoker = video_service._VideoService__invoker  # type: ignore[attr-defined]
+    invoker.services.configuration.image_subfolder_strategy = "flat"
+    invoker.services.names.create_video_name.return_value = "made.mp4"
+    invoker.services.video_files.get_file_size_bytes.return_value = 4096
+    invoker.services.video_records.get.return_value = _make_record(video_name="made.mp4")
+    invoker.services.board_video_records.get_board_for_video.return_value = None
+    invoker.services.urls.get_video_url.return_value = "http://localhost/videos/made.mp4"
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"\x00" * 16)
+
+    video_service.create(
+        source_path=source,
+        width=64,
+        height=64,
+        duration=1.0,
+        fps=8.0,
+        video_origin=ResourceOrigin.INTERNAL,
+        video_category=ImageCategory.GENERAL,
+        is_intermediate=True,
+        project_id="project-1",
+    )
+
+    assert invoker.services.video_records.save.call_args.kwargs["project_id"] == "project-1"
+    invoker.services.video_records.set_file_size_bytes.assert_called_once_with("made.mp4", 4096)

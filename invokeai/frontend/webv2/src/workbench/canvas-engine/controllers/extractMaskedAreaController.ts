@@ -24,6 +24,7 @@ import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/d
 import { getDocumentLayer, getDocumentLeaves, isNodeAbsent } from '@workbench/canvas-engine/document/documentIndex';
 import { createEmptyStacks, isGroupNode } from '@workbench/canvas-engine/document/documentTree';
 import { getSourceContentRect } from '@workbench/canvas-engine/document/sources';
+import { collectHistoryMediaRefs } from '@workbench/canvas-engine/history/history';
 import { isEmpty } from '@workbench/canvas-engine/math/rect';
 import { compositeDocument } from '@workbench/canvas-engine/render/compositor';
 
@@ -252,6 +253,7 @@ export class ExtractMaskedAreaController {
       apply();
       this.deps.history.push({
         bytes: rect.width * rect.height * 4 + 256,
+        heldAssetRefs: collectHistoryMediaRefs(layer),
         label: 'Extract masked area',
         redo: apply,
         replayFailureAtomic: true,

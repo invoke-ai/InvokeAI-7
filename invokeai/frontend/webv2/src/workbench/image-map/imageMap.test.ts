@@ -29,6 +29,7 @@ import {
   recordImageIndexStatus,
   refreshImageIndexStatus,
   refreshImageMapPoints,
+  setClusterEps,
 } from './imageMapStore';
 import {
   ALL_POINTS_TRACE,
@@ -132,6 +133,7 @@ describe('image map store', () => {
     mocks.apiFetchJson.mockReset();
     imageMapStore.setSnapshot({
       clusterLabels: null,
+      clusterLabelsEps: null,
       clusterLabelsHash: null,
       data: null,
       error: null,
@@ -145,6 +147,74 @@ describe('image map store', () => {
   // Retry-schedule tests fake the clock; restore it whatever their outcome.
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('clusters at the chosen strength on every later refresh', async () => {
+    // The strength is module state rather than a call argument precisely so
+    // that socket-driven refreshes carry it too; nothing else would.
+    mockPointsWithForeignLabels();
+    await refreshImageMapPoints();
+    setClusterEps(0.25);
+    await Promise.resolve();
+    await refreshImageMapPoints();
+
+    const pointsCalls = mocks.apiFetchJson.mock.calls
+      .map((call) => String(call[0]))
+      .filter((url) => url.startsWith('/api/v1/image_map/points'));
+
+    expect(pointsCalls[0]).not.toContain('eps=');
+    expect(pointsCalls.at(-1)).toContain('eps=0.25');
+
+    setClusterEps(null);
+    await Promise.resolve();
+    await refreshImageMapPoints();
+
+    const afterClearing = mocks.apiFetchJson.mock.calls
+      .map((call) => String(call[0]))
+      .filter((url) => url.startsWith('/api/v1/image_map/points'))
+      .at(-1);
+
+    expect(afterClearing).not.toContain('eps=');
+    setClusterEps(null);
+  });
+
+  it('refetches when the strength changes, and retires the old labels', async () => {
+    // Changing eps renumbers every cluster while the projection and the
+    // visible set stay put, so `visibleHash` cannot detect it: labels left in
+    // the store would be shown against a clustering they do not describe.
+    mocks.apiFetchJson.mockImplementation((url: string) =>
+      url.startsWith('/api/v1/image_map/cluster_labels')
+        ? Promise.resolve({
+            labels: { '0': { label: 'boats' } },
+            updated_at: '2026-08-02 12:00:00',
+            visible_hash: 'hash-1',
+          })
+        : Promise.resolve(BACKEND_RESPONSE)
+    );
+
+    await refreshImageMapPoints();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(imageMapStore.getSnapshot().clusterLabels).not.toBeNull();
+    expect(imageMapStore.getSnapshot().clusterLabelsEps).toBe(0.42);
+
+    const before = mocks.apiFetchJson.mock.calls.length;
+    setClusterEps(0.3);
+
+    expect(imageMapStore.getSnapshot().clusterLabels).toBeNull();
+    expect(imageMapStore.getSnapshot().clusterLabelsEps).toBeNull();
+    expect(mocks.apiFetchJson.mock.calls.length).toBeGreaterThan(before);
+    setClusterEps(null);
+  });
+
+  it('does not refetch for a strength that is already in force', async () => {
+    mockPointsWithForeignLabels();
+    await refreshImageMapPoints();
+    const before = mocks.apiFetchJson.mock.calls.length;
+
+    setClusterEps(null);
+
+    expect(mocks.apiFetchJson.mock.calls.length).toBe(before);
   });
 
   it('loads points into the snapshot', async () => {
@@ -754,6 +824,7 @@ describe('snapshot transitions', () => {
     // starts at null; seed a real error first so the clearing is what is tested.
     imageMapStore.setSnapshot({
       clusterLabels: null,
+      clusterLabelsEps: null,
       clusterLabelsHash: null,
       data: null,
       error: 'boom',
@@ -785,6 +856,7 @@ describe('snapshot transitions', () => {
     // Retry must clear renderError so a transient WebGL failure can remount the plot.
     imageMapStore.setSnapshot({
       clusterLabels: null,
+      clusterLabelsEps: null,
       clusterLabelsHash: null,
       data: null,
       error: null,
@@ -806,6 +878,7 @@ const drainMacrotask = (): Promise<void> =>
 
 const EMPTY_SNAPSHOT = {
   clusterLabels: null,
+  clusterLabelsEps: null,
   clusterLabelsHash: null,
   data: null,
   error: null,

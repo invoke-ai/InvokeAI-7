@@ -1,3 +1,5 @@
+import type * as GalleryContracts from '@features/gallery/contracts';
+
 import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -78,7 +80,7 @@ vi.mock('@workbench/WorkbenchContext', () => ({
   }),
 }));
 
-import { useMapSelection } from './useSelectMapImage';
+import { useClearClusterSelection, useMapSelection } from './useSelectMapImage';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -95,15 +97,18 @@ const handle: {
         label: string
       ) => void)
     | null;
-} = { click: null, clickCluster: null };
+  clear: (() => void) | null;
+} = { clear: null, click: null, clickCluster: null };
 
 const Probe = () => {
   const { selectCluster, selectItem } = useMapSelection();
+  const clearClusterSelection = useClearClusterSelection();
 
   useEffect(() => {
+    handle.clear = clearClusterSelection;
     handle.click = selectItem;
     handle.clickCluster = selectCluster;
-  }, [selectCluster, selectItem]);
+  }, [clearClusterSelection, selectCluster, selectItem]);
 
   return null;
 };
@@ -610,6 +615,45 @@ describe('useMapSelection', () => {
     expect(mocks.patchValues).not.toHaveBeenCalled();
     expect(mocks.selectItem).toHaveBeenCalledTimes(1);
     expect(mocks.selectItem.mock.calls[0]?.[0].name).toBe('fast.png');
+  });
+
+  it('retires a cluster click still hydrating when the selection is cleared', async () => {
+    // A cluster listing is showing; the user clicks another cluster and clears
+    // before that click's image resolves. The late resolution must not bring
+    // the cleared selection back.
+    // Through the real registry (the module's export is stubbed above): a
+    // reference to an unregistered cluster reads as no cluster at all.
+    const { registerImageCluster } = await vi.importActual<typeof GalleryContracts>('@features/gallery/contracts');
+    const clusterId = registerImageCluster(['image:a.png', 'image:b.png'], 'beaches');
+    mocks.galleryValues = { semanticImageQuery: { clusterId, kind: 'cluster', label: 'beaches' } };
+    const slow = deferred<{ boardId: string; category: string; kind: string; name: string }>();
+
+    mocks.resolve.mockReturnValueOnce(slow.promise);
+    await mount();
+
+    await flush(() => {
+      handle.clickCluster?.({ kind: 'image', name: 'slow.png' }, ['image:slow.png'], 'forests');
+      handle.clear?.();
+    });
+    await flush(() => {
+      slow.resolve({ boardId: 'board-a', category: 'general', kind: 'image', name: 'slow.png' });
+    });
+
+    expect(mocks.patchValues).toHaveBeenCalledTimes(1);
+    expect(mocks.patchValues).toHaveBeenCalledWith('gallery', expect.objectContaining({ semanticImageQuery: null }));
+    expect(mocks.registerImageCluster).not.toHaveBeenCalled();
+    expect(mocks.selectItem).not.toHaveBeenCalled();
+  });
+
+  it('leaves the gallery alone when a clear finds no cluster listing', async () => {
+    mocks.galleryValues = { searchTerm: 'cats', semanticImageQuery: { imageName: 'a.png', kind: 'image' } };
+    await mount();
+
+    await flush(() => {
+      handle.clear?.();
+    });
+
+    expect(mocks.patchValues).not.toHaveBeenCalled();
   });
 
   it('ignores a slow click that resolves after a newer one', async () => {

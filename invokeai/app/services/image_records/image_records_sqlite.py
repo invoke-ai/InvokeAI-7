@@ -19,6 +19,7 @@ from invokeai.app.services.image_records.image_records_common import (
     ResourceOrigin,
     deserialize_image_record,
 )
+from invokeai.app.services.shared.intermediate_delete import IntermediateDeleteGuard
 from invokeai.app.services.shared.pagination import OffsetPaginatedResults
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 from invokeai.app.services.shared.sqlite.sqlite_database import SqliteDatabase
@@ -233,6 +234,30 @@ class SqliteImageRecordStorage(ImageRecordStorageBase):
 
         return deserialize_image_record(dict(result))
 
+    def set_file_size_bytes(self, image_name: str, file_size_bytes: Optional[int]) -> None:
+        with self._db.transaction() as cursor:
+            try:
+                cursor.execute(
+                    "UPDATE images SET file_size_bytes = ? WHERE image_name = ?;",
+                    (file_size_bytes, image_name),
+                )
+            except sqlite3.Error as e:
+                raise ImageRecordSaveException from e
+
+    def set_file_sizes_bytes(self, sizes: dict[str, int]) -> None:
+        if not sizes:
+            return
+        with self._db.transaction() as cursor:
+            try:
+                # Backfill only fills gaps: the writer's own measurement, taken after the file exists,
+                # wins over one taken before it was written.
+                cursor.executemany(
+                    "UPDATE images SET file_size_bytes = ? WHERE image_name = ? AND file_size_bytes IS NULL;",
+                    [(size, name) for name, size in sizes.items()],
+                )
+            except sqlite3.Error as e:
+                raise ImageRecordSaveException from e
+
     def get_user_id(self, image_name: str) -> Optional[str]:
         with self._db.transaction() as cursor:
             cursor.execute(
@@ -436,33 +461,22 @@ class SqliteImageRecordStorage(ImageRecordStorageBase):
             except sqlite3.Error as e:
                 raise ImageRecordDeleteException from e
 
-    def get_intermediates_count(self, user_id: Optional[str] = None) -> int:
+    def get_subfolders(self, image_names: list[str]) -> dict[str, str]:
+        subfolders: dict[str, str] = {}
         with self._db.transaction() as cursor:
-            query = "SELECT COUNT(*) FROM images WHERE is_intermediate = TRUE"
-            params: list[str] = []
-            if user_id is not None:
-                query += " AND user_id = ?"
-                params.append(user_id)
-            cursor.execute(query, params)
-            count = cast(int, cursor.fetchone()[0])
-        return count
+            for start in range(0, len(image_names), self._MAX_SQL_VARIABLES):
+                chunk = image_names[start : start + self._MAX_SQL_VARIABLES]
+                placeholders = ",".join("?" for _ in chunk)
+                cursor.execute(
+                    f"SELECT image_name, image_subfolder FROM images WHERE image_name IN ({placeholders})", chunk
+                )
+                for row in cursor.fetchall():
+                    subfolders[cast(str, row[0])] = cast(str, row[1])
+        return subfolders
 
-    def get_intermediates(self) -> list[tuple[str, str]]:
-        """Gets all intermediate image records without deleting them.
-
-        Returns a list of (image_name, image_subfolder) tuples for staged file deletion.
-        """
-        with self._db.transaction() as cursor:
-            cursor.execute(
-                """--sql
-                SELECT image_name, image_subfolder FROM images
-                WHERE is_intermediate = TRUE;
-                """
-            )
-            result = cast(list[sqlite3.Row], cursor.fetchall())
-        return [(r[0], r[1]) for r in result]
-
-    def delete_intermediates_by_names(self, image_names: list[str]) -> list[str]:
+    def delete_intermediates_by_names(
+        self, image_names: list[str], guard: Optional[IntermediateDeleteGuard] = None
+    ) -> list[str]:
         """Deletes the named image records, skipping any that are no longer intermediates.
 
         The ``is_intermediate`` predicate rides on the DELETE itself rather than on a preceding
@@ -473,6 +487,8 @@ class SqliteImageRecordStorage(ImageRecordStorageBase):
         Returns the names whose records this call actually removed. Names that were already gone, and
         names whose records survive because they are no longer intermediates, are both excluded — the
         caller purges the files of exactly the returned names and touches nothing else.
+
+        ``guard`` narrows each chunk on this same transaction; see `IntermediateDeleteGuard`.
         """
         deleted: list[str] = []
         try:
@@ -481,6 +497,10 @@ class SqliteImageRecordStorage(ImageRecordStorageBase):
                 # transaction above.
                 for start in range(0, len(image_names), self._MAX_SQL_VARIABLES):
                     chunk = image_names[start : start + self._MAX_SQL_VARIABLES]
+                    if guard is not None:
+                        chunk = guard(cursor, chunk)
+                        if not chunk:
+                            continue
                     placeholders = ",".join("?" for _ in chunk)
                     select_query = f"SELECT image_name FROM images WHERE image_name IN ({placeholders})"
 
@@ -514,6 +534,7 @@ class SqliteImageRecordStorage(ImageRecordStorageBase):
         metadata: Optional[str] = None,
         user_id: Optional[str] = None,
         image_subfolder: str = "",
+        project_id: Optional[str] = None,
     ) -> datetime:
         with self._db.transaction() as cursor:
             try:
@@ -532,9 +553,10 @@ class SqliteImageRecordStorage(ImageRecordStorageBase):
                         starred,
                         has_workflow,
                         user_id,
-                        image_subfolder
+                        image_subfolder,
+                        project_id
                         )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (
                         image_name,
@@ -550,6 +572,7 @@ class SqliteImageRecordStorage(ImageRecordStorageBase):
                         has_workflow,
                         user_id or "system",
                         image_subfolder,
+                        project_id,
                     ),
                 )
 

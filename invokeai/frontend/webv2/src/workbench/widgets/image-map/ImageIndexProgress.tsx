@@ -1,6 +1,6 @@
 import type { ImageIndexCounts } from '@workbench/image-map/indexProgress';
 
-import { Box, Button, HStack, Progress, Stack, Text } from '@chakra-ui/react';
+import { Button, HStack, Progress, Stack, Text } from '@chakra-ui/react';
 import { Tooltip } from '@platform/ui';
 import { describeIndexProgress } from '@workbench/image-map/indexProgress';
 import { useEffect, useState } from 'react';
@@ -106,38 +106,34 @@ export const ImageIndexActivityBadge = ({ counts, updatedAt }: ImageIndexProgres
     : `Indexing ${progress.counts}. The map and its cluster labels update as images finish.`;
 
   return (
-    // Pass plot-wide pointer events through the wrapper; only the badge intercepts them for its tooltip.
-    <Box inset="0" pointerEvents="none" position="absolute" zIndex="1">
-      <Tooltip content={label}>
-        <HStack
-          bg="bg.subtle"
-          borderColor="border.subtle"
-          borderRadius="md"
-          borderWidth="1px"
-          color="fg.muted"
-          fontSize="2xs"
-          gap="1.5"
-          insetStart="2"
-          maxW="calc(100% - 1rem)"
-          minW="0"
-          pointerEvents="auto"
-          position="absolute"
-          px="2"
-          py="1"
-          title={label}
-          top="2"
-        >
-          <Progress.Root flexShrink="0" max={100} size="xs" value={progress.percent} w="10">
-            <Progress.Track aria-label={`${PROGRESS_LABEL}: ${label}`} aria-valuenow={progress.percent}>
-              <Progress.Range />
-            </Progress.Track>
-          </Progress.Root>
-          <Text fontVariantNumeric="tabular-nums" truncate>
-            indexing {progress.compact}
-          </Text>
-        </HStack>
-      </Tooltip>
-    </Box>
+    // Positioned by the map's overlay column, which passes pointer events
+    // through to the plot; the badge takes its own back so the tooltip opens.
+    <Tooltip content={label}>
+      <HStack
+        bg="bg.subtle"
+        borderColor="border.subtle"
+        borderRadius="md"
+        borderWidth="1px"
+        color="fg.muted"
+        fontSize="2xs"
+        gap="1.5"
+        maxW="full"
+        minW="0"
+        pointerEvents="auto"
+        px="2"
+        py="1"
+        title={label}
+      >
+        <Progress.Root flexShrink="0" max={100} size="xs" value={progress.percent} w="10">
+          <Progress.Track aria-label={`${PROGRESS_LABEL}: ${label}`} aria-valuenow={progress.percent}>
+            <Progress.Range />
+          </Progress.Track>
+        </Progress.Root>
+        <Text fontVariantNumeric="tabular-nums" truncate>
+          indexing {progress.compact}
+        </Text>
+      </HStack>
+    </Tooltip>
   );
 };
 

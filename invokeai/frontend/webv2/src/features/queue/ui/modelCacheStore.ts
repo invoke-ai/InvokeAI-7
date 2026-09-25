@@ -1,5 +1,6 @@
 import type { TFunction } from 'i18next';
 
+import { formatBytes } from '@platform/i18n/languages';
 import {
   assertAccountScopeCurrent,
   captureAccountScope,
@@ -9,23 +10,8 @@ import {
 import { createExternalStore } from '@platform/state/externalStore';
 import { apiFetchJson, getApiErrorMessage } from '@platform/transport/http';
 
-const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'] as const;
-
-export const formatModelCacheBytes = (bytes: number | null | undefined): string => {
-  if (bytes === null || bytes === undefined || !Number.isFinite(bytes) || bytes < 0) {
-    return '—';
-  }
-
-  let value = bytes;
-  let unitIndex = 0;
-
-  while (value >= 1024 && unitIndex < BYTE_UNITS.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-
-  return `${unitIndex === 0 ? value : value.toFixed(1)} ${BYTE_UNITS[unitIndex]}`;
-};
+/** The backend sizes the model cache in binary gigabytes (GiB). */
+export const formatModelCacheBytes = (bytes: number | null | undefined): string => formatBytes(bytes, { binary: true });
 
 /** Cache statistics have no socket stream; refresh on mount, model load, and clear. */
 

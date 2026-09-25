@@ -11,6 +11,7 @@ import type { Rect } from '@workbench/canvas-engine/types';
 
 import { lookupLayerBelow, mergeDownEligibility } from '@workbench/canvas-engine/document-model/documentModel';
 import { getDocumentLayer } from '@workbench/canvas-engine/document/documentIndex';
+import { collectHistoryMediaRefs } from '@workbench/canvas-engine/history/history';
 import { isEmpty, roundOut, union } from '@workbench/canvas-engine/math/rect';
 
 export type BooleanRasterOperation = 'intersect' | 'cutout' | 'cutaway' | 'exclude';
@@ -192,6 +193,7 @@ export class BooleanMergeController {
       apply();
       this.deps.history.push({
         bytes: resultRect.width * resultRect.height * 4 + 256,
+        heldAssetRefs: collectHistoryMediaRefs(resultLayer),
         label: `Boolean ${operation}`,
         redo: apply,
         replayFailureAtomic: true,

@@ -1,8 +1,11 @@
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop */
 import type { GalleryImage, GalleryImageItem, GalleryVideoItem } from '@features/gallery';
 import type * as GalleryModule from '@features/gallery';
+import type { ImageIndexAvailability } from '@features/gallery/data/backend';
+import type * as GalleryQueriesModule from '@features/gallery/queries';
 import type * as IdentityModule from '@features/identity';
 import type { ImageActions } from '@workbench/image-actions';
+import type { ImageMapImageLabels } from '@workbench/image-map/api';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -35,6 +38,19 @@ vi.mock('@features/gallery', async (importOriginal) => {
     },
   };
 });
+const mocks = vi.hoisted(() => ({
+  getImageLabels: vi.fn<() => Promise<ImageMapImageLabels | null>>(),
+  indexAvailability: { modelName: null, state: 'disabled' } as ImageIndexAvailability,
+}));
+
+vi.mock('@features/gallery/queries', async (importOriginal) => ({
+  ...(await importOriginal<typeof GalleryQueriesModule>()),
+  imageIndexAvailabilityOptions: () => ({
+    queryFn: () => mocks.indexAvailability,
+    queryKey: ['test-image-index-availability'],
+  }),
+}));
+vi.mock('@workbench/image-map/imageLabelCache', () => ({ getImageLabels: mocks.getImageLabels }));
 vi.mock('@features/identity', async (importOriginal) => {
   const actual = await importOriginal<typeof IdentityModule>();
 
@@ -55,6 +71,7 @@ void i18n.use(initReactI18next).init({
             details: 'Details',
             graph: 'Graph',
             graphJsonLabel: 'Graph JSON',
+            imageTags: 'Image tags:',
             loadingMetadata: 'Loading metadata',
             metadata: 'Metadata',
             metadataJsonLabel: 'Metadata JSON',
@@ -125,6 +142,7 @@ const POSITION = { boardItemCount: 3, isLoadingBoard: false, selectedIndex: 0 };
 
 let host: HTMLDivElement;
 let root: Root;
+let queryClient: QueryClient;
 const onOpenChange = vi.fn();
 
 const settle = (ms = 300) =>
@@ -161,7 +179,7 @@ const Widget = ({ item }: { item: GalleryImageItem | GalleryVideoItem }) => {
 const render = async (item: GalleryImageItem | GalleryVideoItem) => {
   await act(() =>
     root.render(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <QueryClientProvider client={queryClient}>
         <I18nextProvider i18n={i18n}>
           <ChakraProvider value={system}>
             <Widget item={item} />
@@ -190,6 +208,9 @@ const expectBoundedByStage = () => {
 
 beforeEach(() => {
   onOpenChange.mockReset();
+  mocks.getImageLabels.mockReset();
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  mocks.indexAvailability = { modelName: null, state: 'disabled' };
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -216,6 +237,71 @@ describe('PreviewDetailsPopover', () => {
     await expect.element(page.getByRole('region', { name: 'Metadata JSON' })).toBeVisible();
     expectBoundedByStage();
     expect(viewport.scrollHeight).toBeGreaterThan(viewport.clientHeight + 40);
+  });
+
+  it('puts the image tags after the dimensions, truncating them rather than the dimensions', async () => {
+    mocks.indexAvailability = { modelName: null, state: 'ready' };
+    mocks.getImageLabels.mockResolvedValue({
+      alternates: ['a rocky shoreline beneath dramatic evening clouds', 'waves breaking over weathered stones'],
+      label: 'sunset over a coastal lighthouse',
+    });
+    await render(imageItem);
+
+    // Availability, the lazily loaded cache, and the label request resolve in turn; wait rather than time them.
+    const tags = await vi.waitFor(() => {
+      const element = document.querySelector<HTMLElement>('[data-preview-image-tags]');
+      expect(element).not.toBeNull();
+      return element;
+    });
+    const dimensions = page.getByText('512 × 768').element();
+    expect(mocks.getImageLabels).toHaveBeenCalledWith({ kind: 'image', name: 'still.png' });
+    expect(tags?.textContent).toBe(
+      '·Image tags: sunset over a coastal lighthouse, a rocky shoreline beneath dramatic evening clouds, waves breaking over weathered stones'
+    );
+    // Same header row, to the right of the dimensions, which stay whole while the tags end in an ellipsis.
+    expect(tags!.getBoundingClientRect().left).toBeGreaterThan(dimensions.getBoundingClientRect().right);
+    expect(Math.abs(tags!.getBoundingClientRect().top - dimensions.getBoundingClientRect().top)).toBeLessThan(2);
+    expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
+    expect(tags!.scrollWidth).toBeGreaterThan(tags!.clientWidth);
+    expect(getComputedStyle(tags!).textOverflow).toBe('ellipsis');
+    expect(tags!.getBoundingClientRect().right).toBeLessThanOrEqual(popover().getBoundingClientRect().right);
+  });
+
+  it('withdraws the tags when the image index stops being ready', async () => {
+    mocks.indexAvailability = { modelName: null, state: 'ready' };
+    mocks.getImageLabels.mockResolvedValue({ alternates: [], label: 'sunset' });
+    await render(imageItem);
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-preview-image-tags]')?.textContent).toBe('·Image tags: sunset')
+    );
+
+    await act(() => {
+      queryClient.setQueryData(['test-image-index-availability'], { modelName: 'clip', state: 'model_missing' });
+    });
+
+    expect(document.querySelector('[data-preview-image-tags]')).toBeNull();
+    expect(document.body.textContent).toContain('512 × 768');
+  });
+
+  it('leaves no separator behind for an item without tags', async () => {
+    mocks.indexAvailability = { modelName: null, state: 'ready' };
+    mocks.getImageLabels.mockResolvedValue(null);
+    await render(imageItem);
+
+    await vi.waitFor(() => expect(mocks.getImageLabels).toHaveBeenCalled());
+    await settle(50);
+    expect(document.querySelector('[data-preview-image-tags]')).toBeNull();
+    // The header row ends at the dimensions.
+    expect(page.getByText('512 × 768').element().parentElement?.textContent).toMatch(/512 × 768$/);
+  });
+
+  it('shows no tags, and asks for none, while the image index is not ready', async () => {
+    mocks.getImageLabels.mockResolvedValue({ alternates: [], label: 'sunset' });
+    await render(imageItem);
+
+    expect(document.body.textContent).toContain('512 × 768');
+    expect(document.querySelector('[data-preview-image-tags]')).toBeNull();
+    expect(mocks.getImageLabels).not.toHaveBeenCalled();
   });
 
   it('shows the raw metadata record and the workflow for an image, like the legacy viewer', async () => {

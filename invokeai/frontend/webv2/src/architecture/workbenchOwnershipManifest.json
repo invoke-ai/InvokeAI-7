@@ -118,6 +118,7 @@
     "layoutPresetSnapshots.ts": "workbench",
     "layoutPresets.ts": "workbench",
     "layoutWidgetSet.ts": "workbench",
+    "mediaReferences.ts": "workbench",
     "panZoom.ts": "workbench",
     "performanceMarks.ts": "workbench",
     "persistenceContracts.ts": "workbench",

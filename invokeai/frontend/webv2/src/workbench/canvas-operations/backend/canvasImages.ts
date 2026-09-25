@@ -26,6 +26,8 @@ export interface UploadCanvasImageOptions {
   isIntermediate?: boolean;
   /** Adds the image to a board, if given. */
   boardId?: string;
+  /** Records which of the caller's projects the upload originates in, so intermediates can be cleared per project. */
+  projectId?: string;
   /** File name sent in the multipart part (defaults to `canvas-paint.png`). */
   fileName?: string;
   /** Optional image metadata sent as JSON in the multipart body. */
@@ -49,6 +51,19 @@ export class CanvasImageUploadError extends Error {
   }
 }
 
+/** The server's refusal of a `project_id` it has no record of for this account (`assert_project_owned`). */
+export const isUploadProjectNotFound = (error: unknown): boolean => {
+  if (!(error instanceof CanvasImageUploadError) || error.status !== 404) {
+    return false;
+  }
+  try {
+    const body: unknown = JSON.parse(error.message);
+    return typeof body === 'object' && body !== null && 'detail' in body && body.detail === 'Project not found';
+  } catch {
+    return false;
+  }
+};
+
 export const uploadCanvasImage = async (
   blob: Blob,
   options: UploadCanvasImageOptions = {}
@@ -63,6 +78,9 @@ export const uploadCanvasImage = async (
   });
   if (options.boardId) {
     query.set('board_id', options.boardId);
+  }
+  if (options.projectId) {
+    query.set('project_id', options.projectId);
   }
 
   const fileName = options.fileName ?? 'canvas-paint.png';

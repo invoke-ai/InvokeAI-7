@@ -46,3 +46,60 @@ export const normalizeWorkbenchLanguage = (value: unknown): WorkbenchLanguage | 
 
 export const getWorkbenchLanguageDirection = (language: WorkbenchLanguage): WorkbenchLanguageDirection =>
   WORKBENCH_LANGUAGE_OPTIONS.find((option) => option.value === language)?.direction ?? 'ltr';
+
+const BYTE_UNITS = ['byte', 'kilobyte', 'megabyte', 'gigabyte', 'terabyte', 'petabyte'] as const;
+const BINARY_BYTE_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'] as const;
+
+const documentLocale = (): string | undefined => globalThis.document?.documentElement.lang || undefined;
+
+// Constructing a NumberFormat costs far more than formatting with one, and these run per row in lists.
+const numberFormats = new Map<string, Intl.NumberFormat>();
+const getNumberFormat = (locale: string | undefined, options: Intl.NumberFormatOptions): Intl.NumberFormat => {
+  const key = `${locale ?? ''}\u0000${JSON.stringify(options)}`;
+  let format = numberFormats.get(key);
+  if (!format) {
+    format = new Intl.NumberFormat(locale, options);
+    numberFormats.set(key, format);
+  }
+  return format;
+};
+
+/** A whole count in the document language's digits and grouping. */
+export const formatCount = (count: number, locale: string | undefined = documentLocale()): string =>
+  getNumberFormat(locale, {}).format(count);
+
+/**
+ * A byte size with one decimal from kilobytes up, in the document language by default. Decimal (SI) units are the
+ * ones Intl can name; `binary` scales by 1024 and appends IEC labels (KiB, GiB) that Intl lacks. Missing, negative or
+ * non-finite sizes render as a dash.
+ */
+export const formatBytes = (
+  bytes: number | null | undefined,
+  { binary = false, locale = documentLocale() }: { binary?: boolean; locale?: string } = {}
+): string => {
+  if (bytes === null || bytes === undefined || !Number.isFinite(bytes) || bytes < 0) {
+    return '—';
+  }
+
+  const base = binary ? 1024 : 1000;
+  let value = bytes;
+  let unit = 0;
+
+  while (Math.round(value * 10) / 10 >= base && unit < BYTE_UNITS.length - 1) {
+    value /= base;
+    unit += 1;
+  }
+
+  const digits = unit === 0 ? 0 : 1;
+  if (binary) {
+    const number = getNumberFormat(locale, { maximumFractionDigits: digits, minimumFractionDigits: digits });
+    return `${number.format(value)}\u00a0${BINARY_BYTE_UNITS[unit]}`;
+  }
+  return getNumberFormat(locale, {
+    maximumFractionDigits: digits,
+    minimumFractionDigits: digits,
+    style: 'unit',
+    unit: BYTE_UNITS[unit],
+    unitDisplay: unit === 0 ? 'long' : 'short',
+  }).format(value);
+};

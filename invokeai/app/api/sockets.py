@@ -31,6 +31,8 @@ from invokeai.app.services.events.events_common import (
     ImageIndexUpdatedEvent,
     ImageMapProjectionReadyEvent,
     ImageUploadedEvent,
+    IntermediatesEventBase,
+    IntermediatesOperationChangedEvent,
     InvocationCompleteEvent,
     InvocationErrorEvent,
     InvocationProgressEvent,
@@ -136,6 +138,7 @@ WORKFLOW_EVENTS = {WorkflowCreatedEvent, WorkflowUpdatedEvent, WorkflowDeletedEv
 USER_EVENTS = {UserAccessChangedEvent}
 
 IMAGE_INDEX_EVENTS = {ImageIndexStatusEvent, ImageIndexUpdatedEvent, ImageMapProjectionReadyEvent}
+INTERMEDIATES_EVENTS = {IntermediatesOperationChangedEvent}
 MEDIA_EVENTS = {ImageUploadedEvent, VideoUploadedEvent}
 
 MODEL_INSTALL_EVENTS = (
@@ -245,6 +248,7 @@ class SocketIO:
         register_events(LLM_TASK_EVENTS, self._handle_llm_task_event)
         register_events(WORKFLOW_EVENTS, self._handle_workflow_event)
         register_events(IMAGE_INDEX_EVENTS, self._handle_image_index_event)
+        register_events(INTERMEDIATES_EVENTS, self._handle_intermediates_event)
         register_events(MEDIA_EVENTS, self._handle_media_event)
         register_events(USER_EVENTS, self._handle_user_access_changed)
 
@@ -1227,6 +1231,17 @@ class SocketIO:
         # a side channel on other users' generation activity, so they go to
         # admins only (single-user mode's sole user is an admin).
         await self._sio.emit(event=event_name, data=event_data.model_dump(mode="json"), room="admin")
+
+    async def _handle_intermediates_event(self, event: FastAPIEvent[IntermediatesEventBase]) -> None:
+        event_name, event_data = event
+        payload = event_data.model_dump(mode="json")
+        if not self._is_multiuser_enabled():
+            await self._sio.emit(event=event_name, data=payload, room="admin")
+            return
+        # One emit with a room list: python-socketio dedupes, so an admin confirming their own
+        # cleanup receives each update once.
+        rooms = [f"user:{event_data.user_id}", "admin"]
+        await self._sio.emit(event=event_name, data=payload, room=rooms)
 
     async def _handle_media_event(self, event: FastAPIEvent[MediaUploadedEventBase]) -> None:
         """Route an upload to the clients whose gallery can show it.

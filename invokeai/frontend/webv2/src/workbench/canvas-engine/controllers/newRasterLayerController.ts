@@ -15,6 +15,7 @@ import type { SelectionState } from '@workbench/canvas-engine/selection/selectio
 import type { Rect, Vec2 } from '@workbench/canvas-engine/types';
 
 import { getDocumentLayer, isNodeAbsent } from '@workbench/canvas-engine/document/documentIndex';
+import { collectHistoryMediaRefs } from '@workbench/canvas-engine/history/history';
 import { isEmpty, roundOut, transformBounds } from '@workbench/canvas-engine/math/rect';
 import { liftSelectedPixels } from '@workbench/canvas-engine/selection/floatingSelection';
 import { layerMatrix } from '@workbench/canvas-engine/tools/moveHitTest';
@@ -114,6 +115,7 @@ export class NewRasterLayerController {
     apply();
     this.deps.history.push({
       bytes: rect.width * rect.height * 4 + 256,
+      heldAssetRefs: collectHistoryMediaRefs(layer),
       label,
       redo: apply,
       replayFailureAtomic: true,

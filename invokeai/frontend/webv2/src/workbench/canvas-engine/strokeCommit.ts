@@ -7,6 +7,7 @@ import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache
 import type { StrokeCommittedEvent } from '@workbench/canvas-engine/tools/tool';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { collectHistoryMediaRefs } from '@workbench/canvas-engine/history/history';
 import { createImagePatchEntry } from '@workbench/canvas-engine/history/imagePatch';
 
 export interface CreateStrokeCommitDeps {
@@ -47,6 +48,7 @@ export const createStrokeCommit = (deps: CreateStrokeCommitDeps): StrokeCommit =
     const bytes = event.beforeImageData.data.byteLength + afterImageData.data.byteLength + 256;
     return {
       bytes,
+      heldAssetRefs: collectHistoryMediaRefs(created.layer),
       label,
       redo: () => {
         dispatchCanvasMutation({ anchor: created.anchor, layer: created.layer, type: 'addCanvasLayer' });

@@ -1,7 +1,13 @@
+import sqlite3
 from pathlib import Path
 from typing import Optional
 
 from invokeai.app.services.invoker import Invoker
+from invokeai.app.services.shared.media_references import (
+    MediaReferences,
+    extract_media_references_from_json,
+    replace_media_references,
+)
 from invokeai.app.services.shared.pagination import PaginatedResults
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 from invokeai.app.services.shared.sqlite.sqlite_database import SqliteDatabase
@@ -57,8 +63,10 @@ class SqliteWorkflowRecordsStorage(WorkflowRecordsStorageBase):
         if workflow.meta.category is WorkflowCategory.Default:
             raise ValueError("Default workflows cannot be created via this method")
 
+        workflow_with_id = Workflow(**workflow.model_dump(), id=uuid_string())
+        document_json = workflow_with_id.model_dump_json()
+        references = extract_media_references_from_json(document_json)
         with self._db.transaction() as cursor:
-            workflow_with_id = Workflow(**workflow.model_dump(), id=uuid_string())
             cursor.execute(
                 """--sql
                 INSERT OR IGNORE INTO workflow_library (
@@ -69,14 +77,17 @@ class SqliteWorkflowRecordsStorage(WorkflowRecordsStorageBase):
                 )
                 VALUES (?, ?, ?, ?);
                 """,
-                (workflow_with_id.id, workflow_with_id.model_dump_json(), user_id, is_public),
+                (workflow_with_id.id, document_json, user_id, is_public),
             )
+            self._index_references(cursor, workflow_with_id.id, references, user_id=user_id)
         return self.get(workflow_with_id.id)
 
     def update(self, workflow: Workflow, user_id: Optional[str] = None) -> WorkflowRecordDTO:
         if workflow.meta.category is WorkflowCategory.Default:
             raise ValueError("Default workflows cannot be updated")
 
+        document_json = workflow.model_dump_json()
+        references = extract_media_references_from_json(document_json)
         with self._db.transaction() as cursor:
             if user_id is not None:
                 cursor.execute(
@@ -85,7 +96,7 @@ class SqliteWorkflowRecordsStorage(WorkflowRecordsStorageBase):
                     SET workflow = ?
                     WHERE workflow_id = ? AND category = 'user' AND user_id = ?;
                     """,
-                    (workflow.model_dump_json(), workflow.id, user_id),
+                    (document_json, workflow.id, user_id),
                 )
             else:
                 cursor.execute(
@@ -94,7 +105,14 @@ class SqliteWorkflowRecordsStorage(WorkflowRecordsStorageBase):
                     SET workflow = ?
                     WHERE workflow_id = ? AND category = 'user';
                     """,
-                    (workflow.model_dump_json(), workflow.id),
+                    (document_json, workflow.id),
+                )
+            if cursor.rowcount:
+                self._index_references(
+                    cursor,
+                    workflow.id,
+                    references,
+                    user_id=user_id if user_id is not None else self._owner_of(cursor, workflow.id),
                 )
         return self.get(workflow.id)
 
@@ -119,42 +137,62 @@ class SqliteWorkflowRecordsStorage(WorkflowRecordsStorageBase):
                     """,
                     (workflow_id,),
                 )
+            if cursor.rowcount:
+                # The row is gone, so its owner is the only fact left to delete by; every owner's
+                # rows for this id are dropped since workflow ids are globally unique.
+                cursor.execute(
+                    "DELETE FROM media_references WHERE owner_kind = 'workflow' AND owner_id = ?;",
+                    (workflow_id,),
+                )
         return None
 
     def update_is_public(self, workflow_id: str, is_public: bool, user_id: Optional[str] = None) -> WorkflowRecordDTO:
         """Updates the is_public field of a workflow and manages the 'shared' tag automatically."""
-        record = self.get(workflow_id)
-        workflow = record.workflow
-
-        # Manage "shared" tag: add when public, remove when private
-        tags_list = [t.strip() for t in workflow.tags.split(",") if t.strip()] if workflow.tags else []
-        if is_public and "shared" not in tags_list:
-            tags_list.append("shared")
-        elif not is_public and "shared" in tags_list:
-            tags_list.remove("shared")
-        updated_tags = ", ".join(tags_list)
-        updated_workflow = workflow.model_copy(update={"tags": updated_tags})
-
+        # Read and rewrite the current document under one transaction. A concurrent workflow edit
+        # must not land between the read and this full-document write: its reference index would
+        # then describe the edit while the stored workflow names the previous assets.
         with self._db.transaction() as cursor:
             if user_id is not None:
                 cursor.execute(
-                    """--sql
-                    UPDATE workflow_library
-                    SET workflow = ?, is_public = ?
-                    WHERE workflow_id = ? AND category = 'user' AND user_id = ?;
-                    """,
-                    (updated_workflow.model_dump_json(), is_public, workflow_id, user_id),
+                    "SELECT workflow FROM workflow_library WHERE workflow_id = ? AND category = 'user' AND user_id = ?;",
+                    (workflow_id, user_id),
                 )
             else:
                 cursor.execute(
+                    "SELECT workflow FROM workflow_library WHERE workflow_id = ? AND category = 'user';", (workflow_id,)
+                )
+            row = cursor.fetchone()
+            if row is not None:
+                workflow = Workflow.model_validate_json(row[0])
+                tags_list = [t.strip() for t in workflow.tags.split(",") if t.strip()] if workflow.tags else []
+                if is_public and "shared" not in tags_list:
+                    tags_list.append("shared")
+                elif not is_public and "shared" in tags_list:
+                    tags_list.remove("shared")
+                updated_workflow = workflow.model_copy(update={"tags": ", ".join(tags_list)})
+                cursor.execute(
                     """--sql
                     UPDATE workflow_library
-                    SET workflow = ?, is_public = ?
-                    WHERE workflow_id = ? AND category = 'user';
+                    SET workflow = ?, is_public = ? WHERE workflow_id = ?;
                     """,
                     (updated_workflow.model_dump_json(), is_public, workflow_id),
                 )
         return self.get(workflow_id)
+
+    @staticmethod
+    def _index_references(
+        cursor: sqlite3.Cursor, workflow_id: str, references: MediaReferences, *, user_id: str
+    ) -> None:
+        """Records the media a library workflow names, on the caller's transaction."""
+        replace_media_references(
+            cursor, owner_kind="workflow", user_id=user_id, owner_id=workflow_id, references=references
+        )
+
+    @staticmethod
+    def _owner_of(cursor: sqlite3.Cursor, workflow_id: str) -> str:
+        cursor.execute("SELECT user_id FROM workflow_library WHERE workflow_id = ?;", (workflow_id,))
+        row = cursor.fetchone()
+        return str(row[0]) if row is not None and row[0] is not None else WORKFLOW_LIBRARY_DEFAULT_USER_ID
 
     def get_many(
         self,

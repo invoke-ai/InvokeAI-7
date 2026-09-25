@@ -4,7 +4,7 @@ import { useAuthSession } from '@features/identity/session';
 import { useIdentityNotify } from '@features/identity/ui/useIdentityNotify';
 import { getApiErrorMessage } from '@platform/transport/http';
 import { Button, IconButton, ConfirmDialog, Scrollable, Tooltip } from '@platform/ui';
-import { PencilIcon, Trash2Icon, UserPlusIcon } from 'lucide-react';
+import { BrushCleaningIcon, PencilIcon, Trash2Icon, UserPlusIcon } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -25,7 +25,12 @@ export const UserManagement = () => {
   );
 };
 
-export const UsersManagementPanel = () => {
+/** `onManageIntermediates` is supplied by the shell that owns the intermediates manager's home. */
+export const UsersManagementPanel = ({
+  onManageIntermediates,
+}: {
+  onManageIntermediates?: (userId: string, label: string) => void;
+}) => {
   const { t } = useTranslation();
   const session = useAuthSession();
 
@@ -39,10 +44,16 @@ export const UsersManagementPanel = () => {
     );
   }
 
-  return <UsersDirectory currentUserId={session.user.user_id} />;
+  return <UsersDirectory currentUserId={session.user.user_id} onManageIntermediates={onManageIntermediates} />;
 };
 
-const UsersDirectory = ({ currentUserId }: { currentUserId: string }) => {
+const UsersDirectory = ({
+  currentUserId,
+  onManageIntermediates,
+}: {
+  currentUserId: string;
+  onManageIntermediates?: (userId: string, label: string) => void;
+}) => {
   const { t } = useTranslation();
   const notify = useIdentityNotify();
   const [users, setUsers] = useState<UserDTO[] | null>(null);
@@ -155,6 +166,7 @@ const UsersDirectory = ({ currentUserId }: { currentUserId: string }) => {
                 <Table.Body>
                   {users.map((user) => (
                     <UserRow
+                      onManageIntermediates={onManageIntermediates}
                       key={user.user_id}
                       isSelf={user.user_id === currentUserId}
                       setDeleteTarget={setDeleteTarget}
@@ -196,12 +208,14 @@ const formatLastSignIn = (lastLoginAt: string | null, neverLabel: string): strin
 
 const UserRow = ({
   isSelf,
+  onManageIntermediates,
   setDeleteTarget,
   setFormTarget,
   setUserActive,
   user,
 }: {
   isSelf: boolean;
+  onManageIntermediates?: (userId: string, label: string) => void;
   setDeleteTarget: (user: UserDTO) => void;
   setFormTarget: (target: UserFormTarget) => void;
   setUserActive: (user: UserDTO, isActive: boolean) => void;
@@ -210,6 +224,10 @@ const UserRow = ({
   const { t } = useTranslation();
   const handleDelete = useCallback(() => setDeleteTarget(user), [setDeleteTarget, user]);
   const handleEdit = useCallback(() => setFormTarget({ mode: 'edit', user }), [setFormTarget, user]);
+  const handleIntermediates = useCallback(
+    () => onManageIntermediates?.(user.user_id, user.display_name || user.email),
+    [onManageIntermediates, user.display_name, user.email, user.user_id]
+  );
   const handleSetActive = useCallback(
     (event: { checked: boolean }) => void setUserActive(user, event.checked),
     [setUserActive, user]
@@ -267,6 +285,19 @@ const UserRow = ({
       </Table.Cell>
       <Table.Cell borderColor="border.subtle" pe="4" textAlign="end">
         <HStack gap="0.5" justify="flex-end">
+          {onManageIntermediates ? (
+            <Tooltip content={t('users.manageIntermediatesNamed', { name: getUserLabel(user) })} showArrow>
+              <IconButton
+                aria-label={t('users.manageIntermediatesNamed', { name: getUserLabel(user) })}
+                color="fg.muted"
+                size="2xs"
+                variant="ghost"
+                onClick={handleIntermediates}
+              >
+                <BrushCleaningIcon />
+              </IconButton>
+            </Tooltip>
+          ) : null}
           <IconButton
             aria-label={t('users.editUserNamed', { name: getUserLabel(user) })}
             color="fg.muted"

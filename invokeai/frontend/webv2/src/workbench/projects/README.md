@@ -4,6 +4,8 @@ The backend project record is authoritative. Writes use `expected_revision`; a d
 
 `ProjectDocumentV2` allowlists editable document fields. Queue runs, events, graph history, and undo are not project documents. Documents are limited to 32 MiB of UTF-8 JSON on both sides of the API. The workflow library is the durable home for saved workflows; undo and capped events are session-only.
 
+Canvas uploads carrying a project id await that identity’s acknowledged server creation through the mounted persistence service. Uploads waiting on an unacknowledged project share one serialized creation attempt, and a failed attempt answers further uploads for a few seconds before another is made; later uploads use the acknowledged identity without flushing unrelated edits. Only a closed project, an account change, engine disposal or the operation's own cancellation stops an upload, and those stop the wait immediately. Any other outcome (creation failed or offline, a conflict, or a server that no longer knows the project and refuses the id) sends the upload without a project id. Such uploads are never re-associated with the project later, so the project's intermediates cleanup does not see them.
+
 Project links are consumed after a successful open, so reloading restores the saved active project rather than replaying an earlier link. A new-project startup selects the newly created draft before saving the session.
 
 ## Browser recovery

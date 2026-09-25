@@ -5,10 +5,18 @@ import { describe, expect, it } from 'vitest';
 
 import type { ImageMapPoint } from './api';
 
-import { collectClusterSelection } from './clusterSelection';
+import { getClusterColor } from './clusterPalette';
+import { collectClusterSelection, formatClusterSize } from './clusterSelection';
 import {
+  buildAllPointsTraces,
   buildClusterAnnotations,
+  buildClusterSelectionTraces,
   buildHighlightedPointsTrace,
+  dimAppearance,
+  getDominantCluster,
+  getTraceAppearance,
+  toBaseAppearanceRestyle,
+  toClusterSelectionRestyle,
   declutterAnnotations,
   HIGHLIGHTED_POINTS_TRACE,
   toHighlightRestyle,
@@ -59,9 +67,19 @@ describe('collectClusterSelection', () => {
     expect(collectClusterSelection(POINTS, 'image:clip.mp4')).toBeNull();
   });
 
-  it('caps oversized clusters, keeping the nearest members', () => {
-    const capped = collectClusterSelection(POINTS, 'image:a.png', 2);
-    expect(capped).toEqual(['image:a.png', 'image:c.png']);
+  it('selects every member of a cluster far larger than the old 5,000 cap', () => {
+    const members = Array.from({ length: 12_000 }, (_, index) => ({
+      cluster: 3,
+      item: { kind: 'image' as const, name: `m${index}.png` },
+      key: `image:m${index}.png` as const,
+      x: index,
+      y: 0,
+    }));
+    const selection = collectClusterSelection([...members, ...POINTS], 'image:m6000.png');
+
+    expect(selection).toHaveLength(12_000);
+    // Still walks outward from the click.
+    expect(selection?.slice(0, 3)).toEqual(['image:m6000.png', 'image:m5999.png', 'image:m6001.png']);
   });
 });
 
@@ -269,5 +287,88 @@ describe('declutterAnnotations', () => {
     expect(declutterAnnotations(annotations, ranges, view.widthPx, view.heightPx)).toEqual(annotations);
     const sane = { x: [-500, 500] as [number, number], y: [-375, 375] as [number, number] };
     expect(declutterAnnotations(annotations, sane, 0, view.heightPx)).toEqual(annotations);
+  });
+});
+
+describe('cluster selection drawing', () => {
+  const members = new Set(['image:a.png', 'image:b.png', 'image:c.png', 'video:clip.mp4'] as const);
+
+  it('redraws the members at their cluster colour, one scalar-styled trace per kind', () => {
+    const [images, videos] = buildClusterSelectionTraces(POINTS, members);
+
+    expect(images.customdata).toEqual(['image:a.png', 'image:b.png', 'image:c.png']);
+    expect(videos.customdata).toEqual(['video:clip.mp4']);
+    expect([images.marker.symbol, videos.marker.symbol]).toEqual(['circle', 'diamond']);
+    for (const trace of [images, videos]) {
+      // Scalar, never per point: that is what keeps a 100k-member cluster zooming like the base.
+      expect(trace.marker.color).toBe(getClusterColor(0));
+      expect(typeof trace.marker.opacity).toBe('number');
+      // Clicks and hovers fall through to the base point underneath.
+      expect(trace.hoverinfo).toBe('skip');
+    }
+    expect(toClusterSelectionRestyle([images, videos])).toEqual({
+      customdata: [images.customdata, videos.customdata],
+      'marker.color': [getClusterColor(0), getClusterColor(0)],
+      x: [images.x, videos.x],
+      y: [images.y, videos.y],
+    });
+  });
+
+  it('takes the colour of the cluster most members are in now, after a refresh renumbered them', () => {
+    const renumbered = POINTS.map((entry) => (entry.cluster === 0 ? { ...entry, cluster: 7 } : entry));
+    const moved = renumbered.map((entry) => (entry.key === 'image:c.png' ? { ...entry, cluster: 1 } : entry));
+
+    expect(getDominantCluster(moved, members)).toBe(7);
+    expect(buildClusterSelectionTraces(moved, members)[0].marker.color).toBe(getClusterColor(7));
+  });
+
+  it('draws nothing for an empty selection or members no longer on the map', () => {
+    for (const keys of [new Set<never>(), new Set(['image:gone.png'] as const)]) {
+      const traces = buildClusterSelectionTraces(POINTS, keys);
+
+      expect(traces.map((trace) => trace.x.length)).toEqual([0, 0]);
+      expect(getDominantCluster(POINTS, keys)).toBeNull();
+    }
+  });
+
+  it('dims every base trace with one greyer, fainter scalar each, and restores them exactly', () => {
+    const appearances = buildAllPointsTraces(POINTS).map(getTraceAppearance);
+    const dimmed = toBaseAppearanceRestyle(appearances, true);
+    const restored = toBaseAppearanceRestyle(appearances, false);
+
+    expect(dimmed['marker.color']).toHaveLength(appearances.length);
+    appearances.forEach((appearance, index) => {
+      const color = dimmed['marker.color']![index] as string;
+      const opacity = dimmed['marker.opacity']![index] as number;
+
+      expect(color).toMatch(/^#[0-9a-f]{6}$/);
+      expect(color).not.toBe(appearance.color.toLowerCase());
+      expect(opacity).toBeLessThan(appearance.opacity);
+    });
+    expect(restored).toEqual({
+      'marker.color': appearances.map((appearance) => appearance.color),
+      'marker.opacity': appearances.map((appearance) => appearance.opacity),
+    });
+  });
+
+  it('mutes colour toward grey rather than only fading it', () => {
+    // Pure red keeps a trace of its hue but loses most of its saturation.
+    const { color } = dimAppearance({ color: '#FF0000', opacity: 0.85 });
+    const [r, g, b] = [1, 3, 5].map((start) => parseInt(color.slice(start, start + 2), 16));
+
+    expect(r).toBeGreaterThan(g!);
+    expect(r! - g!).toBeLessThan(60);
+    expect(Math.abs(g! - b!)).toBeLessThan(10);
+  });
+
+  it('keeps noise fainter than clustered points once dimmed', () => {
+    expect(dimAppearance({ color: '#8A8A8A', opacity: 0.25 }).opacity).toBeLessThan(
+      dimAppearance({ color: '#4E79A7', opacity: 0.85 }).opacity
+    );
+  });
+
+  it('words the size with grouping and number', () => {
+    expect(formatClusterSize(1)).toBe('1 item');
+    expect(formatClusterSize(38112)).toBe('38,112 items');
   });
 });

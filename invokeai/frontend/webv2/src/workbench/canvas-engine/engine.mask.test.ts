@@ -57,8 +57,9 @@ const createCanvasEngine = ({
   projectId,
   store,
   ...options
-}: Omit<CanvasEngineOptions, 'mutationPort' | 'reportError'> & { store: EngineStore }) =>
+}: Omit<CanvasEngineOptions, 'ensureProjectOnServer' | 'mutationPort' | 'reportError'> & { store: EngineStore }) =>
   createApplicationCanvasEngine({
+    ensureProjectOnServer: () => Promise.resolve(),
     ...options,
     mutationPort: createMutationPort(store, projectId),
     projectId,

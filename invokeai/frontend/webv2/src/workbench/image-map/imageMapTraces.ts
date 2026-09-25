@@ -12,6 +12,8 @@ import { CLUSTER_PALETTE, getClusterColor } from './clusterPalette';
  */
 
 export const ALL_POINTS_TRACE = 'All Points';
+export const CLUSTER_SELECTION_IMAGES_TRACE = 'Cluster Selection';
+export const CLUSTER_SELECTION_VIDEOS_TRACE = 'Cluster Selection Videos';
 export const HIGHLIGHTED_POINTS_TRACE = 'Highlighted Points';
 export const CURRENT_IMAGE_TRACE = 'Current Image';
 
@@ -140,7 +142,135 @@ export const buildAllPointsTraces = (points: ImageMapPoint[]): ScatterTrace[] =>
  */
 const clusterOf = (point: ImageMapPoint): number => (Number.isInteger(point.cluster) ? point.cluster : -1);
 
-/** White-outlined enlarged multi-selection trace; fewer than two items need only the gold current target. */
+/** A base trace's own look, kept so a dimmed map can be restored exactly. */
+export interface PointAppearance {
+  color: string;
+  opacity: number;
+}
+
+export const getTraceAppearance = (trace: ScatterTrace): PointAppearance => ({
+  color: trace.marker.color as string,
+  opacity: trace.marker.opacity as number,
+});
+
+// Dimmed points keep a trace of their hue — enough to read the map's structure,
+// not enough to compete with the selected cluster. Opacity alone was not: dense
+// clusters stack translucent markers back up to near full colour.
+const DIM_TARGET = [110, 110, 116] as const;
+const DIM_DESATURATION = 0.85;
+const DIM_OPACITY = 0.18;
+
+const mixTowardDimTarget = (hex: string): string => {
+  const channels = [1, 3, 5].map((start, index) => {
+    const value = parseInt(hex.slice(start, start + 2), 16);
+
+    return Math.round(value + (DIM_TARGET[index]! - value) * DIM_DESATURATION);
+  });
+
+  return `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`;
+};
+
+/** How a base trace looks while a cluster is selected; noise stays fainter than clustered points. */
+export const dimAppearance = ({ color, opacity }: PointAppearance): PointAppearance => ({
+  color: mixTowardDimTarget(color),
+  opacity: DIM_OPACITY * (opacity / POINT_OPACITY),
+});
+
+/**
+ * Restyle for the base traces, dimmed or restored. One scalar per trace: a per-point array here would put back the
+ * zoom cost the per-appearance split removed.
+ */
+export const toBaseAppearanceRestyle = (
+  appearances: readonly PointAppearance[],
+  dimmed: boolean
+): Record<string, unknown[]> => {
+  const applied = dimmed ? appearances.map(dimAppearance) : appearances;
+
+  return {
+    'marker.color': applied.map((appearance) => appearance.color),
+    'marker.opacity': applied.map((appearance) => appearance.opacity),
+  };
+};
+
+/**
+ * The cluster most of these items belong to on the current map. A refresh can renumber clusters after the selection
+ * was made, so the colour is read from the points now drawn rather than remembered from the click.
+ */
+export const getDominantCluster = (points: ImageMapPoint[], keys: ReadonlySet<GalleryItemKey>): number | null => {
+  const counts = new Map<number, number>();
+
+  for (const point of points) {
+    if (keys.has(point.key)) {
+      const cluster = clusterOf(point);
+
+      counts.set(cluster, (counts.get(cluster) ?? 0) + 1);
+    }
+  }
+
+  let dominant: number | null = null;
+  let best = 0;
+
+  for (const [cluster, count] of counts) {
+    if (count > best) {
+      best = count;
+      dominant = cluster;
+    }
+  }
+
+  return dominant;
+};
+
+/**
+ * A selected cluster redrawn at full colour over the dimmed map: one trace per kind, every marker property scalar, so
+ * a 100k-member cluster zooms like the base points do. Hit-testing falls through to the base points underneath.
+ */
+export const buildClusterSelectionTraces = (
+  points: ImageMapPoint[],
+  keys: ReadonlySet<GalleryItemKey>
+): [ScatterTrace, ScatterTrace] => {
+  const dominant = keys.size > 0 ? getDominantCluster(points, keys) : null;
+  const color = getClusterColor(dominant ?? -1);
+  const images: ImageMapPoint[] = [];
+  const videos: ImageMapPoint[] = [];
+
+  if (dominant !== null) {
+    for (const point of points) {
+      if (keys.has(point.key)) {
+        (point.item.kind === 'video' ? videos : images).push(point);
+      }
+    }
+  }
+
+  const build = (members: ImageMapPoint[], name: string, symbol: string): ScatterTrace => ({
+    customdata: members.map((point) => point.key),
+    hoverinfo: 'skip',
+    marker: { color, opacity: 1, size: 5, symbol },
+    mode: 'markers',
+    name,
+    type: 'scattergl',
+    x: members.map((point) => point.x),
+    y: members.map((point) => point.y),
+  });
+
+  return [
+    build(images, CLUSTER_SELECTION_IMAGES_TRACE, IMAGE_SYMBOL),
+    build(videos, CLUSTER_SELECTION_VIDEOS_TRACE, VIDEO_SYMBOL),
+  ];
+};
+
+/** In-place update for both cluster-selection traces, in trace order. */
+export const toClusterSelectionRestyle = (traces: readonly ScatterTrace[]): Record<string, unknown[]> => ({
+  customdata: traces.map((trace) => trace.customdata),
+  'marker.color': traces.map((trace) => trace.marker.color),
+  x: traces.map((trace) => trace.x),
+  y: traces.map((trace) => trace.y),
+});
+
+/**
+ * White-outlined enlarged trace for hand-made multi-selections; fewer than two items need only the gold current
+ * target. Cluster clicks use the cluster-selection traces, since per-point arrays are affordable only at hand-picked
+ * sizes.
+ */
 export const buildHighlightedPointsTrace = (
   points: ImageMapPoint[],
   selectedKeys: ReadonlySet<GalleryItemKey>

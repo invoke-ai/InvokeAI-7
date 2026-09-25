@@ -117,7 +117,11 @@ const createTestMutationPort = (store: EngineStore, projectId: string): CanvasPr
   };
 };
 
-type TestCanvasEngineOptions = Omit<CanvasEngineOptions, 'getMainModelBase' | 'mutationPort' | 'reportError'> & {
+type TestCanvasEngineOptions = Omit<
+  CanvasEngineOptions,
+  'ensureProjectOnServer' | 'getMainModelBase' | 'mutationPort' | 'reportError'
+> & {
+  ensureProjectOnServer?: () => Promise<void>;
   getMainModelBase?: () => string | null;
   mutationPort?: CanvasProjectMutationPort;
   reportError?: CanvasEngineOptions['reportError'];
@@ -133,6 +137,7 @@ const createCanvasEngine = ({
   ...options
 }: TestCanvasEngineOptions): CanvasEngine =>
   createApplicationCanvasEngine({
+    ensureProjectOnServer: () => Promise.resolve(),
     ...options,
     getMainModelBase:
       getMainModelBase ?? (() => canvasApplicationPort.getSelectedModelBase(store.getState(), projectId)),
@@ -4162,6 +4167,30 @@ describe('engine-owned history: undo/redo guarded during an active gesture', () 
 describe('commitStructural', () => {
   const forward: EngineTestAction = { id: 'a', type: 'setCanvasSelectedLayer' };
   const inverse: EngineTestAction = { id: null, type: 'setCanvasSelectedLayer' };
+
+  it('keeps a removed image held while Canvas can undo the removal', () => {
+    const layer = rasterLayer('L', { imageName: 'older-intermediate.png' });
+    const { projectId, store } = createReducerBackedStore({ ...makeDoc(), stacks: stacksFrom([layer]) });
+    const engine = createCanvasEngine({
+      backend: createTestStubRasterBackend(),
+      imageResolver: () => Promise.resolve(new Blob()),
+      projectId,
+      store,
+    });
+
+    expect(
+      engine.layers.commitStructural(
+        'Remove layer',
+        { ids: ['L'], type: 'removeCanvasLayers' },
+        { anchor: stackTopAnchor(projectId), layer, type: 'addCanvasLayer' }
+      )
+    ).toEqual({ status: 'committed' });
+    expect(getDocumentLeaves(engine.document.getDocument())).toEqual([]);
+    expect(engine.history.getHeldAssetRefs().images).toContain('older-intermediate.png');
+    engine.history.clearHistory();
+    expect(engine.history.getHeldAssetRefs().images).toEqual([]);
+    engine.lifecycle.dispose();
+  });
 
   it('dispatches forward immediately and records a reversible history entry', () => {
     const { store } = createFakeStore(makeDoc());
@@ -11773,6 +11802,7 @@ describe('commitMaskImageResult', () => {
       expect(engine.document.getDocument()!.selectedLayerId).toBe('below');
       expect(engine.stores.canUndo.get()).toBe(false);
       expect(engine.stores.canRedo.get()).toBe(true);
+      expect(engine.history.getHeldAssetRefs().images).toContain(resultImage.imageName);
 
       engine.history.redo();
       expect(getDocumentLeaves(engine.document.getDocument()!).find((layer) => layer.id === result.layerId)).toEqual(

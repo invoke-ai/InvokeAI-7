@@ -752,9 +752,6 @@ class Graph(BaseModel):
 
         self._add_edge(edge, allow_inputless_source_collector=False)
 
-    def _add_execution_edge(self, edge: Edge) -> None:
-        self._add_edge(edge, allow_inputless_source_collector=True)
-
     def _add_edge(self, edge: Edge, allow_inputless_source_collector: bool) -> None:
         self._validate_edge(edge, allow_inputless_source_collector)
         if edge not in self.edges:
@@ -1160,14 +1157,6 @@ class Graph(BaseModel):
         if len(linkage_edges) != 1:
             return None
         return linkage_edges[0].destination.node_id
-
-    def _get_linked_for_id(self, return_node_id: str) -> str | None:
-        linkage_edges = [
-            edge for edge in self._get_loop_linkage_edges(return_node_id) if edge.destination.node_id == return_node_id
-        ]
-        if len(linkage_edges) != 1:
-            return None
-        return linkage_edges[0].source.node_id
 
     def _get_for_iteration_output_edges(self, node_id: str) -> list[Edge]:
         node = self.get_node(node_id)

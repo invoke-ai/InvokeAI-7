@@ -26,6 +26,7 @@ from invokeai.app.api.routers._access import (
 from invokeai.app.api.routers._access import (
     assert_image_read_access as _assert_image_read_access,
 )
+from invokeai.app.api.routers._access import assert_project_owned
 from invokeai.app.api.routers._access import (
     board_share_recipients as _board_share_recipients,
 )
@@ -47,6 +48,7 @@ from invokeai.app.services.images.images_common import (
     StarredImagesResult,
     UnstarredImagesResult,
 )
+from invokeai.app.services.intermediates.intermediates_base import IntermediatesCaller
 from invokeai.app.services.shared.pagination import MAX_PAGE_SIZE, OffsetPaginatedResults
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 from invokeai.app.util.controlnet_utils import heuristic_resize_fast
@@ -112,6 +114,12 @@ async def upload_image(
     is_intermediate: bool = Query(description="Whether this is an intermediate image"),
     board_id: Optional[str] = Query(default=None, description="The board to add this image to, if any"),
     session_id: Optional[str] = Query(default=None, description="The session ID associated with this upload, if any"),
+    project_id: Optional[str] = Query(
+        default=None,
+        min_length=1,
+        max_length=255,
+        description="The caller's project this upload originates in, if any; recorded for intermediates cleanup",
+    ),
     crop_visible: Optional[bool] = Query(default=False, description="Whether to crop the image"),
     resize_to: Optional[str] = Body(
         default=None,
@@ -128,6 +136,7 @@ async def upload_image(
     # If uploading into a board, verify the user has write access.
     # Public boards allow uploads from any authenticated user.
     board = await asyncio.to_thread(_assert_board_write_access, board_id, current_user)
+    await asyncio.to_thread(assert_project_owned, project_id, current_user)
 
     await asyncio.to_thread(assert_image_move_maintenance_inactive)
 
@@ -192,6 +201,7 @@ async def upload_image(
             graph=extracted_metadata.invokeai_graph,
             is_intermediate=is_intermediate,
             user_id=current_user.user_id,
+            project_id=project_id,
         )
     except Exception:
         ApiDependencies.invoker.services.logger.error(traceback.format_exc())
@@ -271,14 +281,19 @@ def delete_image(
 def clear_intermediates(
     current_user: CurrentUserOrDefault,
 ) -> int:
-    """Clears all intermediates. Requires admin."""
+    """Clears every safe intermediate image, instance-wide. Requires admin.
+
+    Runs under the same policy as the intermediates manager: images that active work, a saved
+    document or the recency window protect are kept. Videos are not touched; use the manager.
+    """
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Only admins can clear all intermediates")
     assert_image_move_maintenance_inactive()
 
     try:
-        count_deleted = ApiDependencies.invoker.services.images.delete_intermediates()
-        return count_deleted
+        return ApiDependencies.invoker.services.intermediates.clear_all_images_now(
+            IntermediatesCaller(user_id=current_user.user_id, is_admin=current_user.is_admin)
+        )
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to clear intermediates")
 
@@ -287,11 +302,15 @@ def clear_intermediates(
 def get_intermediates_count(
     current_user: CurrentUserOrDefault,
 ) -> int:
-    """Gets the count of intermediate images. Non-admin users only see their own intermediates."""
+    """Counts the intermediate images a clear would delete. Non-admin users only see their own intermediates.
+
+    Active, recent and referenced images are left out, as `DELETE /intermediates` keeps them.
+    """
 
     try:
-        user_id = None if current_user.is_admin else current_user.user_id
-        return ApiDependencies.invoker.services.images.get_intermediates_count(user_id=user_id)
+        return ApiDependencies.invoker.services.intermediates.count_safe_images(
+            IntermediatesCaller(user_id=current_user.user_id, is_admin=current_user.is_admin)
+        )
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to get intermediates")
 

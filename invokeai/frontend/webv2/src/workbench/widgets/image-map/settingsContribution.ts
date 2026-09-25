@@ -12,6 +12,14 @@ export const imageMapSettingsContribution: SettingsContribution = {
       keywords: 'tags text display',
     },
     {
+      id: 'clusterEps',
+      kind: 'custom',
+      label: (t) => t('settingsDialog.fields.clusterStrength'),
+      description: (t) => t('settingsDialog.fields.clusterStrengthHint'),
+      scope: 'instance',
+      keywords: 'dbscan eps clustering density granularity',
+    },
+    {
       id: 'clickSelectsCluster',
       kind: 'boolean',
       label: (t) => t('settingsDialog.fields.clickSelectsCluster'),

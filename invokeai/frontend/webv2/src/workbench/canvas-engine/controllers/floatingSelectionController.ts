@@ -225,6 +225,7 @@ export class FloatingSelectionController {
       });
       this.deps.history.push({
         bytes: patch.bytes + (selectionBefore.alpha?.byteLength ?? 0) + (selectionAfter.alpha?.byteLength ?? 0),
+        heldAssetRefs: patch.heldAssetRefs,
         label: patch.label,
         redo: () => {
           patch.redo();

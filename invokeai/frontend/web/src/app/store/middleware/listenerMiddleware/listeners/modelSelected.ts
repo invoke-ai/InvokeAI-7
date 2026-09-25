@@ -43,6 +43,7 @@ import {
   getEntityIdentifier,
   isAspectRatioID,
   isFlux2ReferenceImageConfig,
+  isKrea2ReferenceImageConfig,
   isMiniMaxH3ReferenceImageConfig,
   isQwenImageReferenceImageConfig,
   isWanReferenceImageConfig,
@@ -52,6 +53,7 @@ import {
   initialFluxKontextReferenceImage,
   initialFLUXRedux,
   initialIPAdapter,
+  initialKrea2ReferenceImage,
   initialMiniMaxH3ReferenceImage,
   initialQwenImageReferenceImage,
   initialWanReferenceImage,
@@ -69,7 +71,6 @@ import {
   selectAnimaVAEModels,
   selectFlux1VAEModels,
   selectGlobalRefImageModels,
-  selectQwen3EncoderModels,
   selectQwen3VLEncoderModels,
   selectQwenImageDiffusersModels,
   selectQwenImageVAEModels,
@@ -79,6 +80,7 @@ import {
   selectWanT5EncoderModels,
   selectWanVAEModels,
   selectZImageDiffusersModels,
+  selectZImageQwen3EncoderModels,
 } from 'services/api/hooks/modelsByType';
 import type { FLUXKontextModelConfig, FLUXReduxModelConfig, IPAdapterModelConfig } from 'services/api/types';
 import {
@@ -178,7 +180,8 @@ export const addModelSelectedListener = (startAppListening: AppStartListening) =
               }
             } else {
               // Fallback: try to set Qwen3 Encoder + VAE
-              const availableQwen3Encoders = selectQwen3EncoderModels(state);
+              // 4B encoders only - the 8B one Klein 9B uses is listed too, but Z-Image cannot consume it (#9526).
+              const availableQwen3Encoders = selectZImageQwen3EncoderModels(state);
               // FLUX.1 VAEs only - the Z-Image VAE picker is built from `isFlux1VAEModelConfig` and
               // Z-Image cannot use a FLUX.2 VAE, so a wider flux+flux2 pool would default the slot to
               // a model the user can neither see in the picker nor generate with.
@@ -192,8 +195,10 @@ export const addModelSelectedListener = (startAppListening: AppStartListening) =
                   dispatch(
                     zImageQwen3EncoderModelSelected({
                       key: qwen3Encoder.key,
+                      hash: qwen3Encoder.hash,
                       name: qwen3Encoder.name,
                       base: qwen3Encoder.base,
+                      type: qwen3Encoder.type,
                     })
                   );
                 }
@@ -525,6 +530,21 @@ export const addModelSelectedListener = (startAppListening: AppStartListening) =
               continue;
             }
 
+            if (newBase === 'krea-2') {
+              // Switching TO Krea-2 - convert any non-krea2 configs to krea2_reference_image. Krea-2
+              // transfers style training-free, so there is no adapter model to carry over.
+              if (!isKrea2ReferenceImageConfig(entity.config)) {
+                dispatch(
+                  refImageConfigChanged({
+                    id: entity.id,
+                    config: { ...initialKrea2ReferenceImage },
+                  })
+                );
+                modelsUpdatedDisabledOrCleared += 1;
+              }
+              continue;
+            }
+
             if (isFlux2ReferenceImageConfig(entity.config)) {
               // Switching AWAY from FLUX.2 - convert flux2_reference_image to the appropriate config type
               let newConfig;
@@ -598,6 +618,29 @@ export const addModelSelectedListener = (startAppListening: AppStartListening) =
 
             if (isWanReferenceImageConfig(entity.config)) {
               // Switching AWAY from Wan - convert to the appropriate config type for the new base.
+              let newConfig;
+              if (newGlobalRefImageModel) {
+                const parsedModel = zModelIdentifierField.parse(newGlobalRefImageModel);
+                if (newModel.base === 'flux' && newModel.name.toLowerCase().includes('kontext')) {
+                  newConfig = { ...initialFluxKontextReferenceImage, model: parsedModel };
+                } else if (newGlobalRefImageModel.type === 'flux_redux') {
+                  newConfig = { ...initialFLUXRedux, model: parsedModel };
+                } else {
+                  newConfig = { ...initialIPAdapter, model: parsedModel };
+                  if (parsedModel.base === 'flux') {
+                    newConfig.clipVisionModel = 'ViT-L';
+                  }
+                }
+              } else {
+                newConfig = { ...initialIPAdapter };
+              }
+              dispatch(refImageConfigChanged({ id: entity.id, config: newConfig }));
+              modelsUpdatedDisabledOrCleared += 1;
+              continue;
+            }
+
+            if (isKrea2ReferenceImageConfig(entity.config)) {
+              // Switching AWAY from Krea-2 - convert to the appropriate config type for the new base.
               let newConfig;
               if (newGlobalRefImageModel) {
                 const parsedModel = zModelIdentifierField.parse(newGlobalRefImageModel);

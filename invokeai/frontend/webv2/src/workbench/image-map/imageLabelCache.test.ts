@@ -115,8 +115,31 @@ describe('image map image-label cache', () => {
       expect(mocks.apiFetchJson).toHaveBeenCalledTimes(1);
 
       // The vocabulary is built lazily by the index worker: a 409 can simply
-      // mean "not ready yet", so the cooldown must expire rather than latch.
-      vi.setSystemTime(Date.now() + 61_000);
+      // mean "not ready yet", so the cooldown must expire rather than latch —
+      // and quickly, since a warm build lands within seconds.
+      vi.setSystemTime(Date.now() + 5_001);
+      mocks.apiFetchJson.mockResolvedValue({ alternates: [], label: 'ship' });
+      await expect(getImageLabels({ kind: 'image', name: 'c.png' })).resolves.toEqual({
+        alternates: [],
+        label: 'ship',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('backs off a server outage for a minute', async () => {
+    vi.useFakeTimers();
+
+    try {
+      mocks.apiFetchJson.mockRejectedValue(new ApiError('boom', 500));
+      await expect(getImageLabels({ kind: 'image', name: 'a.png' })).resolves.toBeNull();
+
+      vi.setSystemTime(Date.now() + 30_000);
+      await expect(getImageLabels({ kind: 'image', name: 'b.png' })).resolves.toBeNull();
+      expect(mocks.apiFetchJson).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(Date.now() + 30_001);
       mocks.apiFetchJson.mockResolvedValue({ alternates: [], label: 'ship' });
       await expect(getImageLabels({ kind: 'image', name: 'c.png' })).resolves.toEqual({
         alternates: [],
@@ -151,6 +174,31 @@ describe('image map image-label cache', () => {
       alternates: [],
       label: 'sailboat',
     });
+  });
+
+  it('neither answers nor caches a request that straddles a vocabulary rebuild', async () => {
+    let resolveOld: (labels: { alternates: string[]; label: string }) => void = () => {};
+    mocks.apiFetchJson.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOld = resolve;
+        })
+    );
+    const stale = getImageLabels({ kind: 'image', name: 'a.png' });
+
+    clearImageLabels();
+    // The rebuild releases the old claim, so a new reveal asks again.
+    mocks.apiFetchJson.mockResolvedValueOnce({ alternates: [], label: 'sailboat' });
+    const fresh = getImageLabels({ kind: 'image', name: 'a.png' });
+    resolveOld({ alternates: [], label: 'ship' });
+
+    await expect(stale).resolves.toBeNull();
+    await expect(fresh).resolves.toEqual({ alternates: [], label: 'sailboat' });
+    await expect(getImageLabels({ kind: 'image', name: 'a.png' })).resolves.toEqual({
+      alternates: [],
+      label: 'sailboat',
+    });
+    expect(mocks.apiFetchJson).toHaveBeenCalledTimes(2);
   });
 
   it('clears the cooldown on account switch', async () => {

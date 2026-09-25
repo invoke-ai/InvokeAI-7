@@ -9,6 +9,7 @@ export {
   galleryItemsInfiniteOptions,
   galleryKeys,
   galleryStarredStripOptions,
+  imageIndexAvailabilityOptions,
 } from './data/queries';
 export type {
   CanonicalGalleryItemsFilter,

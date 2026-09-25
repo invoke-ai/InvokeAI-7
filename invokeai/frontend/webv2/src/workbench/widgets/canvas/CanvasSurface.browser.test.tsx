@@ -86,6 +86,7 @@ const createEngineDeps = (state: CanvasStateContractV3): EngineDeps => {
   };
   return {
     getMainModelBase: () => null,
+    ensureProjectOnServer: () => Promise.resolve(),
     imageResolver: () => Promise.resolve(new Blob()),
     mutationPort,
     reportError: () => undefined,

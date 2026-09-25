@@ -55,6 +55,7 @@ def _insert_queue_item(
     batch_id: str | None = None,
     destination: str | None = None,
     user_id: str = "user-1",
+    project_id: str | None = None,
     workflow_call_id: str | None = None,
     parent_item_id: int | None = None,
     parent_session_id: str | None = None,
@@ -77,6 +78,7 @@ def _insert_queue_item(
                 destination,
                 retried_from_item_id,
                 user_id,
+                project_id,
                 workflow_call_id,
                 parent_item_id,
                 parent_session_id,
@@ -84,7 +86,7 @@ def _insert_queue_item(
                 workflow_call_depth,
                 status
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 queue_id,
@@ -98,6 +100,7 @@ def _insert_queue_item(
                 destination,
                 None,
                 user_id,
+                project_id,
                 workflow_call_id,
                 parent_item_id,
                 parent_session_id,
@@ -127,7 +130,7 @@ def _workflow_without_id() -> WorkflowWithoutID:
 
 
 def _build_waiting_workflow_call_parent(
-    session_queue: SqliteSessionQueue, child_count: int
+    session_queue: SqliteSessionQueue, child_count: int, project_id: str | None = None
 ) -> tuple[int, GraphExecutionState, list[GraphExecutionState]]:
     graph = Graph()
     graph.add_node(CallSavedWorkflowInvocation(id="call-node", workflow_id="workflow-a"))
@@ -138,7 +141,9 @@ def _build_waiting_workflow_call_parent(
     parent_session.begin_waiting_on_workflow_call(frame)
     child_sessions = [parent_session.create_child_workflow_execution_state(Graph(), frame) for _ in range(child_count)]
     parent_session.attach_waiting_workflow_call_child_sessions(child_sessions)
-    parent_item_id = _insert_queue_item(session_queue, session=parent_session, status="in_progress")
+    parent_item_id = _insert_queue_item(
+        session_queue, session=parent_session, status="in_progress", project_id=project_id
+    )
     return parent_item_id, parent_session, child_sessions
 
 
@@ -324,9 +329,10 @@ def test_enqueue_workflow_call_child_inherits_workflow_for_image_metadata(
                 destination,
                 retried_from_item_id,
                 user_id,
+                project_id,
                 status
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "default",
@@ -340,6 +346,7 @@ def test_enqueue_workflow_call_child_inherits_workflow_for_image_metadata(
                 None,
                 None,
                 "user-1",
+                "project-1",
                 "in_progress",
             ),
         )
@@ -349,6 +356,8 @@ def test_enqueue_workflow_call_child_inherits_workflow_for_image_metadata(
     child_queue_item = session_queue.enqueue_workflow_call_child(parent_queue_item, child_session)
 
     assert child_queue_item.status == "pending"
+    # Outputs of a child workflow belong to the project that enqueued the parent.
+    assert child_queue_item.project_id == "project-1"
     assert child_queue_item.workflow_call_id == parent_session.waiting_workflow_call_execution.id
     assert child_queue_item.parent_item_id == parent_item_id
     assert child_queue_item.parent_session_id == parent_session.id
@@ -450,7 +459,9 @@ def test_enqueue_workflow_call_child_rejects_canceled_stale_parent(
 def test_enqueue_workflow_call_children_publishes_parent_state_before_children(
     session_queue: SqliteSessionQueue,
 ) -> None:
-    parent_item_id, _parent_session, child_sessions = _build_waiting_workflow_call_parent(session_queue, child_count=2)
+    parent_item_id, _parent_session, child_sessions = _build_waiting_workflow_call_parent(
+        session_queue, child_count=2, project_id="project-1"
+    )
 
     child_queue_items = session_queue.enqueue_workflow_call_children(
         parent_queue_item=session_queue.get_queue_item(parent_item_id),
@@ -459,6 +470,7 @@ def test_enqueue_workflow_call_children_publishes_parent_state_before_children(
 
     parent_queue_item = session_queue.get_queue_item(parent_item_id)
     assert parent_queue_item.status == "waiting"
+    assert [child_queue_item.project_id for child_queue_item in child_queue_items] == ["project-1", "project-1"]
     assert parent_queue_item.session.waiting_workflow_call_execution is not None
     assert parent_queue_item.session.waiting_workflow_call_execution.child_item_ids == [
         child_queue_item.item_id for child_queue_item in child_queue_items
@@ -526,6 +538,29 @@ def test_concurrent_workflow_call_child_completions_preserve_both_siblings(
         child_queue_items[0].item_id: {"result": 1},
         child_queue_items[1].item_id: {"result": 2},
     }
+
+
+@pytest.mark.parametrize("limited", [False, True])
+def test_history_pruning_retains_children_until_their_root_ends(session_queue, limited):
+    root, _, child_sessions = _build_waiting_workflow_call_parent(session_queue, child_count=2)
+    children = session_queue.enqueue_workflow_call_children(
+        session_queue.get_queue_item(root), [(session, None) for session in child_sessions]
+    )
+    session_queue.complete_queue_item(children[0].item_id)
+    old = _insert_queue_item(session_queue, session=GraphExecutionState(graph=Graph()), status="completed")
+
+    def prune():
+        if limited:
+            return session_queue._prune_terminal_to_limit("default", keep=0)
+        return session_queue.prune("default", user_id="user-1").deleted
+
+    assert prune() == 1
+    with pytest.raises(SessionQueueItemNotFoundError):
+        session_queue.get_queue_item(old)
+    assert session_queue.get_queue_item(children[0].item_id).status == "completed"
+
+    session_queue.cancel_queue_item(root)
+    assert prune() == 3
 
 
 def test_enqueue_workflow_call_child_rejects_full_pending_queue(session_queue: SqliteSessionQueue) -> None:

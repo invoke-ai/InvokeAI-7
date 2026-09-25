@@ -7,6 +7,7 @@ import { resolveSettingsText } from '@platform/ui/settings/contracts';
 import { createDeferredResource } from '@workbench/deferredResource';
 import { firstPartyWidgetManifests } from '@workbench/widgets/manifests';
 import {
+  BrushCleaningIcon,
   Code2Icon,
   DatabaseIcon,
   FolderIcon,
@@ -40,6 +41,7 @@ const sectionPresentation = {
   developer: { group: 'system', icon: Code2Icon },
   server: { group: 'system', icon: ServerIcon },
   workspace: { group: 'system', icon: DatabaseIcon },
+  intermediates: { group: 'system', icon: BrushCleaningIcon },
   about: { group: 'system', icon: InfoIcon },
 } as const;
 const groupOrder = ['application', 'project', 'widgets', 'system'];

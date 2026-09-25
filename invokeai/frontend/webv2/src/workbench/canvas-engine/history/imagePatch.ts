@@ -8,6 +8,8 @@ import type { Rect } from '@workbench/canvas-engine/types';
 
 import type { HistoryEntry } from './history';
 
+import { NO_HELD_ASSET_REFS } from './history';
+
 /**
  * Engine-owned pixel write at the layer-local rect, including invalidation/versioning and dirty persistence
  * marking.
@@ -51,6 +53,7 @@ export const createImagePatchEntry = (opts: CreateImagePatchEntryOptions): Histo
 
   return {
     bytes,
+    heldAssetRefs: NO_HELD_ASSET_REFS,
     label,
     redo: () => apply(layerId, patchRect, after),
     undo: () => apply(layerId, patchRect, before),

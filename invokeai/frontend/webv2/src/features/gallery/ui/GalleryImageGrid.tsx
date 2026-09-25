@@ -9,8 +9,9 @@ import {
   type GalleryRevealRequest,
 } from '@features/gallery/core/selection';
 import { isDateBoardId } from '@features/gallery/data/backend';
-import { GALLERY_PAGE_SIZE } from '@features/gallery/data/queries';
+import { GALLERY_PAGE_SIZE, imageIndexAvailabilityOptions } from '@features/gallery/data/queries';
 import { Button, DropZone } from '@platform/ui';
+import { useQuery } from '@tanstack/react-query';
 import { ChevronRightIcon, StarIcon, UploadIcon } from 'lucide-react';
 import {
   useCallback,
@@ -198,7 +199,15 @@ const GalleryStarredSection = ({
 export const GalleryImageGrid = () => {
   const { t } = useTranslation();
   const { actions, gallery, isWindowTruncated, itemActions, region, starredStrip } = useGalleryWidget();
-  const { gallery: galleryCommands, ImageContextMenu, followedProgressSessionId, progressSessions } = useGalleryUi();
+  const {
+    gallery: galleryCommands,
+    getItemLabel,
+    ImageContextMenu,
+    followedProgressSessionId,
+    progressSessions,
+  } = useGalleryUi();
+  const { data: indexAvailability } = useQuery(imageIndexAvailabilityOptions());
+  const getReadyItemLabel = indexAvailability?.state === 'ready' ? getItemLabel : null;
   const [isDropActive, setIsDropActive] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(() => viewportWidthCache.get(region) ?? 0);
   const dragDepthRef = useRef(0);
@@ -555,6 +564,7 @@ export const GalleryImageGrid = () => {
           }
           fit={thumbnailFit}
           getDragItems={getDragItems}
+          getItemLabel={getReadyItemLabel}
           isPrimary={!isFollowingLive && itemKey === gallery.selectedItemKey}
           isSelected={!isFollowingLive && selectedItemKeys.has(itemKey)}
           item={item}
@@ -568,6 +578,7 @@ export const GalleryImageGrid = () => {
       gallery.compareImageKey,
       gallery.selectedItemKey,
       getDragItems,
+      getReadyItemLabel,
       handleThumbnailClick,
       handleThumbnailContextMenu,
       handleToggleStarred,

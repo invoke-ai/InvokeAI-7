@@ -41,6 +41,7 @@ describe('attachImageMapDataRuntime', () => {
     mocks.getAuthSession.mockReset().mockReturnValue({ user: null });
     imageMapStore.setSnapshot({
       clusterLabels: null,
+      clusterLabelsEps: null,
       clusterLabelsHash: null,
       data: null,
       error: null,

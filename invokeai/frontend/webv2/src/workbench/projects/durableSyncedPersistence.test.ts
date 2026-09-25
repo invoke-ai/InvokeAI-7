@@ -173,6 +173,104 @@ beforeEach(() => {
 });
 
 describe('durable project persistence', () => {
+  it('awaits one acknowledged creation for concurrent uploads without saving later edits', async () => {
+    const api = createApi();
+    const project = createDraftProject([]);
+    const service = createService(captureAccountScope(), api);
+    let acknowledge!: (record: ProjectRecordDTO) => void;
+    const created = new Promise<ProjectRecordDTO>((resolve) => {
+      acknowledge = resolve;
+    });
+    vi.mocked(api.createProject).mockReturnValueOnce(created);
+    const first = service.ensureProjectOnServer(project);
+    const second = service.ensureProjectOnServer(project);
+    const ready = vi.fn();
+    void first.then(ready);
+    await vi.waitFor(() => expect(api.createProject).toHaveBeenCalledOnce());
+    expect(ready).not.toHaveBeenCalled();
+
+    acknowledge(toRecord(project));
+    await Promise.all([first, second]);
+    await service.ensureProjectOnServer({ ...project, name: 'Unsaved later edit' });
+    expect(api.createProject).toHaveBeenCalledOnce();
+    expect(api.updateProject).not.toHaveBeenCalled();
+    expect(ready).toHaveBeenCalledOnce();
+  });
+
+  it('answers an acknowledged project without waiting behind queued saves of other projects', async () => {
+    const api = createApi();
+    const project = createDraftProject([]);
+    const other = createDraftProject([]);
+    const service = createService(captureAccountScope(), api);
+    await service.ensureProjectOnServer(project);
+    vi.mocked(api.createProject).mockReturnValueOnce(new Promise<never>(() => {}));
+    void service.ensureProjectOnServer(other).catch(() => undefined);
+    await vi.waitFor(() => expect(api.createProject).toHaveBeenCalledTimes(2));
+
+    await expect(service.ensureProjectOnServer(project)).resolves.toBeUndefined();
+  });
+
+  it('fences an upload when its project is deleted while creation is pending', async () => {
+    const api = createApi();
+    const project = createDraftProject([]);
+    const service = createService(captureAccountScope(), api);
+    let acknowledge!: (record: ProjectRecordDTO) => void;
+    vi.mocked(api.createProject).mockReturnValueOnce(
+      new Promise((resolve) => {
+        acknowledge = resolve;
+      })
+    );
+    const pending = service.ensureProjectOnServer(project);
+    const rejected = expect(pending).rejects.toMatchObject({ reason: 'superseded' });
+    await vi.waitFor(() => expect(api.createProject).toHaveBeenCalledOnce());
+    service.markProjectDeleted(project.id);
+    acknowledge(toRecord(project));
+    await rejected;
+  });
+
+  it('shares one failed creation across waiting and following uploads, then retries after a pause', async () => {
+    const api = createApi();
+    const project = createDraftProject([]);
+    const service = createService(captureAccountScope(), api);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    let fail!: (error: Error) => void;
+    vi.mocked(api.createProject).mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        fail = reject;
+      })
+    );
+    try {
+      const waiting = [service.ensureProjectOnServer(project), service.ensureProjectOnServer(project)];
+      await vi.waitFor(() => expect(api.createProject).toHaveBeenCalledOnce());
+      fail(new Error('offline'));
+      for (const upload of waiting) {
+        await expect(upload).rejects.toMatchObject({ reason: 'unsynced' });
+      }
+      await expect(service.ensureProjectOnServer(project)).rejects.toMatchObject({ reason: 'unsynced' });
+      expect(api.createProject).toHaveBeenCalledOnce();
+
+      clock.mockReturnValue(10_000);
+      await service.ensureProjectOnServer(project);
+      expect(api.createProject).toHaveBeenCalledTimes(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('rejects deleted projects and expired accounts even after their creation was acknowledged', async () => {
+    const api = createApi();
+    const project = createDraftProject([]);
+    const service = createService(captureAccountScope(), api);
+    await service.ensureProjectOnServer(project);
+    service.markProjectDeleted(project.id);
+    await expect(service.ensureProjectOnServer(project)).rejects.toMatchObject({ reason: 'superseded' });
+    service.unmarkProjectDeleted(project.id);
+    accountLifecycle.activate('another-account');
+    await expect(service.ensureProjectOnServer(project)).rejects.toMatchObject({ name: 'AccountScopeExpiredError' });
+    expect(api.createProject).toHaveBeenCalledOnce();
+    expect(api.updateProject).not.toHaveBeenCalled();
+  });
+
   it('activates a requested new project and restores it after saving and reloading', async () => {
     const owner = captureAccountScope();
     const api = createApi();

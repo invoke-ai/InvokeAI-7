@@ -2631,6 +2631,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   const historyCapability: CanvasHistoryCapability = {
     clearHistory,
     getEntries: () => history.entries(),
+    getHeldAssetRefs: () => history.heldAssetRefs(),
     redo,
     stepBy: stepHistoryBy,
     undo,

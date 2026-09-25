@@ -133,6 +133,7 @@ const adapter = {
   pinnedProgressSessionId: null,
   followedProgressSessionId: null,
   liveFollowEnabled: false,
+  getItemLabel: () => Promise.resolve(null),
   followProgressSession: vi.fn(),
   antialiasProgressImages: false,
   widgets: { openGallery: vi.fn(() => true), patchGalleryValues: vi.fn() },

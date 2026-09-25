@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from invokeai.app.services.board_records.board_records_common import BoardVisibility
 from invokeai.app.services.image_records.image_records_common import ImageCategory
+from invokeai.app.services.intermediates.intermediates_common import IntermediatesOperation
 from invokeai.app.services.model_install.model_install_common import ModelInstallJob, ModelSource
 from invokeai.app.services.session_processor.session_processor_common import ProgressImage
 from invokeai.app.services.session_queue.session_queue_common import (
@@ -1066,6 +1067,28 @@ class VideoUploadedEvent(MediaUploadedEventBase):
             board_visibility=board_visibility,
             shared_user_ids=shared_user_ids,
         )
+
+
+class IntermediatesEventBase(EventBase):
+    """Base class for intermediates cleanup events"""
+
+
+@payload_schema.register
+class IntermediatesOperationChangedEvent(IntermediatesEventBase):
+    """Event model for intermediates_operation_changed.
+
+    Routed to the confirming account's room and to admins: the operation's progress is that
+    account's business, and admins see every cleanup so open managers refresh their counts.
+    """
+
+    __event_name__ = "intermediates_operation_changed"
+
+    user_id: str = Field(description="The account that confirmed the operation")
+    operation: IntermediatesOperation = Field(description="The operation's current state")
+
+    @classmethod
+    def build(cls, operation: "IntermediatesOperation") -> "IntermediatesOperationChangedEvent":
+        return cls(user_id=operation.user_id, operation=operation)
 
 
 class UserAccessChangedEvent(EventBase):

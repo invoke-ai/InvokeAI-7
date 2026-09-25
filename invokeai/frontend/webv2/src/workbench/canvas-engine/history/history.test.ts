@@ -2,11 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { HistoryEntry } from './history';
 
-import { createHistory, HISTORY_BYTE_BUDGET, HISTORY_MAX_ENTRIES } from './history';
+import { createHistory, HISTORY_BYTE_BUDGET, HISTORY_MAX_ENTRIES, NO_HELD_ASSET_REFS } from './history';
 
 /** A tiny entry that records undo/redo calls into a shared log. */
 const makeEntry = (label: string, log: string[], bytes = 0): HistoryEntry => ({
   bytes,
+  heldAssetRefs: NO_HELD_ASSET_REFS,
   label,
   redo: () => log.push(`redo:${label}`),
   undo: () => log.push(`undo:${label}`),
@@ -62,6 +63,20 @@ describe('createHistory: redo cleared on push', () => {
 });
 
 describe('createHistory: entry-count eviction', () => {
+  it('keeps undo and redo media held until their entry is evicted', () => {
+    const history = createHistory({ maxEntries: 1 });
+    const first = { ...makeEntry('remove first', []), heldAssetRefs: { images: ['first.png'], videos: [] } };
+    const second = { ...makeEntry('remove second', []), heldAssetRefs: { images: ['second.png'], videos: [] } };
+    history.push(first);
+    history.undo();
+    expect(history.heldAssetRefs().images).toEqual(['first.png']);
+    history.redo();
+    history.push(second);
+    expect(history.heldAssetRefs().images).toEqual(['second.png']);
+    history.clear();
+    expect(history.heldAssetRefs().images).toEqual([]);
+  });
+
   it('evicts the oldest entry beyond the 64-entry budget', () => {
     const log: string[] = [];
     const history = createHistory();
@@ -209,6 +224,7 @@ describe('createHistory: amendLast', () => {
     const history = createHistory();
     const reentrant: HistoryEntry = {
       bytes: 0,
+      heldAssetRefs: NO_HELD_ASSET_REFS,
       label: 'reentrant',
       redo: () => {},
       undo: () => history.amendLast(makeEntry('sneaky', log)),
@@ -234,6 +250,7 @@ describe('createHistory: re-entrancy guard', () => {
 
     const reentrant: HistoryEntry = {
       bytes: 0,
+      heldAssetRefs: NO_HELD_ASSET_REFS,
       label: 'reentrant',
       redo: () => {
         observed.push(history.isApplying());
@@ -276,7 +293,14 @@ describe('createHistory: failure-atomic replay', () => {
     });
     const redo = vi.fn();
     history.subscribe(listener);
-    history.push({ bytes: 17, label: 'fallible', redo, replayFailureAtomic: true, undo });
+    history.push({
+      bytes: 17,
+      heldAssetRefs: NO_HELD_ASSET_REFS,
+      label: 'fallible',
+      redo,
+      replayFailureAtomic: true,
+      undo,
+    });
     listener.mockClear();
 
     expect(() => history.undo()).toThrow('undo preparation failed');
@@ -304,7 +328,14 @@ describe('createHistory: failure-atomic replay', () => {
       }
     });
     history.subscribe(listener);
-    history.push({ bytes: 23, label: 'fallible', redo, replayFailureAtomic: true, undo });
+    history.push({
+      bytes: 23,
+      heldAssetRefs: NO_HELD_ASSET_REFS,
+      label: 'fallible',
+      redo,
+      replayFailureAtomic: true,
+      undo,
+    });
     history.undo();
     listener.mockClear();
 
@@ -329,6 +360,7 @@ describe('createHistory: failure-atomic replay', () => {
     history.push(makeEntry('a', log, 10));
     history.push({
       bytes: 10,
+      heldAssetRefs: NO_HELD_ASSET_REFS,
       label: 'b',
       redo: () => log.push('redo:b'),
       replayFailureAtomic: true,
@@ -359,6 +391,7 @@ describe('createHistory: failure-atomic replay', () => {
       history.subscribe(listener);
       history.push({
         bytes: 10,
+        heldAssetRefs: NO_HELD_ASSET_REFS,
         label: 'clear-on-undo',
         redo: () => {},
         replayFailureAtomic,
@@ -383,6 +416,7 @@ describe('createHistory: failure-atomic replay', () => {
       history.subscribe(listener);
       history.push({
         bytes: 10,
+        heldAssetRefs: NO_HELD_ASSET_REFS,
         label: 'clear-on-redo',
         redo: () => {
           if (clearOnRedo) {
@@ -411,6 +445,7 @@ describe('createHistory: failure-atomic replay', () => {
     history.subscribe(listener);
     history.push({
       bytes: 10,
+      heldAssetRefs: NO_HELD_ASSET_REFS,
       label: 'legacy-fallible-undo',
       redo: () => applied.push('redo'),
       undo: () => {
@@ -440,6 +475,7 @@ describe('createHistory: failure-atomic replay', () => {
     history.subscribe(listener);
     history.push({
       bytes: 10,
+      heldAssetRefs: NO_HELD_ASSET_REFS,
       label: 'legacy-fallible-redo',
       redo: () => {
         applied.push('redo');

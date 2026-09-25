@@ -196,7 +196,8 @@ describe('Workbench ownership manifest', () => {
     expect(records.every((record) => record.targetPath)).toBe(true);
     expect(artifact.counts.productionWorkbenchModules).toBe(workbenchSources.length);
     expect(artifact.transitionalCycles).toHaveLength(0);
-  }, 10_000);
+    // A whole-Workbench scan whose cost grows with the codebase; CI runners already reach 5s of the old 10s budget.
+  }, 60_000);
 
   it('rejects responsibility-free target names', () => {
     const paths = [

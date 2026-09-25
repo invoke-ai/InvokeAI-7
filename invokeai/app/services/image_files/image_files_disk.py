@@ -461,6 +461,17 @@ class DiskImageFileStorage(ImageFileStorageBase):
         finally:
             os.close(dir_fd)
 
+    def get_file_size_bytes(self, image_name: str, image_subfolder: str = "") -> Optional[int]:
+        try:
+            size = self.get_path(image_name, image_subfolder=image_subfolder).stat().st_size
+        except FileNotFoundError:
+            return None
+        try:
+            size += self.get_path(image_name, thumbnail=True, image_subfolder=image_subfolder).stat().st_size
+        except FileNotFoundError:
+            pass
+        return size
+
     def get_path(self, image_name: str, thumbnail: bool = False, image_subfolder: str = "") -> Path:
         base_folder = self.__thumbnails_folder if thumbnail else self.__output_folder
         filename = get_thumbnail_name(image_name) if thumbnail else image_name

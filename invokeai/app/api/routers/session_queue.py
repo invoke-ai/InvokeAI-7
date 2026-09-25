@@ -176,6 +176,7 @@ _REDACTIONS: dict[str, Callable[[], Any]] = {
     "user_id": lambda: "redacted",
     "user_display_name": lambda: None,
     "user_email": lambda: None,
+    "project_id": lambda: None,
     "batch_id": lambda: "redacted",
     "session_id": lambda: "redacted",
     "origin": lambda: None,

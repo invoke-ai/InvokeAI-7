@@ -236,6 +236,7 @@ describe('feature public-interface registry', () => {
     expect(checkDependency('workbench/invocationSubmit.ts', '@features/generation/prompts')).toEqual([]);
     expect(checkDependency('app/GenerateWidgetSyncRuntime.tsx', '@features/generation/runtime')).toEqual([]);
     expect(checkDependency('workbench/widgets/canvas/invoke.ts', '@features/generation/canvasGraph')).toEqual([]);
+    expect(checkDependency('workbench/WorkbenchContext.tsx', '@features/intermediates/holdLease')).toEqual([]);
     expect(
       checkDependency('workbench/invocationSubmit.ts', '@features/generation/data/dynamicPromptsQueries')
     ).toMatchObject([{ rule: 'feature-private-interface' }]);
@@ -280,7 +281,9 @@ describe('production dependency graph', () => {
       .sort();
 
     expect(violations).toEqual([]);
-  });
+    // A whole-source scan whose cost grows with the codebase; on shared CI runners it already takes 3-5s, so the
+    // default 5s budget turned runner speed into test failures.
+  }, 60_000);
 
   it('has no remaining migration exceptions', () => {
     expect(migrationExceptions).toEqual([]);

@@ -1,11 +1,13 @@
 import { Box, Flex, VisuallyHidden, type SystemStyleObject } from '@chakra-ui/react';
 import { FontsPage } from '@features/fonts/launchpad';
 import { useCapabilities, UsersPage } from '@features/identity';
+import { requestIntermediatesFocus } from '@features/intermediates';
 import { ModelsPage } from '@features/models';
 import { NodesPage } from '@features/nodes';
 import { Tabs } from '@platform/ui';
 import { useLocation, useNavigate } from '@tanstack/react-router';
 import { LaunchpadCommandPalette } from '@workbench/palette/LaunchpadCommandPalette';
+import { openWorkbenchSettings } from '@workbench/settings/settingsDialogStore';
 import { BlocksIcon, BoxIcon, FolderIcon, HouseIcon, TypeIcon, UsersIcon, type LucideIcon } from 'lucide-react';
 import { useCallback, useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -74,6 +76,11 @@ const getActiveSectionId = (
     ? requestedSectionId
     : DEFAULT_SECTION_ID;
 
+const manageIntermediatesOf = (userId: string, label: string): void => {
+  requestIntermediatesFocus({ ownerId: userId, ownerLabel: label });
+  openWorkbenchSettings('intermediates');
+};
+
 export const Launchpad = () => {
   const { canManageModels, canManageNodes, canManageUsers } = useCapabilities();
   const { t } = useTranslation();
@@ -125,7 +132,7 @@ export const Launchpad = () => {
             icon: UsersIcon,
             id: 'users',
             label: t('launchpad.sections.users'),
-            render: () => <UsersPage />,
+            render: () => <UsersPage onManageIntermediates={manageIntermediatesOf} />,
           },
         ] satisfies (LaunchpadSection & { condition?: boolean })[]
       ).filter((section) => section.condition ?? true),

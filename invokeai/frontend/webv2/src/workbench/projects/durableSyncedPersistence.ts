@@ -64,6 +64,7 @@ import {
   PROJECT_DOCUMENT_MAX_BYTES,
   serializeProjectDocumentV2Json,
 } from './projectDocument';
+import { assertProjectFlushed, ProjectFlushError } from './projectFlush';
 import { deserializeProjectDocument, deserializeProjectRecord } from './projectHydration';
 import { acquireProjectMutationLock } from './projectLifecycleLocks';
 import { fetchSessionBlobStrict, serializeSessionBlob, SESSION_STATE_KEY } from './session';
@@ -107,6 +108,9 @@ export interface SaveDraftAsNewInput {
 }
 
 export type SaveDraftAsNew = (input: SaveDraftAsNewInput) => Promise<ProjectRecordDTO>;
+
+/** How long a failed upload-provenance creation answers later uploads before another attempt is made. */
+const PROJECT_ENSURE_FAILURE_REUSE_MS = 5_000;
 
 const saveDraftAsNew: SaveDraftAsNew = (input) => {
   return createProjectSettled(
@@ -370,6 +374,7 @@ export interface DurableSyncedWorkbenchPersistence {
     updatedAt: number
   ): Promise<void>;
   deleteProjectOnServer(projectId: string): Promise<void>;
+  ensureProjectOnServer(project: Project): Promise<void>;
   flushProjectToServer(project: Project): Promise<ProjectPushOutcome>;
   getProjectDraftDocument(projectId: string): Promise<string | null>;
   getRecoverableDraftDocument(projectId: string, editorSessionId: string): Promise<string | null>;
@@ -465,6 +470,8 @@ export const createDurableSyncedWorkbenchPersistence = (
   const deleteDatabase = dependencies.deleteDatabase ?? deleteWorkbenchDatabase;
   const databaseDeleteTimeoutMs = dependencies.databaseDeleteTimeoutMs ?? 5_000;
   const syncEntries = new Map<string, SyncEntry>();
+  const projectEnsures = new Map<string, Promise<void>>();
+  const projectEnsureFailures = new Map<string, { at: number; error: unknown }>();
   const conflicts = new Map<string, ProjectConflictInfo>();
   const schemaRefusals = new Map<string, ProjectSchemaRefusal>();
   const generations = new Map<string, number>();
@@ -1868,6 +1875,53 @@ export const createDurableSyncedWorkbenchPersistence = (
           throw error;
         }
       }),
+    ensureProjectOnServer: (project) => {
+      const assertProjectIdentityCurrent = () => {
+        assertNotCleared();
+        assertOwner();
+        if (deletedProjectIds.has(project.id) || retargetedProjects.has(project.id)) {
+          throw new ProjectFlushError('superseded');
+        }
+        if (conflicts.get(project.id)?.kind === 'deleted') {
+          throw new ProjectFlushError('conflicted');
+        }
+      };
+      // Upload provenance only needs the project's acknowledged identity; later edits stay with autosave. An
+      // acknowledged project answers at once instead of waiting behind every queued save.
+      if (syncEntries.has(project.id)) {
+        return Promise.resolve().then(assertProjectIdentityCurrent);
+      }
+      // Uploads share one creation attempt, and fall back at once while a recent attempt's failure is fresh.
+      const failure = projectEnsureFailures.get(project.id);
+      if (failure && Date.now() - failure.at < PROJECT_ENSURE_FAILURE_REUSE_MS) {
+        return Promise.resolve().then(() => {
+          assertProjectIdentityCurrent();
+          throw failure.error;
+        });
+      }
+      projectEnsureFailures.delete(project.id);
+      let ensure = projectEnsures.get(project.id);
+      if (!ensure) {
+        ensure = enqueue(async () => {
+          assertProjectIdentityCurrent();
+          if (!syncEntries.has(project.id)) {
+            assertProjectFlushed(await pushProject(project));
+          }
+        }).then(
+          () => {
+            projectEnsures.delete(project.id);
+            projectEnsureFailures.delete(project.id);
+          },
+          (error: unknown) => {
+            projectEnsures.delete(project.id);
+            projectEnsureFailures.set(project.id, { at: Date.now(), error });
+            throw error;
+          }
+        );
+        projectEnsures.set(project.id, ensure);
+      }
+      return ensure.then(assertProjectIdentityCurrent);
+    },
     flushProjectToServer: (project) => {
       if (isTerminallyCleared) {
         return Promise.reject(new Error('Workbench persistence was cleared and must be reloaded.'));
@@ -2724,6 +2778,7 @@ export const createDurableSyncedWorkbenchPersistence = (
       });
     },
     releaseProjectSync: (projectId) => {
+      projectEnsureFailures.delete(projectId);
       if ([...pendingRetargetHandoffs.values()].some((handoff) => handoff.targetProjectId === projectId)) {
         closedRetargetTargetsAwaitingAck.add(projectId);
       }

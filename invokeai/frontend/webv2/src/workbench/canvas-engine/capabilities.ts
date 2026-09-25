@@ -227,6 +227,7 @@ export interface CanvasHistoryCapability {
   redo(): void;
   clearHistory(): void;
   getEntries(): CanvasHistoryEntries;
+  getHeldAssetRefs(): { images: readonly string[]; videos: readonly string[] };
   /** Replays `offset` steps — negative undoes, positive redoes — clamped to the stacks. */
   stepBy(offset: number): void;
 }

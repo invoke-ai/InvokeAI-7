@@ -63,6 +63,16 @@ MAX_ENQUEUE_RECEIPTS_PER_OWNER = 100_000
 MAX_ENQUEUE_RECEIPT_BYTES_PER_OWNER = 128 * 1024 * 1024
 ACKNOWLEDGED_ENQUEUE_RECEIPT_RETENTION_DAYS = 7
 
+# A completed child is still recovery state for its active root, including the interval
+# before its returned media is persisted in its parent. Both history-pruning paths must
+# retain it; intermediates cleanup also uses these rows to protect the root's media.
+PRUNABLE_QUEUE_ITEMS_SQL = """
+    status IN ('completed', 'failed', 'canceled')
+    AND (root_item_id IS NULL OR root_item_id NOT IN (
+        SELECT item_id FROM session_queue WHERE status IN ('pending', 'in_progress', 'waiting')
+    ))
+"""
+
 # Round-robin dequeue (multiuser fairness): pick the next pending item from the user who was
 # least-recently served.
 #
@@ -207,14 +217,10 @@ class SqliteSessionQueue(SessionQueueBase):
     def _prune_terminal_to_limit(self, queue_id: str, keep: int) -> int:
         """Prune terminal items (completed/failed/canceled) to keep at most N most-recent items."""
         with self._db.transaction() as cursor:
-            where = """--sql
+            where = f"""--sql
                 WHERE
                 queue_id = ?
-                AND (
-                    status = 'completed'
-                    OR status = 'failed'
-                    OR status = 'canceled'
-                )
+                AND {PRUNABLE_QUEUE_ITEMS_SQL}
                 """
             cursor.execute(
                 f"""--sql
@@ -486,8 +492,8 @@ class SqliteSessionQueue(SessionQueueBase):
                     raise EnqueueReceiptLimitError("Unacknowledged enqueue receipts exceed the storage limit")
             cursor.executemany(
                 """--sql
-                INSERT INTO session_queue (queue_id, session, session_id, batch_id, field_values, priority, workflow, origin, destination, retried_from_item_id, user_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO session_queue (queue_id, session, session_id, batch_id, field_values, priority, workflow, origin, destination, retried_from_item_id, user_id, project_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values_to_insert,
             )
@@ -1167,11 +1173,7 @@ class SqliteSessionQueue(SessionQueueBase):
             where = f"""--sql
                 WHERE
                 queue_id = ?
-                AND (
-                    status = 'completed'
-                    OR status = 'failed'
-                    OR status = 'canceled'
-                )
+                AND {PRUNABLE_QUEUE_ITEMS_SQL}
                 {user_filter}
                 """
             params: list[Any] = [queue_id]
@@ -1770,9 +1772,10 @@ class SqliteSessionQueue(SessionQueueBase):
                         parent_session_id,
                         root_item_id,
                         workflow_call_depth,
+                        project_id,
                         status
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
                     """,
                     (
                         parent_queue_item.queue_id,
@@ -1791,6 +1794,7 @@ class SqliteSessionQueue(SessionQueueBase):
                         parent_queue_item.session_id,
                         root_item_id,
                         workflow_call_execution.depth,
+                        parent_queue_item.project_id,
                     ),
                 )
                 child_item_ids.append(cast(int, cursor.lastrowid))
@@ -1882,6 +1886,7 @@ class SqliteSessionQueue(SessionQueueBase):
                     destination,
                     retried_from_item_id,
                     user_id,
+                    project_id,
                     workflow_call_id,
                     parent_item_id,
                     parent_session_id,
@@ -1889,7 +1894,7 @@ class SqliteSessionQueue(SessionQueueBase):
                     workflow_call_depth,
                     status
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
                 """,
                 (
                     parent_queue_item.queue_id,
@@ -1903,6 +1908,7 @@ class SqliteSessionQueue(SessionQueueBase):
                     parent_queue_item.destination,
                     None,
                     parent_queue_item.user_id,
+                    parent_queue_item.project_id,
                     workflow_call_execution.id,
                     parent_queue_item.item_id,
                     parent_queue_item.session_id,
@@ -2387,6 +2393,7 @@ class SqliteSessionQueue(SessionQueueBase):
                     root_queue_item.destination,
                     retried_from_item_id,
                     root_queue_item.user_id,
+                    root_queue_item.project_id,
                 )
                 values_to_insert.append(value_to_insert)
 
@@ -2395,8 +2402,8 @@ class SqliteSessionQueue(SessionQueueBase):
 
             cursor.executemany(
                 """--sql
-                INSERT INTO session_queue (queue_id, session, session_id, batch_id, field_values, priority, workflow, origin, destination, retried_from_item_id, user_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO session_queue (queue_id, session, session_id, batch_id, field_values, priority, workflow, origin, destination, retried_from_item_id, user_id, project_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values_to_insert,
             )

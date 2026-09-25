@@ -1,3 +1,4 @@
+import type { GalleryItemRef } from '@features/gallery/contracts';
 import type { GalleryUiAdapter } from '@features/gallery/react';
 import type { ReactNode } from 'react';
 
@@ -12,6 +13,14 @@ import { useActiveProjectSelector, useWorkbenchCommands, useWorkbenchQueries } f
 import { lazy, useMemo } from 'react';
 
 const EMPTY_WIDGET_VALUES: Record<string, unknown> = Object.freeze({});
+
+// Loaded on first reveal; the label cache is not part of the editor's initial graph.
+const getItemLabel = (item: GalleryItemRef): Promise<string | null> =>
+  import('@workbench/image-map/imageLabelCache')
+    .then(({ getImageLabels }) => getImageLabels(item))
+    .then((labels) => labels?.label ?? null)
+    // A chunk that fails to load (stale deploy, dropped network) means no label, not an unhandled rejection.
+    .catch(() => null);
 
 const GalleryItemActionsAdapter = lazy(() =>
   import('./GalleryImageActionsBridge').then((module) => ({ default: module.GalleryItemActionsAdapter }))
@@ -54,6 +63,7 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
       },
       galleryValues,
       generateValues,
+      getItemLabel,
       ItemActionsProvider: GalleryItemActionsAdapter,
       ImageContextMenu: GalleryImageContextMenu,
       liveFollowEnabled,

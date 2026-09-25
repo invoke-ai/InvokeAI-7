@@ -343,6 +343,9 @@ class SessionQueueItem(BaseModel):
     completed_at: Optional[Union[datetime.datetime, str]] = Field(description="When this queue item was completed")
     queue_id: str = Field(description="The id of the queue with which this item is associated")
     user_id: str = Field(default="system", description="The id of the user who created this queue item")
+    project_id: Optional[str] = Field(
+        default=None, description="The project this queue item was enqueued for, if any; its outputs inherit it"
+    )
     user_display_name: Optional[str] = Field(
         default=None, description="The display name of the user who created this queue item, if available"
     )
@@ -761,6 +764,7 @@ ValueToInsertTuple: TypeAlias = tuple[
     str | None,  # destination (optional)
     int | None,  # retried_from_item_id (optional, this is always None for new items)
     str,  # user_id
+    str | None,  # project_id (optional)
 ]
 """A type alias for the tuple of values to insert into the session queue table.
 
@@ -795,6 +799,7 @@ def prepare_values_to_insert(
         - destination (optional)
         - retried_from_item_id (optional, this is always None for new items)
         - user_id
+        - project_id (optional)
     """
 
     # A tuple is a fast and memory-efficient way to store the values to insert. Previously, we used a NamedTuple, but
@@ -825,6 +830,7 @@ def prepare_values_to_insert(
                 batch.destination,
                 None,
                 user_id,
+                batch.project_id,
             )
         )
     return values_to_insert

@@ -97,6 +97,8 @@ export interface GalleryUiAdapter {
   gallery: GalleryCommandsPort;
   galleryValues: Record<string, unknown>;
   generateValues: Record<string, unknown>;
+  /** Resolves an item's best image-map vocabulary label, or null when it has none. */
+  getItemLabel(item: GalleryItemRef): Promise<string | null>;
   notifications: GalleryNotificationsPort;
   projectId: string;
   projectName: string;

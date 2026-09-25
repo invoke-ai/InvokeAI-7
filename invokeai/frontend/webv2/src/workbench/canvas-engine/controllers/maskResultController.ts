@@ -19,6 +19,7 @@ import {
   nextRegionalGuidanceFillColor,
   nextRegionalGuidanceName,
 } from '@workbench/canvas-engine/document/layerFactories';
+import { collectHistoryMediaRefs } from '@workbench/canvas-engine/history/history';
 
 export type {
   CommitMaskImageResult,
@@ -112,6 +113,7 @@ export class MaskResultController {
     apply();
     o.history.push({
       bytes: 256,
+      heldAssetRefs: collectHistoryMediaRefs(layer),
       label: options.target === 'inpaint_mask' ? 'Create inpaint mask from object' : 'Create region from object',
       redo: apply,
       replayFailureAtomic: true,

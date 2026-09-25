@@ -32,6 +32,7 @@ def _insert_queue_item(
     status: str,
     user_id: str,
     root_item_id: int | None = None,
+    project_id: str | None = None,
     queue_id: str = "default",
 ) -> int:
     with session_queue._db.transaction() as cursor:
@@ -54,9 +55,10 @@ def _insert_queue_item(
                 parent_session_id,
                 root_item_id,
                 workflow_call_depth,
+                project_id,
                 status
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 queue_id,
@@ -75,6 +77,7 @@ def _insert_queue_item(
                 None,
                 root_item_id,
                 None,
+                project_id,
                 status,
             ),
         )
@@ -136,3 +139,21 @@ def test_retry_items_by_id_emits_unique_owner_ids_for_multiple_roots(
         "user-1": [first_root_item_id],
         "user-2": [second_root_item_id],
     }
+
+
+def test_retried_items_inherit_the_project_of_the_root(
+    session_queue: SqliteSessionQueue,
+) -> None:
+    root_item_id = _insert_queue_item(
+        session_queue,
+        session=GraphExecutionState(graph=Graph()),
+        user_id="user-1",
+        status="failed",
+        project_id="p1",
+    )
+    session_queue.retry_items_by_id("default", [root_item_id])
+
+    retried = [
+        item for item in session_queue.list_all_queue_items("default") if item.retried_from_item_id == root_item_id
+    ]
+    assert [item.project_id for item in retried] == ["p1"]

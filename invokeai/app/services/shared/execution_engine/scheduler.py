@@ -235,12 +235,6 @@ class ExecutionScheduler:
         self._active_class: str | None = None
         self.rebuild_ready()
 
-    def _priority(self, class_name: str) -> int:
-        try:
-            return self.ready_order.index(class_name)
-        except ValueError:
-            return len(self.ready_order)
-
     def _passes_ready_predicate(self, node_id: NodeId) -> bool:
         return self._ready_predicate is None or self._ready_predicate(node_id)
 

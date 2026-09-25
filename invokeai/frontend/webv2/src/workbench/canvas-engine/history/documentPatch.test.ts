@@ -27,4 +27,18 @@ describe('createDocumentPatchEntry', () => {
     expect(heavier.bytes).toBe(4096);
     expect(heavier.label).toBe('Cycle');
   });
+
+  it('retains media names embedded in an undoable removed layer', () => {
+    const removedLayer = {
+      type: 'addCanvasLayer',
+      layer: { source: { imageName: 'removed.png', video_name: 'source.mp4' } },
+    } as unknown as CanvasProjectMutation;
+    const entry = createDocumentPatchEntry({
+      dispatch: vi.fn(),
+      forward,
+      inverse: removedLayer,
+      label: 'Remove layer',
+    });
+    expect(entry.heldAssetRefs).toEqual({ images: ['removed.png'], videos: ['source.mp4'] });
+  });
 });

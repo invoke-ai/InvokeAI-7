@@ -40,6 +40,7 @@ const galleryAdapter = {
   gallery: new Proxy({}, { get: () => noop }),
   galleryValues: {},
   generateValues: {},
+  getItemLabel: () => Promise.resolve(null),
   liveFollowEnabled: false,
   notifications: { add: noop, reportError: noop },
   pinnedProgressSessionId: null,

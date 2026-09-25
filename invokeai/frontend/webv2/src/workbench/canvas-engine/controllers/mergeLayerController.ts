@@ -16,6 +16,7 @@ import { insertNodesAtAnchor } from '@workbench/canvas-engine/document/insertion
 import { haveSameStructure } from '@workbench/canvas-engine/document/layerStacks';
 import { mergeDownMatrix } from '@workbench/canvas-engine/document/mergeDown';
 import { canMergeSelectedRasters, getMergeVisibleRasterLeaves } from '@workbench/canvas-engine/document/mergeVisible';
+import { collectHistoryMediaRefs } from '@workbench/canvas-engine/history/history';
 import { isEmpty, roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
 import { applyAdjustments, isIdentityAdjustments } from '@workbench/canvas-engine/render/adjustments';
 import { blendToComposite } from '@workbench/canvas-engine/render/compositor';
@@ -303,6 +304,7 @@ export class MergeLayerController {
       apply();
       this.deps.ctx.history.push({
         bytes: rect.width * rect.height * 4 + 256,
+        heldAssetRefs: collectHistoryMediaRefs(contributors),
         label: 'Merge visible',
         redo: apply,
         replayFailureAtomic: true,
@@ -516,6 +518,7 @@ export class MergeLayerController {
         applyPrepared();
         this.deps.ctx.history.push({
           bytes: historyBytes,
+          heldAssetRefs: collectHistoryMediaRefs(rawSnapshots.map(({ layer }) => layer)),
           label: 'Merge selected layers',
           redo,
           replayFailureAtomic: true,

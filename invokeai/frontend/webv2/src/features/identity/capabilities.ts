@@ -14,6 +14,8 @@ export interface Capabilities {
   /** Edit prompts shared with everyone. Never covers another user's private prompt. */
   canManageSharedSystemPrompts: boolean;
   canManageUsers: boolean;
+  /** Clear intermediates of other accounts or of everyone; the routes are admin-only. */
+  canClearOthersIntermediates: boolean;
 }
 
 export const getCapabilities = (session: AuthSession): Capabilities => {
@@ -27,6 +29,7 @@ export const getCapabilities = (session: AuthSession): Capabilities => {
       canManagePromptTemplates: false,
       canManageSharedSystemPrompts: false,
       canManageUsers: false,
+      canClearOthersIntermediates: false,
     };
   }
 
@@ -45,6 +48,7 @@ export const getCapabilities = (session: AuthSession): Capabilities => {
     // Offer admin edits only for shared prompts to avoid accidental edits to another user's private content.
     canManageSharedSystemPrompts: isAdmin,
     canManageUsers: session.multiuserEnabled && session.user?.is_admin === true,
+    canClearOthersIntermediates: session.multiuserEnabled && session.user?.is_admin === true,
   };
 };
 

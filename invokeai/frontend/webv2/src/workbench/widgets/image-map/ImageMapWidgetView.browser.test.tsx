@@ -7,8 +7,24 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Stand-ins for the gallery's values and the workbench commands the chip and Esc write through.
+const workbench = vi.hoisted(() => ({
+  galleryValues: {} as Record<string, unknown>,
+  patchValues: vi.fn(),
+}));
+
 vi.mock('@workbench/WorkbenchContext', () => ({
-  useWidgetValuesSelector: () => false,
+  // The gallery's values drive the cluster chip and the Esc clear. Every other widget's selector is applied to an
+  // empty value bag rather than answering `false`: each accessor owns its own default, and handing a boolean to a
+  // setting that is a number or null makes the widget act on a value it could never be given in production.
+  useWidgetValuesSelector: (widgetId: string, select: (values: Record<string, unknown>) => unknown) =>
+    select(widgetId === 'gallery' ? workbench.galleryValues : {}),
+  useWorkbenchCommands: () => ({ widgets: { patchValues: workbench.patchValues } }),
+  useWorkbenchQueries: () => ({ getSnapshot: () => ({ activeProject: {} }) }),
+}));
+vi.mock('@workbench/widgetState', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getProjectWidgetValues: () => workbench.galleryValues,
 }));
 
 // Stub the heavy Plotly sibling; this test owns the progress badge.
@@ -91,12 +107,43 @@ vi.mock('@workbench/image-map/imageMapStore', async (importOriginal) => {
   };
 });
 
+import { registerImageCluster } from '@features/gallery/contracts';
 import { imageMapStore, refreshImageIndexStatus, refreshImageMapPoints } from '@workbench/image-map/imageMapStore';
 
 import { ImageMapWidgetView } from './ImageMapWidgetView';
 
 let host: HTMLDivElement | null = null;
 let root: Root | null = null;
+
+/** Captures what the view registers, and what it disposes, so the Esc binding can be asserted and fired. */
+const registered = {
+  commands: [] as { handler: () => unknown; id: string; runtime: string; disposed: boolean }[],
+  hotkeys: [] as { commandId: string; defaultKeys: string[]; runtime: string; disposed: boolean }[],
+};
+const makeViewProps = (runtimeName: string) =>
+  ({
+    runtime: {
+      commands: {
+        register: (command: { handler: () => unknown; id: string }) => {
+          const entry = { ...command, disposed: false, runtime: runtimeName };
+          registered.commands.push(entry);
+          return () => {
+            entry.disposed = true;
+          };
+        },
+      },
+      hotkeys: {
+        register: (hotkey: { commandId: string; defaultKeys: string[] }) => {
+          const entry = { ...hotkey, disposed: false, runtime: runtimeName };
+          registered.hotkeys.push(entry);
+          return () => {
+            entry.disposed = true;
+          };
+        },
+      },
+    },
+  }) as unknown as WidgetViewProps;
+const viewProps = makeViewProps('project-a');
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const dataFor = (
@@ -116,6 +163,7 @@ const dataFor = (
 const renderState = async (state: Extract<ImageMapState, 'disabled' | 'model_missing'>, modelName?: string) => {
   imageMapStore.setSnapshot({
     clusterLabels: null,
+    clusterLabelsEps: null,
     clusterLabelsHash: null,
     data: dataFor(state, modelName),
     error: null,
@@ -128,7 +176,7 @@ const renderState = async (state: Extract<ImageMapState, 'disabled' | 'model_mis
   await act(() =>
     root?.render(
       <ChakraProvider value={system}>
-        <ImageMapWidgetView {...({} as WidgetViewProps)} />
+        <ImageMapWidgetView {...viewProps} />
       </ChakraProvider>
     )
   );
@@ -147,6 +195,9 @@ const setActiveInstalls = async (sources: string[]) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  workbench.galleryValues = {};
+  registered.commands = [];
+  registered.hotkeys = [];
   models.activeSources.set([]);
   host = document.createElement('div');
   document.body.append(host);
@@ -303,6 +354,7 @@ describe('Image Map indexing activity', () => {
   ) => {
     imageMapStore.setSnapshot({
       clusterLabels: null,
+      clusterLabelsEps: null,
       clusterLabelsHash: null,
       data: {
         clusterEps: null,
@@ -327,7 +379,7 @@ describe('Image Map indexing activity', () => {
     await act(() =>
       root?.render(
         <ChakraProvider value={system}>
-          <ImageMapWidgetView {...({} as WidgetViewProps)} />
+          <ImageMapWidgetView {...viewProps} />
         </ChakraProvider>
       )
     );
@@ -371,5 +423,158 @@ describe('Image Map indexing activity', () => {
 
     expect(host?.querySelector('[data-testid="plot"]')).not.toBeNull();
     expect(host?.textContent).not.toContain('indexing');
+  });
+});
+
+describe('Image Map cluster selection chip', () => {
+  const POINTS = [
+    { cluster: 2, item: { kind: 'image' as const, name: 'a.png' }, key: 'image:a.png' as const, x: 0, y: 0 },
+    { cluster: 2, item: { kind: 'image' as const, name: 'b.png' }, key: 'image:b.png' as const, x: 1, y: 1 },
+    { cluster: 5, item: { kind: 'image' as const, name: 'c.png' }, key: 'image:c.png' as const, x: 9, y: 9 },
+  ];
+
+  const renderMap = async (
+    counts: { total: number; embedded: number; pending: number; failed: number } | null,
+    props: WidgetViewProps = viewProps,
+    centerChromeInset?: string
+  ) => {
+    imageMapStore.setSnapshot({
+      clusterLabels: null,
+      clusterLabelsEps: null,
+      clusterLabelsHash: null,
+      data: {
+        clusterEps: null,
+        modelName: null,
+        pointCount: POINTS.length,
+        points: POINTS,
+        stale: false,
+        state: 'ready',
+        updatedAt: '2026-09-23T01:00:00',
+        visibleHash: 'hash',
+      },
+      error: null,
+      indexCounts: counts,
+      indexUpdatedAt: counts ? Date.now() : null,
+      loadState: 'loaded',
+      renderError: null,
+    });
+
+    await act(() =>
+      root?.render(
+        <ChakraProvider value={system}>
+          <div
+            style={{
+              height: 400,
+              width: 500,
+              ...(centerChromeInset ? { '--wb-center-chrome-inset': centerChromeInset } : {}),
+            }}
+          >
+            <ImageMapWidgetView {...props} />
+          </div>
+        </ChakraProvider>
+      )
+    );
+  };
+
+  const selectCluster = (label: string, count = 2) => {
+    const keys = POINTS.slice(0, count).map((point) => point.key);
+    const clusterId = registerImageCluster(keys, label);
+
+    workbench.galleryValues = { semanticImageQuery: { clusterId, kind: 'cluster', label }, searchTerm: '' };
+  };
+
+  const chip = () => host?.querySelector<HTMLElement>('[role="group"][aria-label="Selected cluster"]') ?? null;
+  const CLEARED = { galleryPage: 0, searchTerm: '', semanticImageQuery: null, semanticSearchText: null };
+
+  it('names the selected cluster with its size and colour, above the indexing badge', async () => {
+    selectCluster('sunset beach');
+    await renderMap({ embedded: 10, failed: 0, pending: 5, total: 15 });
+
+    expect(chip()?.textContent).toBe('sunset beach· 2 items');
+    // Cluster 2's palette colour: both members are in it.
+    expect(getComputedStyle(chip()!.querySelector('[aria-hidden="true"]')!).backgroundColor).toBe('rgb(225, 87, 89)');
+    // Stacked in one corner rather than drawn over each other, the selection first.
+    const badge = host?.querySelector('[role="progressbar"]');
+    expect(chip()!.compareDocumentPosition(badge!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(badge!.getBoundingClientRect().top).toBeGreaterThanOrEqual(chip()!.getBoundingClientRect().bottom);
+  });
+
+  it('shows only the current size for an unlabeled cluster, even after members were deleted', async () => {
+    // Named "2 items" at click time; one member has since gone.
+    selectCluster('2 items', 1);
+    await renderMap(null);
+
+    expect(chip()?.textContent).toBe('1 item');
+  });
+
+  it('starts below the floating view selector when the map is in the center area', async () => {
+    selectCluster('sunset beach');
+    await renderMap(null, viewProps, '3rem');
+
+    const surface = host!.querySelector<HTMLElement>('[data-image-map-surface]')!;
+    // 3rem of center chrome plus the corner's own spacing.
+    expect(chip()!.getBoundingClientRect().top - surface.getBoundingClientRect().top).toBeGreaterThanOrEqual(48 + 8);
+  });
+
+  it('clears the gallery cluster listing from its button', async () => {
+    selectCluster('sunset beach');
+    await renderMap(null);
+
+    const clear = chip()!.querySelector<HTMLButtonElement>('button[aria-label="Clear cluster selection"]')!;
+    clear.focus();
+    await act(() => clear.click());
+
+    expect(workbench.patchValues).toHaveBeenCalledWith('gallery', CLEARED);
+    // The button is about to unmount with the chip; focus stays on the map, where Esc keeps working.
+    expect(document.activeElement).toBe(host!.querySelector('[data-image-map-surface]'));
+  });
+
+  it('moves the Esc binding to the new project when the runtime changes without a remount', async () => {
+    await renderMap(null);
+    await renderMap(null, makeViewProps('project-b'));
+
+    const escBindings = registered.hotkeys.filter((entry) => entry.defaultKeys.includes('esc'));
+    // Registrations carry the project they were made for; a binding left on the
+    // old project's runtime would never resolve in the new one.
+    expect(escBindings.map((entry) => [entry.runtime, entry.disposed])).toEqual([
+      ['project-a', true],
+      ['project-b', false],
+    ]);
+    expect(
+      registered.commands
+        .filter((entry) => entry.id === escBindings[0]!.commandId)
+        .map((entry) => [entry.runtime, entry.disposed])
+    ).toEqual([
+      ['project-a', true],
+      ['project-b', false],
+    ]);
+  });
+
+  it('shows nothing when the gallery is not listing a cluster', async () => {
+    workbench.galleryValues = { searchTerm: 'cats' };
+    await renderMap(null);
+
+    expect(chip()).toBeNull();
+  });
+
+  it('binds Esc to the clear, which leaves an ordinary search alone', async () => {
+    workbench.galleryValues = { searchTerm: 'cats' };
+    await renderMap(null);
+
+    const hotkey = registered.hotkeys.find((entry) => entry.defaultKeys.includes('esc'));
+    const command = registered.commands.find((entry) => entry.id === hotkey?.commandId);
+    expect(command).toBeDefined();
+
+    // Esc with no cluster selected must not wipe the user's search.
+    await act(() => {
+      command!.handler();
+    });
+    expect(workbench.patchValues).not.toHaveBeenCalled();
+
+    selectCluster('sunset beach');
+    await act(() => {
+      command!.handler();
+    });
+    expect(workbench.patchValues).toHaveBeenCalledWith('gallery', CLEARED);
   });
 });

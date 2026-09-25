@@ -1,5 +1,5 @@
 import { Progress, Stack, Text } from '@chakra-ui/react';
-import { formatBytes } from '@features/models/core/taxonomy';
+import { formatBytes } from '@platform/i18n/languages';
 import { useTranslation } from 'react-i18next';
 
 import type { InstallByteProgress, InstallRowStatus } from './queueModel';

@@ -544,7 +544,8 @@
       "quotaDescription": "This server has insufficient font storage. Import with font references, then install or replace missing fonts before generating or exporting images.",
       "importReferences": "Import without font files",
       "installing": "Installing fonts {{completed}} / {{total}}"
-    }
+    },
+    "deleteIntermediates": "Delete intermediates…"
   },
   "users": {
     "accountCount_one": "{{count}} account in this workspace.",
@@ -596,7 +597,8 @@
     "title": "Users",
     "updated": "User updated",
     "user": "User",
-    "you": "You"
+    "you": "You",
+    "manageIntermediatesNamed": "Manage intermediates of {{name}}"
   },
   "fonts": {
     "title": "Fonts",
@@ -1777,7 +1779,7 @@
       },
       "workspaceActions": {
         "label": "Data & workspace",
-        "description": "Reset the layout or permanently delete saved projects and settings."
+        "description": "Reset the layout, manage intermediates, or permanently delete saved projects and settings."
       },
       "about": {
         "label": "About InvokeAI",
@@ -1822,7 +1824,8 @@
         "developer": "Developer",
         "server": "Server",
         "workspace": "Data & workspace",
-        "about": "About"
+        "about": "About",
+        "intermediates": "Intermediates"
       },
       "developerConsoleOutputEnabled": {
         "label": "Mirror logs to the browser console",
@@ -1833,7 +1836,8 @@
         "description": "Restore the default level, namespaces, console and timing settings, including namespaces added in newer versions."
       },
       "resetLoggingDefaults": "Reset to defaults",
-      "loggingDefaultsActive": "Default logging settings are active."
+      "loggingDefaultsActive": "Default logging settings are active.",
+      "manageIntermediates": "Manage intermediates…"
     }
   },
   "shell": {
@@ -2599,6 +2603,7 @@
       "sideBySide": "Side by Side",
       "slider": "Slider",
       "hover": "Hover",
+      "imageTags": "Image tags:",
       "hoverComparisonAriaLabel": "Reveal comparison image on hover, focus, or touch",
       "sourceRun": "Source run {{id}}",
       "videoDuration": "Duration {{duration}}",
@@ -4191,9 +4196,136 @@
     "fields": {
       "comparisonMode": "Comparison mode",
       "showClusterLabels": "Show cluster labels",
-      "clickSelectsCluster": "Select clusters on click"
+      "clickSelectsCluster": "Select clusters on click",
+      "clusterStrength": "Clustering strength",
+      "clusterStrengthHint": "Higher values create larger clusters",
+      "clusterStrengthAuto": "auto",
+      "clusterStrengthIncomplete": "Not a number yet \u2014 the clustering strength is unchanged.",
+      "clusterStrengthRange": "Clustering strength must be between {{min}} and {{max}}."
     },
     "changedFromDefault": "Changed from default",
     "changedSetting": "{{setting}}: changed from default"
+  },
+  "intermediates": {
+    "title": "Intermediates",
+    "description": "Temporary images and videos that generation leaves behind. Delete the ones nothing needs to reclaim disk space.",
+    "refresh": "Refresh",
+    "searchLabel": "Search projects",
+    "searchPlaceholder": "Search projects…",
+    "searchPlaceholderAdmin": "Search projects or accounts…",
+    "counts": {
+      "images_one": "{{count, number}} image",
+      "images_other": "{{count, number}} images",
+      "videos_one": "{{count, number}} video",
+      "videos_other": "{{count, number}} videos",
+      "projects_one": "{{count, number}} project",
+      "projects_other": "{{count, number}} projects",
+      "items_one": "{{count, number}} item",
+      "items_other": "{{count, number}} items"
+    },
+    "dialog": {
+      "title": "Delete intermediates?",
+      "forceTitle": "Force delete intermediates?",
+      "loadingPreview": "Checking what can be deleted…",
+      "previewFailed": "Could not check what can be deleted.",
+      "summary": "Delete {{images}} and {{videos}} from {{projects}}?",
+      "reclaim": "Approximately {{size}} can be reclaimed.",
+      "reclaimUnknown": "Reclaimable space is still being measured.",
+      "reclaimPartial_one": "{{count, number}} item is not measured yet.",
+      "reclaimPartial_other": "{{count, number}} items are not measured yet.",
+      "kept_one": "{{count, number}} in-use item will be kept.",
+      "kept_other": "{{count, number}} in-use items will be kept.",
+      "nothing": "Nothing is safe to delete right now.",
+      "forceWarning": "Force delete also removes intermediates that saved documents still reference: projects, workflows, legacy editor state and recovered projects. Those documents will show missing images and undo may no longer restore them. Queued, running and recently created work stays protected. Deletion cannot be undone.",
+      "forceWarningOwn": "Force delete also removes intermediates that your saved documents still reference: projects, workflows, legacy editor state and recovered projects. Those documents will show missing images and undo may no longer restore them. Items another account's documents use are always kept, as are queued, running and recently created work. Deletion cannot be undone.",
+      "affected": "Documents that will lose references",
+      "affectedProject_one": "Project “{{name}}” ({{count, number}} item)",
+      "affectedProject_other": "Project “{{name}}” ({{count, number}} items)",
+      "affectedWorkflow_one": "Workflow “{{name}}” ({{count, number}} item)",
+      "affectedWorkflow_other": "Workflow “{{name}}” ({{count, number}} items)",
+      "affectedOwner": "· {{owner}}",
+      "affectedClientState_one": "Legacy editor state ({{count, number}} item)",
+      "affectedClientState_other": "Legacy editor state ({{count, number}} items)",
+      "affectedQuarantinedProject_one": "Recovered project “{{name}}” ({{count, number}} item)",
+      "affectedQuarantinedProject_other": "Recovered project “{{name}}” ({{count, number}} items)",
+      "affectedMore_one": "and {{count, number}} more document",
+      "affectedMore_other": "and {{count, number}} more documents",
+      "acknowledge": "I understand this may break saved documents and cannot be undone.",
+      "typeToConfirm": "Type {{word}} to confirm",
+      "confirm": "Delete",
+      "forceConfirm": "Force delete",
+      "startFailed": "Could not start deleting intermediates.",
+      "startTimedOut": "The server did not answer in time, and no running deletion was found. Select “{{action}}” again to try once more.",
+      "startUnknown": "The server did not answer in time, and whether the deletion started could not be confirmed. Close this dialog and refresh the list; a running deletion appears above it.",
+      "keptReasons": "{{reasons}}.",
+      "keptReferenced": "{{items}} referenced by saved documents",
+      "keptActive": "{{items}} used by queued or running work",
+      "keptRecent": "{{items}} created recently",
+      "forceToggle": "Also delete items that saved documents still reference (advanced)",
+      "previewExpired": "This check is no longer current. Check again before deleting."
+    },
+    "operation": {
+      "regionLabel": "Deletion status",
+      "pending": "Preparing to delete…",
+      "status": {
+        "pending": "Deletion queued",
+        "running": "Deleting intermediates",
+        "completed": "Deletion finished",
+        "failed": "Deletion stopped"
+      },
+      "progress": "{{done}} of {{total}} processed",
+      "progressAnnouncement": "{{status}}: {{percent, number(style: percent)}} processed.",
+      "deleted": "Deleted",
+      "retained": "Kept",
+      "failed": "Failed",
+      "pendingDisk": "Awaiting removal from disk",
+      "reclaimed": "Reclaimed",
+      "runAgain": "Delete again",
+      "dismiss": "Dismiss",
+      "lookupFailed": "Could not load deletion status.",
+      "lookupGone": "The server no longer knows this deletion; it may have restarted. Refresh the list, then delete again if anything remains.",
+      "pendingDiskNote": "Some files could not be removed yet. They are removed on the next server start and their space is not counted as reclaimed."
+    },
+    "empty": {
+      "title": "No intermediates",
+      "description": "There is nothing to delete.",
+      "noMatches": "No matching projects",
+      "noMatchesDescription": "No project matches your search."
+    },
+    "errors": {
+      "couldNotLoad": "Could not load intermediates."
+    },
+    "owner": {
+      "filtered": "Account: {{name}}",
+      "showEveryone": "Show everyone",
+      "showMine": "My account",
+      "projectFilter": "Selected project",
+      "showAllProjects": "Show all projects",
+      "unknownAccount": "Unknown account",
+      "unknownAccountWithId": "Unknown account {{id}}",
+      "nameWithEmail": "{{name}} ({{email}})"
+    },
+    "list": {
+      "selectAll": "Select all",
+      "selectRow": "Select {{name}}",
+      "selectRowForOwner": "Select {{name}} for {{owner}}",
+      "delete": "Delete",
+      "deleteWaiting": "Delete is available again once the current deletion finishes.",
+      "used": "Used",
+      "unused": "Unused",
+      "unassigned": "Unassigned",
+      "unassignedBadge": "No project",
+      "rowSummary": "{{size}} reclaimable {{unmeasured}}",
+      "unmeasured_one": "({{count, number}} unmeasured)",
+      "unmeasured_other": "({{count, number}} unmeasured)",
+      "ownerAndSize": "{{owner}} · {{size}}"
+    },
+    "stats": {
+      "measuringNote": "Sizes are still being measured; figures grow as measurement finishes."
+    },
+    "selection": {
+      "estimate": "{{count, number}} selected · {{images}}, {{videos}}, about {{size}}",
+      "available": "{{images}}, {{videos}} unused · about {{size}} reclaimable"
+    }
   }
 }

@@ -1,7 +1,7 @@
 import type { GalleryItem, GalleryItemRef } from '@features/gallery/core/items';
 import type { GalleryThumbnailFit } from '@features/gallery/core/settings';
 
-import { Badge } from '@chakra-ui/react';
+import { Badge, chakra } from '@chakra-ui/react';
 import { useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { formatGalleryVideoDuration, toGalleryItemRef } from '@features/gallery/core/items';
@@ -27,6 +27,14 @@ const PREVIEW_IMAGE_STYLE = {
   width: '100%',
 } as const;
 
+/** Leaves room for the star button in the opposite corner. */
+const LABEL_MAX_WIDTH = 'calc(100% - 2.25rem)';
+/**
+ * A label that resolves mid-hover mounts already revealed; fade it in like the overlays it joins. Important
+ * because the tile's hover reveal outranks a single-class rule.
+ */
+const LABEL_CSS = { '@starting-style': { opacity: '0 !important' } } as const;
+
 const THUMBNAIL_BUTTON_STYLE = {
   background: 'transparent',
   border: 0,
@@ -46,6 +54,7 @@ const GalleryThumbnail = ({
   dragItems,
   dragScope,
   fit,
+  getItemLabel,
   isPrimary,
   isSelected,
   item,
@@ -59,6 +68,8 @@ const GalleryThumbnail = ({
   /** Separates this gallery's drags from another instance showing the same item. */
   dragScope: string;
   fit: GalleryThumbnailFit;
+  /** Null while image-map labels are unavailable. */
+  getItemLabel: ((item: GalleryItemRef) => Promise<string | null>) | null;
   isPrimary: boolean;
   isSelected: boolean;
   item: GalleryItem;
@@ -147,6 +158,15 @@ const GalleryThumbnail = ({
     }
   }, []);
 
+  // Fetched on reveal rather than per rendered tile: labels cost a request each, and the cache makes repeat
+  // reveals free while still picking up a rebuilt vocabulary.
+  const [label, setLabel] = useState<string | null>(null);
+  const handleRevealLabel = useCallback(() => {
+    if (getItemLabel) {
+      void getItemLabel(toGalleryItemRef(item)).then(setLabel);
+    }
+  }, [getItemLabel, item]);
+
   const handleToggleStarred = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
       event.stopPropagation();
@@ -170,6 +190,8 @@ const GalleryThumbnail = ({
       // Allow touch panning; the hold sensor yields to scrolling and arms drag only after a sustained hold.
       touchAction="pan-y"
       onContextMenu={handleContextMenu}
+      onFocus={handleRevealLabel}
+      onPointerEnter={handleRevealLabel}
     >
       <button
         aria-current={isPrimary ? 'true' : undefined}
@@ -192,6 +214,29 @@ const GalleryThumbnail = ({
           style={imageStyle}
         />
       </button>
+      {/* The compare role owns this corner while comparing. */}
+      {label && getItemLabel && !compareRole ? (
+        <Badge
+          // Hover-dependent and heuristic: keep it out of the tile's accessible text, which the name already covers.
+          aria-hidden="true"
+          className="gallery-thumb-overlay"
+          css={LABEL_CSS}
+          insetInlineStart="1"
+          maxW={LABEL_MAX_WIDTH}
+          opacity={0}
+          pointerEvents="none"
+          position="absolute"
+          size="xs"
+          top="1"
+          transition="opacity var(--wb-motion-duration-medium) ease"
+          variant="solid"
+          zIndex="1"
+        >
+          <chakra.span minW="0" truncate>
+            {label}
+          </chakra.span>
+        </Badge>
+      ) : null}
       {compareRole && (
         <Badge
           insetInlineStart="1"

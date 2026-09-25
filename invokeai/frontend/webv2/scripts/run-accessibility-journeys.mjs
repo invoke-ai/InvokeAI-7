@@ -163,6 +163,21 @@ const surfaces = [
     ready: waitForProjects,
   },
   {
+    id: 'launchpad-settings-intermediates-representative',
+    path: '/#/projects',
+    ready: async (page) => {
+      await page.getByRole('button', { exact: true, name: 'Settings' }).click();
+      const dialog = page.getByRole('dialog', { name: /^Settings:/ });
+      await dialog
+        .getByRole('navigation', { exact: true, name: 'Settings' })
+        .getByRole('button', { name: 'Intermediates' })
+        .click();
+      await page.getByRole('textbox', { exact: true, name: 'Search projects' }).waitFor();
+      await page.getByRole('checkbox', { exact: true, name: 'Select Fixture Project 001' }).waitFor();
+    },
+    representative: true,
+  },
+  {
     id: 'launchpad-fonts-empty',
     path: '/#/fonts',
     ready: async (page) => {
@@ -916,9 +931,10 @@ const runSettingsJourney = async (browser) => {
     const sectionNames = await navigation.getByRole('button').allTextContents();
     assert.equal(
       sectionNames.length,
-      14,
+      15,
       'All application, project, widget, and system sections must be discoverable.'
     );
+    assert(sectionNames.includes('Intermediates'), 'Intermediates settings must be discoverable.');
     for (const name of sectionNames) {
       await navigation.getByRole('button', { exact: true, name }).click();
       await page.getByRole('dialog', { exact: true, name: `Settings: ${name}` }).waitFor();

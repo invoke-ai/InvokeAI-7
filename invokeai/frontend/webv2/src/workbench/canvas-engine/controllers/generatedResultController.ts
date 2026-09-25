@@ -9,6 +9,7 @@ import type { Rect } from '@workbench/canvas-engine/types';
 
 import { getDocumentLayer, getDocumentLeaves, isNodeAbsent } from '@workbench/canvas-engine/document/documentIndex';
 import { createControlLayer, nextControlLayerName } from '@workbench/canvas-engine/document/layerFactories';
+import { collectHistoryMediaRefs } from '@workbench/canvas-engine/history/history';
 
 import type { CanvasMutationContext } from './mutationContext';
 
@@ -144,6 +145,7 @@ export class GeneratedResultController {
         publishSnapshot(after, prepared, { discardPersistence: true, persist: false });
         o.ctx.history.push({
           bytes: beforePixels.rect.width * beforePixels.rect.height * 4 + rect.width * rect.height * 4 + 256,
+          heldAssetRefs: collectHistoryMediaRefs(before, after),
           label: options.historyLabel ?? 'Replace layer with workflow result',
           redo: () => applySnapshot(after, afterPixels, { discardPersistence: true, persist: false }),
           replayFailureAtomic: true,
@@ -206,6 +208,7 @@ export class GeneratedResultController {
       publishCopy(prepared);
       o.ctx.history.push({
         bytes: rect.width * rect.height * 4 + 256,
+        heldAssetRefs: collectHistoryMediaRefs(copy),
         label:
           options.target === 'copy-control'
             ? 'Copy workflow result to control layer'

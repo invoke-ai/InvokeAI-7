@@ -1,7 +1,16 @@
 import { Icon, Menu } from '@chakra-ui/react';
 import { MenuContent } from '@platform/ui/Menu';
 import { Link } from '@tanstack/react-router';
-import { ArrowRightIcon, CopyIcon, FileDownIcon, PencilIcon, PinIcon, PinOffIcon, Trash2Icon } from 'lucide-react';
+import {
+  ArrowRightIcon,
+  BrushCleaningIcon,
+  CopyIcon,
+  FileDownIcon,
+  PencilIcon,
+  PinIcon,
+  PinOffIcon,
+  Trash2Icon,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 /**
@@ -11,6 +20,7 @@ import { useTranslation } from 'react-i18next';
 export const ProjectActionsMenuBody = ({
   isCompatible,
   isPinned,
+  onDeleteIntermediates,
   onDelete,
   onDuplicate,
   onExport,
@@ -21,6 +31,7 @@ export const ProjectActionsMenuBody = ({
   isCompatible: boolean;
   isPinned: boolean;
   projectSearch: { project: string };
+  onDeleteIntermediates: () => void;
   onDelete: () => void;
   onDuplicate: () => void;
   onExport: () => void;
@@ -60,6 +71,10 @@ export const ProjectActionsMenuBody = ({
       <Menu.Item disabled={!isCompatible} value="export" onClick={onExport}>
         <Icon as={FileDownIcon} boxSize="3.5" />
         {t('common.export')}
+      </Menu.Item>
+      <Menu.Item value="intermediates" onClick={onDeleteIntermediates}>
+        <Icon as={BrushCleaningIcon} boxSize="3.5" />
+        {t('projects.deleteIntermediates')}
       </Menu.Item>
       <Menu.Separator />
       <Menu.Item data-danger="" value="delete" onClick={onDelete}>

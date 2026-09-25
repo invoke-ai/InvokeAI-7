@@ -4,11 +4,13 @@ import { galleryItems, toGalleryItemKey } from '@features/gallery';
 import {
   claimGalleryNavigationSequence,
   isGalleryNavigationCurrent,
+  parseGallerySemanticReference,
   registerImageCluster,
   requestGalleryItemReveal,
 } from '@features/gallery/contracts';
 import { useQueryClient } from '@tanstack/react-query';
 import { revealGalleryItem } from '@workbench/image-actions/revealGalleryItem';
+import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useWorkbenchCommands, useWorkbenchQueries } from '@workbench/WorkbenchContext';
 import { useCallback, useMemo } from 'react';
 
@@ -78,4 +80,33 @@ export const useMapSelection = (): MapSelectionActions => {
   );
 
   return useMemo(() => ({ selectCluster, selectItem }), [selectCluster, selectItem]);
+};
+
+/**
+ * Ends a cluster selection: the gallery drops the cluster listing (as its own chip's clear does) and the map regains
+ * its colours, since both draw from the same reference. Claiming a navigation ticket retires a cluster click still
+ * hydrating, which would otherwise re-apply the selection just cleared.
+ *
+ * Checks at call time that a cluster is what the gallery shows: Esc reaches this whenever the map has focus, and
+ * the same reset applied to an ordinary search would wipe the user's search text.
+ */
+export const useClearClusterSelection = (): (() => void) => {
+  const { widgets } = useWorkbenchCommands();
+  const queries = useWorkbenchQueries();
+
+  return useCallback(() => {
+    const galleryValues = getProjectWidgetValues(queries.getSnapshot().activeProject, 'gallery');
+
+    if (parseGallerySemanticReference(galleryValues.semanticImageQuery)?.kind !== 'cluster') {
+      return;
+    }
+
+    claimGalleryNavigationSequence();
+    widgets.patchValues('gallery', {
+      galleryPage: 0,
+      searchTerm: '',
+      semanticImageQuery: null,
+      semanticSearchText: null,
+    });
+  }, [queries, widgets]);
 };

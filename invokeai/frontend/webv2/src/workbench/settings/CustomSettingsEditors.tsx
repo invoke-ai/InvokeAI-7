@@ -11,7 +11,7 @@ import { previewSwatches, THEMES, type ThemeDefinition } from '@theme/system';
 import { areLoggingPreferencesDefault, resetLoggingPreferences } from '@workbench/diagnostics/loggingPreferences';
 import { clearAllWorkbenchData } from '@workbench/projects/syncedPersistence';
 import { useOptionalWorkbenchCommands, useOptionalWorkbenchPersistenceService } from '@workbench/WorkbenchContext';
-import { CheckIcon, RotateCcwIcon, Trash2Icon } from 'lucide-react';
+import { BrushCleaningIcon, CheckIcon, RotateCcwIcon, Trash2Icon } from 'lucide-react';
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -20,6 +20,7 @@ import { clearWorkspaceData, rememberWorkspaceClearFailure } from './clearWorksp
 import { GenerationDevicesSettings } from './GenerationDevicesSettings';
 import { HotkeysSettingsSection } from './HotkeysSettingsSection';
 import { ImageMapVocabularySettings } from './ImageMapVocabularySettings';
+import { setWorkbenchSettingsSection } from './settingsDialogStore';
 import {
   clearWorkbenchSettings,
   DEFAULT_PREFERENCES,
@@ -159,6 +160,7 @@ export const LoggingResetSettings = () => {
 };
 
 export const WorkspaceSettings = () => {
+  const { t } = useTranslation();
   const commands = useOptionalWorkbenchCommands();
   const mountedPersistence = useOptionalWorkbenchPersistenceService();
   const scope = useWorkbenchSettingsSelector((snapshot) => snapshot.scope);
@@ -183,6 +185,7 @@ export const WorkspaceSettings = () => {
   const resetLayout = useCallback(() => commands?.layout.reset(), [commands]);
   const openClearConfirm = useCallback(() => setIsClearConfirmOpen(true), []);
   const closeClearConfirm = useCallback(() => setIsClearConfirmOpen(false), []);
+  const openIntermediates = useCallback(() => setWorkbenchSettingsSection('intermediates', 'intermediatesManager'), []);
 
   return (
     <Stack gap="3">
@@ -193,6 +196,10 @@ export const WorkspaceSettings = () => {
             Reset layout
           </Button>
         ) : null}
+        <Button size="sm" variant="outline" onClick={openIntermediates}>
+          <BrushCleaningIcon />
+          {t('settings.catalog.manageIntermediates')}
+        </Button>
         <Button
           borderColor="border.emphasized"
           color="fg.error"

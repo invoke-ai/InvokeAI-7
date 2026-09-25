@@ -50,6 +50,7 @@ const ROUTE_SHARED_MODULES = [
   '/workbench/launchpad/formatRelativeTime.ts',
   // Without this the editor pulls the whole Launchpad chunk for one lookup table.
   '/workbench/launchpad/intents.ts',
+  '/workbench/mediaReferences.ts',
   '/workbench/palette/settingsEntryDeps.ts',
   '/workbench/projects/covers.ts',
   '/workbench/projects/components/ProjectFileOptionsProvider.tsx',
@@ -138,6 +139,14 @@ const WIDGET_HOST_MODULES = [
   '/workbench/widgets/image-map/ImageMapDataRuntime.tsx',
 ] as const;
 
+// Keep the Image Map data modules in one chunk. Its API is also reached through the Gallery's lazily loaded label
+// cache, and without this group Rolldown splits the API out, costing every editor boot a request.
+const IMAGE_MAP_DATA_MODULES = [
+  '/workbench/image-map/api.ts',
+  '/workbench/image-map/imageMapStore.ts',
+  '/workbench/image-map/indexProgress.ts',
+] as const;
+
 // Group Canvas/Layer interaction dependencies to avoid extra text-tool activation requests.
 const CANVAS_LAYER_SHARED_MODULES = [
   '/features/workflow/core/layerWorkflow.ts',
@@ -189,6 +198,7 @@ const getLegacyChunkName = (id: string): string | null => {
   if (
     matchesAnySuffix(id, [
       '/platform/i18n/client.ts',
+      '/platform/i18n/languages.ts',
       '/platform/react/useMountEffect.ts',
       '/platform/ui/theme/system.ts',
       '/workbench/hotkeys/resolve.ts',
@@ -281,6 +291,12 @@ export default defineConfig({
               name: 'widget-hosts',
               priority: 30,
               test: (id) => matchesAnySuffix(id, WIDGET_HOST_MODULES),
+            },
+            {
+              includeDependenciesRecursively: false,
+              name: 'imageMapStore',
+              priority: 30,
+              test: (id) => matchesAnySuffix(id, IMAGE_MAP_DATA_MODULES),
             },
             {
               // ~1 MB, only the lazy Image Map plot needs it.

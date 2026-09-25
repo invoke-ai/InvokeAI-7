@@ -551,6 +551,7 @@ def _run_upload(request: MagicMock) -> Any:
             is_intermediate=False,
             board_id=None,
             session_id=None,
+            project_id=None,
         )
     )
 

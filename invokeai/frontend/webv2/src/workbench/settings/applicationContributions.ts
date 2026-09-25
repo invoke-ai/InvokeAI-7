@@ -1,5 +1,6 @@
 import type { SettingDefinition, SettingsContribution, SettingsText } from '@platform/ui/settings/contracts';
 
+import { intermediatesSettingsContribution } from '@features/intermediates/settingsContribution';
 import { WORKBENCH_LANGUAGE_OPTIONS } from '@platform/i18n/languages';
 
 const text =
@@ -146,6 +147,7 @@ export const applicationSettingsContributions = [
   developerSettings,
   serverSettings,
   workspaceSettings,
+  intermediatesSettingsContribution,
   aboutSettings,
 ];
 /** These are the same descriptors rendered in settings and used by palette preference actions. */

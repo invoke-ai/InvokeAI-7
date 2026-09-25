@@ -22,6 +22,7 @@ import {
 import { cloneSubtree, collectSubtreeLeaves } from '@workbench/canvas-engine/document/documentTree';
 import { insertNodesAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import { haveSameStructure } from '@workbench/canvas-engine/document/layerStacks';
+import { collectHistoryMediaRefs } from '@workbench/canvas-engine/history/history';
 
 export type CapturedLayerCache = { pixels: RasterSurface; rect: Rect } | null | 'not-ready';
 
@@ -324,6 +325,7 @@ export class LayerMutationController {
       };
       o.history.push({
         bytes: historyBytes,
+        heldAssetRefs: collectHistoryMediaRefs(duplicates),
         dispose: () => detachedLease?.release(),
         label: duplicates.length === 1 ? 'Duplicate layer' : 'Duplicate layers',
         redo,
@@ -390,6 +392,7 @@ export class LayerMutationController {
     apply();
     o.history.push({
       bytes: captured ? captured.rect.width * captured.rect.height * 4 + 256 : 256,
+      heldAssetRefs: collectHistoryMediaRefs(layer),
       label,
       redo: apply,
       replayFailureAtomic: true,
@@ -453,6 +456,7 @@ export class LayerMutationController {
     apply(after);
     o.history.push({
       bytes: captured ? captured.rect.width * captured.rect.height * 4 + 256 : 256,
+      heldAssetRefs: collectHistoryMediaRefs(before, after),
       label,
       redo: () => apply(after),
       replayFailureAtomic: true,

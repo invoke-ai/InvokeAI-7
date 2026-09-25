@@ -23,7 +23,7 @@ from invokeai.app.services.config.config_default import InvokeAIAppConfig
 from invokeai.app.services.invocation_services import InvocationServices
 from invokeai.app.services.invoker import Invoker
 from invokeai.app.services.project_records.project_records_sqlite import ProjectRecordsSqlite
-from invokeai.app.services.session_queue.session_queue_common import SessionQueueItem
+from invokeai.app.services.session_queue.session_queue_common import SessionQueueItem, SessionQueueItemSummary
 from invokeai.app.services.users.users_common import UserCreateRequest
 from invokeai.app.services.workflow_records.workflow_records_sqlite import SqliteWorkflowRecordsStorage
 from invokeai.backend.util.logging import InvokeAILogger
@@ -146,6 +146,7 @@ def mock_services() -> InvocationServices:
         gallery=None,  # type: ignore
         image_index_records=None,  # type: ignore
         image_index=None,  # type: ignore
+        intermediates=None,  # type: ignore
     )
 
 
@@ -1973,6 +1974,7 @@ class TestSessionQueueSanitization:
             completed_at=None,
             queue_id="default",
             user_id="owner-user",
+            project_id="owner-project",
             user_display_name="Owner Display",
             user_email="owner@test.com",
             field_values=None,
@@ -2024,6 +2026,7 @@ class TestSessionQueueSanitization:
         assert result.user_id == "redacted"
         assert result.user_display_name is None
         assert result.user_email is None
+        assert result.project_id is None
 
         # Stripped: generation metadata
         assert result.batch_id == "redacted"
@@ -2036,6 +2039,24 @@ class TestSessionQueueSanitization:
         assert result.workflow is None
         assert result.session.id == "redacted"
         assert len(result.session.graph.nodes) == 0
+
+    @pytest.mark.parametrize("model", [SessionQueueItem, SessionQueueItemSummary])
+    def test_every_queue_item_field_is_redacted_or_deliberately_public(self, model: type):
+        from invokeai.app.api.routers.session_queue import _REDACTIONS
+
+        # A field added to either projection must choose a side here, or it leaks to other accounts.
+        public = {
+            "item_id",
+            "queue_id",
+            "status",
+            "status_sequence",
+            "device",
+            "created_at",
+            "updated_at",
+            "started_at",
+            "completed_at",
+        }
+        assert set(model.model_fields) - public - set(_REDACTIONS) == set()
 
     def test_sanitization_does_not_mutate_original(self, _sample_queue_item: SessionQueueItem):
         from invokeai.app.api.routers.session_queue import sanitize_queue_item_for_user

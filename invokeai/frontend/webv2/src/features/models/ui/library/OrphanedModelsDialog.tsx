@@ -2,10 +2,10 @@
 import type { OrphanedModelInfo } from '@features/models/core/types';
 
 import { Checkbox, Dialog, Flex, Portal, Spinner, Stack, Text } from '@chakra-ui/react';
-import { formatBytes } from '@features/models/core/taxonomy';
 import { deleteOrphanedModels, getOrphanedModels } from '@features/models/data/api';
 import { refreshModels } from '@features/models/data/modelsStore';
 import { useNotify } from '@features/models/ui/useModelsNotify';
+import { formatBytes } from '@platform/i18n/languages';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { useScopedAction } from '@platform/react/useScopedAction';
 import {

@@ -69,6 +69,7 @@ const adapter: GalleryUiAdapter = {
   },
   galleryValues: {},
   generateValues: {},
+  getItemLabel: () => Promise.resolve(null),
   liveFollowEnabled: false,
   progressSessions: [],
   pinnedProgressSessionId: null,

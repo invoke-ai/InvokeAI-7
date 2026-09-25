@@ -749,3 +749,53 @@ def test_snapshotting_someone_elses_project_is_not_found(
 
     with pytest.raises(ProjectRecordNotFoundError):
         project_records.get_board_snapshot(other_user_id, created.project_id)
+
+
+def _media_references(db: SqliteDatabase, project_id: str) -> set[tuple[str, str]]:
+    with db.transaction() as cursor:
+        cursor.execute(
+            "SELECT media_kind, media_name FROM media_references WHERE owner_kind = 'project' AND owner_id = ?;",
+            (project_id,),
+        )
+        return {tuple(row) for row in cursor.fetchall()}
+
+
+def test_saving_a_project_indexes_the_media_it_references(
+    db: SqliteDatabase, project_records: ProjectRecordsSqlite
+) -> None:
+    created = project_records.create(
+        SYSTEM_USER_ID,
+        "Refs",
+        {"canvas": {"stagingArea": {"pendingImages": [{"imageName": "staged.png"}]}}, "video": {"video_name": "a.mp4"}},
+    )
+    assert _media_references(db, created.project_id) == {("image", "staged.png"), ("video", "a.mp4")}
+
+    project_records.update(
+        SYSTEM_USER_ID,
+        created.project_id,
+        expected_revision=1,
+        name="Refs",
+        data={"layers": [{"image_name": "layer.png"}]},
+    )
+    assert _media_references(db, created.project_id) == {("image", "layer.png")}
+
+
+def test_a_refused_save_leaves_the_reference_index_untouched(
+    db: SqliteDatabase, project_records: ProjectRecordsSqlite
+) -> None:
+    created = project_records.create(SYSTEM_USER_ID, "Refs", {"image_name": "first.png"})
+
+    with pytest.raises(ProjectRecordConflictError):
+        project_records.update(
+            SYSTEM_USER_ID, created.project_id, expected_revision=99, name="Refs", data={"image_name": "second.png"}
+        )
+
+    assert _media_references(db, created.project_id) == {("image", "first.png")}
+
+
+def test_deleting_a_project_drops_its_references(db: SqliteDatabase, project_records: ProjectRecordsSqlite) -> None:
+    created = project_records.create(SYSTEM_USER_ID, "Refs", {"image_name": "first.png"})
+
+    project_records.delete(SYSTEM_USER_ID, created.project_id)
+
+    assert _media_references(db, created.project_id) == set()

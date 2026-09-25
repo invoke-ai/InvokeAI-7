@@ -24,6 +24,8 @@ from invokeai.app.services.image_index.image_index_default import ImageIndexServ
 from invokeai.app.services.image_index.image_index_records_sqlite import ImageIndexRecordsSqlite
 from invokeai.app.services.image_records.image_records_sqlite import SqliteImageRecordStorage
 from invokeai.app.services.images.images_default import ImageService
+from invokeai.app.services.intermediates.intermediates_default import IntermediatesService
+from invokeai.app.services.intermediates.intermediates_records_sqlite import IntermediatesRecordsSqlite
 from invokeai.app.services.invocation_cache.invocation_cache_memory import MemoryInvocationCache
 from invokeai.app.services.invocation_services import InvocationServices
 from invokeai.app.services.invocation_stats.invocation_stats_default import InvocationStatsService
@@ -107,6 +109,7 @@ def mock_services() -> InvocationServices:
         gallery=SqliteGalleryService(db=db),
         image_index_records=ImageIndexRecordsSqlite(db=db),
         image_index=ImageIndexService(),
+        intermediates=IntermediatesService(records=IntermediatesRecordsSqlite(db=db), logger=logger),
     )
 
 

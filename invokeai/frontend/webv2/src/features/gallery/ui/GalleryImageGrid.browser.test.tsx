@@ -1,5 +1,6 @@
 /* oxlint-disable react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-new-object-as-prop */
 import type { GalleryItem, GalleryItemRef } from '@features/gallery/contracts';
+import type { ImageIndexAvailability } from '@features/gallery/data/backend';
 import type { GalleryItemsFilter } from '@features/gallery/data/queries';
 import type { QueueProgressSession } from '@features/queue/contracts';
 import type { StreamingImageSource } from '@platform/ui/streaming-image/streamingImageSource';
@@ -48,6 +49,8 @@ const mocks = vi.hoisted(() => ({
   itemProgress: null as { percentage: number; message: string } | null,
   progressFrame: null as { dataUrl: string; width: number; height: number } | null,
   fetchNames: vi.fn(),
+  getItemLabel: vi.fn<GalleryUiAdapter['getItemLabel']>(),
+  indexAvailability: { modelName: null, state: 'disabled' } as ImageIndexAvailability,
   measure: vi.fn(),
   scrollToIndex: vi.fn(),
   setPage: vi.fn(),
@@ -63,6 +66,10 @@ const getNamesKey = (filter: unknown) => ['test-gallery-item-names', JSON.string
 
 vi.mock('@features/gallery/data/queries', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
+  imageIndexAvailabilityOptions: () => ({
+    queryFn: () => mocks.indexAvailability,
+    queryKey: ['test-image-index-availability'],
+  }),
   galleryItemNamesOptions: (filter: unknown) => ({
     queryFn: () => mocks.fetchNames(filter),
     queryKey: getNamesKey(filter),
@@ -369,6 +376,7 @@ const createAdapter = (
     },
     galleryValues: {},
     generateValues: {},
+    getItemLabel: mocks.getItemLabel,
     liveFollowEnabled,
     progressSessions,
     pinnedProgressSessionId,
@@ -533,6 +541,8 @@ beforeEach(() => {
   registeredCommands.clear();
   currentGallery = createGallery();
   mocks.itemProgress = null;
+  mocks.indexAvailability = { modelName: null, state: 'disabled' };
+  mocks.getItemLabel.mockReset();
   currentProgressSessions = [];
   currentLiveFollowEnabled = false;
   currentPinnedSessionId = null;
@@ -1017,6 +1027,89 @@ describe('GalleryImageGrid mixed item cells', () => {
     await click(getButton('Star clip.mp4'));
 
     expect(imageActionMocks.setItemsStarred).toHaveBeenCalledWith([{ kind: 'video', name: 'clip.mp4' }], true);
+  });
+});
+
+describe('GalleryImageGrid image-map labels', () => {
+  const getTile = (name: string): HTMLElement => {
+    const tile = getButton(`Select ${name} for preview`).parentElement;
+
+    if (!tile) {
+      throw new Error(`Expected tile for ${name}`);
+    }
+
+    return tile;
+  };
+  const findBadge = (tile: HTMLElement, text: string) =>
+    Array.from(tile.querySelectorAll<HTMLElement>('.gallery-thumb-overlay')).find(
+      (element) => element.textContent === text
+    );
+  const opacityOf = (element: HTMLElement | undefined) => (element ? getComputedStyle(element).opacity : null);
+
+  // Seeded so a reveal right after mount does not race the availability fetch.
+  const setIndexAvailability = (availability: ImageIndexAvailability) => {
+    mocks.indexAvailability = availability;
+    queryClient?.setQueryData(['test-image-index-availability'], availability);
+  };
+
+  beforeEach(() => setIndexAvailability({ modelName: null, state: 'ready' }));
+
+  it('reveals the hovered item label in step with its dimensions and star', async () => {
+    mocks.getItemLabel.mockImplementation((item) => Promise.resolve(item.name === 'a.png' ? 'sunset' : 'forest'));
+    await renderGallery(createGallery({ items: [createItem('image', 'a.png'), createItem('image', 'b.png')] }));
+
+    // Nothing is requested for tiles that were only rendered.
+    expect(mocks.getItemLabel).not.toHaveBeenCalled();
+
+    const tile = getTile('a.png');
+    await userEvent.hover(tile);
+
+    expect(mocks.getItemLabel).toHaveBeenCalledWith({ kind: 'image', name: 'a.png' });
+    const dimensions = findBadge(tile, '128x96');
+    const star = tile.querySelector<HTMLElement>('button[aria-label="Star a.png"]') ?? undefined;
+    await vi.waitFor(() =>
+      expect([findBadge(tile, 'sunset'), dimensions, star].map(opacityOf)).toEqual(['1', '1', '1'])
+    );
+
+    await userEvent.hover(getTile('b.png'));
+
+    await vi.waitFor(() =>
+      expect([findBadge(tile, 'sunset'), dimensions, star].map(opacityOf)).toEqual(['0', '0', '0'])
+    );
+    await vi.waitFor(() => expect(opacityOf(findBadge(getTile('b.png'), 'forest'))).toBe('1'));
+  });
+
+  it('reveals the label for keyboard focus as well as hover', async () => {
+    mocks.getItemLabel.mockResolvedValue('sunset');
+    await renderGallery(createGallery({ items: [createItem('image', 'a.png')] }));
+
+    await interact(() => getButton('Select a.png for preview').focus());
+
+    await vi.waitFor(() => expect(opacityOf(findBadge(getTile('a.png'), 'sunset'))).toBe('1'));
+  });
+
+  it('adds nothing for an unlabeled item', async () => {
+    mocks.getItemLabel.mockResolvedValue(null);
+    await renderGallery(createGallery({ items: [createItem('image', 'a.png')] }));
+
+    await userEvent.hover(getTile('a.png'));
+    await vi.waitFor(() => expect(mocks.getItemLabel).toHaveBeenCalled());
+    await interact(noop);
+
+    // Dimensions and star only.
+    expect(getTile('a.png').querySelectorAll('.gallery-thumb-overlay')).toHaveLength(2);
+  });
+
+  it('never asks for labels while the image index is not ready', async () => {
+    setIndexAvailability({ modelName: 'clip', state: 'model_missing' });
+    mocks.getItemLabel.mockResolvedValue('sunset');
+    await renderGallery(createGallery({ items: [createItem('image', 'a.png')] }));
+
+    await userEvent.hover(getTile('a.png'));
+    await interact(noop);
+
+    expect(mocks.getItemLabel).not.toHaveBeenCalled();
+    expect(findBadge(getTile('a.png'), 'sunset')).toBeUndefined();
   });
 });
 

@@ -20,16 +20,21 @@ const labels = new Map<string, ImageMapImageLabels | null>();
 const inflight = new Map<string, Promise<ImageMapImageLabels | null>>();
 
 /**
- * Server-wide cooldown prevents one failing request per hovered point while allowing recovery after lazy
- * vocabulary build or outage.
+ * Server-wide cooldowns prevent one failing request per hovered point or thumbnail while allowing recovery. A 409
+ * usually means the index worker is still building the vocabulary, which on a warm disk cache lands in about a
+ * second, so it backs off briefly; outages back off longer.
  */
-const UNAVAILABLE_COOLDOWN_MS = 60_000;
+const BUILDING_COOLDOWN_MS = 5_000;
+const OUTAGE_COOLDOWN_MS = 60_000;
 
 let unavailableUntil = 0;
+/** Bumped by every clear so requests issued before it cannot answer or seed the cache after it. */
+let generation = 0;
 
 // Clear labels and cooldown on login/logout to prevent cross-account results or backend failure state.
 registerAccountOwnedResource({
   clear: () => {
+    generation += 1;
     labels.clear();
     inflight.clear();
     unavailableUntil = 0;
@@ -42,7 +47,9 @@ registerAccountOwnedResource({
  * pending-build retries resume.
  */
 export const clearImageLabels = (): void => {
+  generation += 1;
   labels.clear();
+  inflight.clear();
   unavailableUntil = 0;
 };
 
@@ -67,25 +74,29 @@ export const getImageLabels = (item: GalleryItemRef): Promise<ImageMapImageLabel
   }
 
   const owner = captureAccountScope();
+  const issuedIn = generation;
+  // A resolution that raced an account switch or vocabulary rebuild answers for state that is gone: it must
+  // neither seed the cache nor reach the caller.
+  const isCurrent = () => issuedIn === generation && isAccountScopeCurrent(owner);
   const request = fetchImageMapImageLabels(item)
     .then((result): ImageMapImageLabels | null => {
-      // A resolution that raced an account switch must not seed the next
-      // account's cache.
-      if (isAccountScopeCurrent(owner)) {
-        labels.set(key, result);
-      }
-
-      return result;
-    })
-    .catch((error: unknown): null => {
-      if (!isAccountScopeCurrent(owner)) {
+      if (!isCurrent()) {
         return null;
       }
 
-      if (error instanceof ApiError && (error.status === 409 || error.status >= 500)) {
-        // Treat 409/build and 5xx outages as temporary server-wide failures: back off without caching per-item
-        // results.
-        unavailableUntil = Date.now() + UNAVAILABLE_COOLDOWN_MS;
+      labels.set(key, result);
+      return result;
+    })
+    .catch((error: unknown): null => {
+      if (!isCurrent()) {
+        return null;
+      }
+
+      if (error instanceof ApiError && error.status === 409) {
+        // Build in progress (or index/vocabulary unavailable): server-wide, not per item.
+        unavailableUntil = Date.now() + BUILDING_COOLDOWN_MS;
+      } else if (error instanceof ApiError && error.status >= 500) {
+        unavailableUntil = Date.now() + OUTAGE_COOLDOWN_MS;
       } else if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
         // Cache definitive item misses: not indexed or not visible to this account.
         labels.set(key, null);
@@ -95,8 +106,8 @@ export const getImageLabels = (item: GalleryItemRef): Promise<ImageMapImageLabel
       return null;
     })
     .finally(() => {
-      // Release only this request's claim; an account switch already cleared
-      // the in-flight map.
+      // Release only this request's claim; a clear already emptied the
+      // in-flight map.
       if (inflight.get(key) === request) {
         inflight.delete(key);
       }

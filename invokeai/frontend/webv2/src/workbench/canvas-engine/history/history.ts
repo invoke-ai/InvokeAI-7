@@ -4,11 +4,27 @@
  * recording and `push` is a no-op, avoiding recursive history.
  */
 
+import { collectRestorableAssetRefs } from '@workbench/mediaReferences';
+
 /** Max number of undo entries retained before the oldest is evicted. */
 export const HISTORY_MAX_ENTRIES = 64;
 
 /** Max total bytes retained across the undo + redo stacks before the oldest is evicted (256 MB). */
 export const HISTORY_BYTE_BUDGET = 256 * 1024 * 1024;
+
+export interface HeldAssetRefs {
+  readonly images: readonly string[];
+  readonly videos: readonly string[];
+}
+
+/** For entries that restore pixels or selection state only. */
+export const NO_HELD_ASSET_REFS: HeldAssetRefs = { images: [], videos: [] };
+
+/** Media names captured by an undo entry, including sources no longer in the live document. */
+export const collectHistoryMediaRefs = (...values: unknown[]): HeldAssetRefs => {
+  const { images, videos } = collectRestorableAssetRefs(...values);
+  return { images: [...images], videos: [...videos] };
+};
 
 /** One reversible step. `bytes` is the (approximate) memory the entry pins, for the budget. */
 export interface HistoryEntry {
@@ -16,6 +32,11 @@ export interface HistoryEntry {
   readonly label: string;
   /** Approximate retained size in bytes (e.g. before+after ImageData byteLength). */
   readonly bytes: number;
+  /**
+   * Media names this entry can restore after they leave the current document; cleanup keeps them while the entry is
+   * on either stack.
+   */
+  readonly heldAssetRefs: HeldAssetRefs;
   /**
    * Opts into failure-atomic replay. When true, History moves this entry only
    * after `undo`/`redo` returns successfully, so a preparation failure remains
@@ -74,6 +95,8 @@ export interface History {
    * what `undo()` reverts), `future` next-redo-first. Fresh arrays per call.
    */
   entries(): { past: readonly string[]; future: readonly string[] };
+  /** Union of media references retained by undo and redo entries. */
+  heldAssetRefs(): HeldAssetRefs;
   /** Subscribes to every stack mutation (push, amend, undo, redo, clear, eviction). Returns an unsubscribe function. */
   subscribe(listener: () => void): () => void;
 }
@@ -144,6 +167,27 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
     future: redoStack.map((entry) => entry.label).reverse(),
     past: undoStack.map((entry) => entry.label),
   });
+
+  // Reused while the stacks hold the same entries, so an unchanged union keeps its identity for the hold lease.
+  let heldUnion: { parts: HeldAssetRefs[]; refs: HeldAssetRefs } | null = null;
+  const heldAssetRefs = (): HeldAssetRefs => {
+    const parts = [...undoStack, ...redoStack].map((entry) => entry.heldAssetRefs);
+    if (
+      heldUnion &&
+      heldUnion.parts.length === parts.length &&
+      parts.every((part, i) => part === heldUnion!.parts[i])
+    ) {
+      return heldUnion.refs;
+    }
+    const images = new Set<string>();
+    const videos = new Set<string>();
+    for (const part of parts) {
+      part.images.forEach((name) => images.add(name));
+      part.videos.forEach((name) => videos.add(name));
+    }
+    heldUnion = { parts, refs: { images: [...images], videos: [...videos] } };
+    return heldUnion.refs;
+  };
 
   const push = (entry: HistoryEntry): void => {
     // Replaying an entry must never record a new one; drop it defensively.
@@ -326,6 +370,7 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
     amendLast,
     byteSize: () => undoBytes + redoBytes,
     entries,
+    heldAssetRefs,
     canRetain: (bytes) => Number.isFinite(bytes) && Math.max(0, Math.ceil(bytes)) <= byteBudget,
     canRedo: () => redoStack.length > 0,
     canUndo: () => undoStack.length > 0,

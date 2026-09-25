@@ -2,9 +2,11 @@ import type { ProjectSummary } from '@workbench/projects/library';
 import type { MouseEvent, ReactNode } from 'react';
 
 import { Menu, Portal } from '@chakra-ui/react';
+import { requestIntermediatesFocus } from '@features/intermediates';
 import { ConfirmDialog } from '@platform/ui/ConfirmDialog';
 import { RenameDialog } from '@platform/ui/RenameDialog';
 import { isProjectSummaryCompatible } from '@workbench/projects/library';
+import { openWorkbenchSettings } from '@workbench/settings/settingsDialogStore';
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -207,6 +209,12 @@ const HostedProjectActionsMenu = ({
     () => onRequestDialog({ actions, kind: 'rename', name: request.summary.name }),
     [actions, onRequestDialog, request.summary.name]
   );
+  const handleDeleteIntermediates = useCallback(() => {
+    // The manager lives in Settings; it reads this intent once when its section mounts.
+    requestIntermediatesFocus({ projectId: request.summary.id });
+    openWorkbenchSettings('intermediates', request.returnFocus ?? undefined);
+    onClose();
+  }, [onClose, request.returnFocus, request.summary.id]);
   const handleDelete = useCallback(
     () => onRequestDialog({ actions, kind: 'delete', name: request.summary.name }),
     [actions, onRequestDialog, request.summary.name]
@@ -223,6 +231,7 @@ const HostedProjectActionsMenu = ({
             isPinned={request.isPinned}
             isCompatible={isCompatible}
             projectSearch={projectSearch}
+            onDeleteIntermediates={handleDeleteIntermediates}
             onDelete={handleDelete}
             onDuplicate={handleDuplicate}
             onExport={handleExport}

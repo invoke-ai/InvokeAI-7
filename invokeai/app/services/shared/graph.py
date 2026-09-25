@@ -640,9 +640,6 @@ class GraphExecutionState(BaseModel):
                 (edge.source.node_id, edge.destination.node_id) for edge in edges if edge.type == "default"
             )
 
-    def _invalidate_execution_graph_flat(self) -> None:
-        self.__pydantic_private__["_runtime_state"].execution_graph_flat = None
-
     def _mark_source_executed(self, source_node_id: str) -> None:
         self._tx_add_set(self.executed, source_node_id)
         self.__pydantic_private__["_runtime_state"].completed_source_ids_cache = None
@@ -3292,9 +3289,6 @@ class GraphExecutionState(BaseModel):
     def _get_activation_dependencies(self, exec_node_id: str) -> tuple[ActivationDependency, ...]:
         return graph_if_runtime._get_activation_dependencies(self, exec_node_id)
 
-    def _remove_from_ready_queues(self, exec_node_id: str) -> None:
-        self._scheduler().remove_from_ready_queues(exec_node_id)
-
     def _try_resolve_if_node(self, exec_node_id: str, *, enqueue: bool = True) -> None:
         scheduler = self._execution_scheduler
         if isinstance(scheduler, _GenericGraphSchedulerAdapter):
@@ -4094,9 +4088,6 @@ class GraphExecutionState(BaseModel):
             return self._for_planner().iterator_graph(base)
         return self._materializer().iterator_graph(base)
 
-    def _get_node_iterators(self, node_id: str, it_graph: Optional["nx.DiGraph"] = None) -> list[str]:
-        return self._materializer().get_node_iterators(node_id, it_graph)
-
     def _prepare(self, base_g: Optional["nx.DiGraph"] = None) -> Optional[str]:
         return self._materializer().prepare(base_g)
 
@@ -4115,7 +4106,7 @@ class GraphExecutionState(BaseModel):
     def _prepare_inputs(self, node: BaseInvocation):
         self._runtime().prepare_inputs(node)
 
-    # TODO: Add API for modifying underlying graph that checks if the change will be valid given the current execution state
+    # Reserved for a future graph-editing API that validates changes against the current execution state.
     def _is_edge_valid(self, edge: Edge) -> bool:
         try:
             self.graph._validate_edge(edge)

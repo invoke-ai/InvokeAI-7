@@ -92,6 +92,7 @@ def mock_services() -> InvocationServices:
         gallery=None,  # type: ignore
         image_index_records=None,  # type: ignore
         image_index=None,  # type: ignore
+        intermediates=None,  # type: ignore
         image_moves=image_moves,
         system_prompt_records=None,  # type: ignore
     )

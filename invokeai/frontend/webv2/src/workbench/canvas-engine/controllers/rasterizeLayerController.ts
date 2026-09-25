@@ -7,6 +7,7 @@ import type { RasterizeDeps } from '@workbench/canvas-engine/render/rasterizers'
 
 import { getDocumentLayer } from '@workbench/canvas-engine/document/documentIndex';
 import { getSourceContentRect, isEmptyPolygonShape } from '@workbench/canvas-engine/document/sources';
+import { collectHistoryMediaRefs } from '@workbench/canvas-engine/history/history';
 import { roundOut, transformBounds } from '@workbench/canvas-engine/math/rect';
 import { rasterizeSource } from '@workbench/canvas-engine/render/rasterizers';
 import { bakeMatrix } from '@workbench/canvas-engine/transform/transformMath';
@@ -92,6 +93,7 @@ export class RasterizeLayerController {
     apply();
     this.deps.history.push({
       bytes: 256,
+      heldAssetRefs: collectHistoryMediaRefs(parametricLayer),
       label: 'Rasterize layer',
       redo: apply,
       undo: () =>

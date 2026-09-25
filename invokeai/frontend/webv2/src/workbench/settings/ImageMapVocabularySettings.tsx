@@ -8,6 +8,7 @@ import { useScopedAction } from '@platform/react/useScopedAction';
 import { assertAccountScopeCurrent } from '@platform/state/accountLifecycle';
 import { getApiErrorMessage } from '@platform/transport/http';
 import { Button, Field } from '@platform/ui';
+import { RemovableTag } from '@platform/ui/RemovableTag';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { imageMapStore, refreshImageIndexStatus } from '@workbench/image-map/imageMapStore';
 import { describeIndexProgress, isIndexing } from '@workbench/image-map/indexProgress';
@@ -213,25 +214,26 @@ export const ImageMapVocabularySettings = () => {
       )}
       {vocab.terms.length > 0 ? (
         <Wrap gap="1">
-          {vocab.terms.map((term) => (
-            <Tag.Root key={term} size="sm" variant="surface">
-              <Tag.Label>{term}</Tag.Label>
-              {canManageImageMapVocabulary ? (
-                <Tag.EndElement>
-                  <Tag.CloseTrigger
-                    aria-label={t('settings.imageMapVocabulary.removeTerm', { term })}
-                    // Disabled while a save is in flight: the busy guard would
-                    // silently drop a second removal, resurrecting the chip
-                    // with no feedback.
-                    disabled={isSaving}
-                    onClick={() => {
-                      void persist(vocab.terms.filter((existing) => existing !== term));
-                    }}
-                  />
-                </Tag.EndElement>
-              ) : null}
-            </Tag.Root>
-          ))}
+          {vocab.terms.map((term) =>
+            canManageImageMapVocabulary ? (
+              <RemovableTag
+                key={term}
+                // Disabled while a save is in flight: the busy guard would silently drop a second removal,
+                // resurrecting the chip with no feedback.
+                disabled={isSaving}
+                removeLabel={t('settings.imageMapVocabulary.removeTerm', { term })}
+                onRemove={() => {
+                  void persist(vocab.terms.filter((existing) => existing !== term));
+                }}
+              >
+                {term}
+              </RemovableTag>
+            ) : (
+              <Tag.Root key={term} size="sm" variant="surface">
+                <Tag.Label>{term}</Tag.Label>
+              </Tag.Root>
+            )
+          )}
         </Wrap>
       ) : (
         <Text color="fg.muted" fontSize="2xs">

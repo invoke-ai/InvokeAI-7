@@ -307,6 +307,7 @@ class ImagesInterface(InvocationContextInterface):
             session_id=self._data.queue_item.session_id,
             node_id=self._data.invocation.id,
             user_id=self._data.queue_item.user_id,
+            project_id=self._data.queue_item.project_id,
         )
 
     def get_pil(self, image_name: str, mode: IMAGE_MODES | None = None) -> Image:
@@ -474,6 +475,7 @@ class VideosInterface(InvocationContextInterface):
             session_id=self._data.queue_item.session_id,
             node_id=self._data.invocation.id,
             user_id=self._data.queue_item.user_id,
+            project_id=self._data.queue_item.project_id,
         )
 
     def get_dto(self, video_name: str) -> VideoDTO:

@@ -84,6 +84,8 @@ const _zImageDTO = z.object({
   node_id: z.string().nullish(),
   starred: z.boolean(),
   has_workflow: z.boolean(),
+  project_id: z.string().nullish(),
+  file_size_bytes: z.number().nullish(),
   board_id: z.string().nullish(),
   image_subfolder: z.string().optional(),
 });
@@ -431,6 +433,11 @@ export const isQwen3EncoderModelConfig = (config: AnyModelConfig): config is Qwe
 
 export const isAnimaQwen3EncoderModelConfig = (config: AnyModelConfig): config is Qwen3EncoderModelConfig => {
   return config.type === 'qwen3_encoder' && config.variant === 'qwen3_06b';
+};
+
+/** Z-Image consumes 2560-wide embeddings, so only the 4B encoder fits - Klein 9B's 8B one (4096) does not. */
+export const isZImageQwen3EncoderModelConfig = (config: AnyModelConfig): config is Qwen3EncoderModelConfig => {
+  return config.type === 'qwen3_encoder' && config.variant === 'qwen3_4b';
 };
 
 export const isMistralEncoderModelConfig = (config: AnyModelConfig): config is MistralEncoderModelConfig => {

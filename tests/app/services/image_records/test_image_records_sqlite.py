@@ -1,7 +1,7 @@
 """DB-backed tests for SqliteImageRecordStorage.
 
 Verifies that image_subfolder round-trips correctly through save(), get(),
-get_many(), and get_intermediates() against a real (in-memory) SQLite database,
+get_many(), and get_subfolders() against a real (in-memory) SQLite database,
 and that get_many()/get_image_names() enforce per-user ownership isolation.
 """
 
@@ -124,38 +124,28 @@ class TestImageRecordExists:
         assert store.exists("missing.png") is False
 
 
-class TestGetIntermediatesSubfolder:
-    """get_intermediates() returns (name, subfolder) pairs without deleting rows."""
+def _intermediates(store: SqliteImageRecordStorage) -> list[tuple[str, str]]:
+    with store._db.transaction() as cursor:
+        cursor.execute("SELECT image_name, image_subfolder FROM images WHERE is_intermediate = TRUE;")
+        return [(row[0], row[1]) for row in cursor.fetchall()]
 
-    def test_returns_subfolder_pairs(self, store: SqliteImageRecordStorage) -> None:
+
+class TestGetSubfolders:
+    """get_subfolders() maps the named rows to their on-disk subfolders without touching them."""
+
+    def test_returns_subfolders_of_existing_rows_only(self, store: SqliteImageRecordStorage) -> None:
         _save(store, "keep.png", subfolder="general", is_intermediate=False)
         _save(store, "tmp1.png", subfolder="intermediate", is_intermediate=True)
-        _save(store, "tmp2.png", subfolder="intermediate", is_intermediate=True)
 
-        pairs = store.get_intermediates()
-
-        # Should return only intermediate images with their subfolders
-        assert len(pairs) == 2
-        names_and_subs = set(pairs)
-        assert ("tmp1.png", "intermediate") in names_and_subs
-        assert ("tmp2.png", "intermediate") in names_and_subs
-
-        # Non-intermediate image should still exist
-        record = store.get("keep.png")
-        assert record.image_subfolder == "general"
-
-    def test_get_intermediates_does_not_delete(self, store: SqliteImageRecordStorage) -> None:
-        _save(store, "tmp.png", subfolder="x", is_intermediate=True)
-        store.get_intermediates()
-
-        # Listing intermediates must not remove them.
-        record = store.get("tmp.png")
-        assert record.image_subfolder == "x"
+        assert store.get_subfolders(["keep.png", "tmp1.png", "missing.png"]) == {
+            "keep.png": "general",
+            "tmp1.png": "intermediate",
+        }
+        assert store.get("tmp1.png").image_subfolder == "intermediate"
 
     def test_intermediates_are_deleted_via_delete_intermediates_by_names(self, store: SqliteImageRecordStorage) -> None:
         _save(store, "tmp.png", subfolder="x", is_intermediate=True)
-        pairs = store.get_intermediates()
-        deleted = store.delete_intermediates_by_names([name for name, _ in pairs])
+        deleted = store.delete_intermediates_by_names([name for name, _ in _intermediates(store)])
 
         assert deleted == ["tmp.png"]
         with pytest.raises(ImageRecordNotFoundException):
@@ -201,7 +191,7 @@ class TestDeleteIntermediatesByNames:
         """An image promoted out of intermediate status after the snapshot must survive."""
         _save(store, "tmp.png", subfolder="x", is_intermediate=True)
         _save(store, "promoted.png", subfolder="x", is_intermediate=True)
-        snapshot = [name for name, _ in store.get_intermediates()]
+        snapshot = [name for name, _ in _intermediates(store)]
         assert set(snapshot) == {"tmp.png", "promoted.png"}
 
         # Simulate the race: the image stops being an intermediate between the snapshot and delete.
@@ -224,7 +214,7 @@ class TestDeleteIntermediatesByNames:
         """
         _save(store, "tmp.png", is_intermediate=True)
         _save(store, "promoted.png", is_intermediate=True)
-        snapshot = [name for name, _ in store.get_intermediates()]
+        snapshot = [name for name, _ in _intermediates(store)]
 
         # Promote from inside the call, between the first SELECT and the DELETE.
         real_execute = store._db._conn.execute
@@ -275,7 +265,7 @@ class TestDeleteIntermediatesByNames:
         assert set(deleted) == set(names) - {survivor}
         assert survivor not in deleted
         assert store.get(survivor).is_intermediate is False
-        assert store.get_intermediates() == []
+        assert _intermediates(store) == []
 
     def test_chunking_stays_within_the_declared_variable_limit(self, store: SqliteImageRecordStorage) -> None:
         """No statement may bind more parameters than the declared limit."""

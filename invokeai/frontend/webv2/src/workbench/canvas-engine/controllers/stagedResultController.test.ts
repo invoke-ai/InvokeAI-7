@@ -7,7 +7,7 @@ import { removeNodes } from '@workbench/canvas-engine/document/documentTree';
 import { insertNodesAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createTestEditConcurrency } from '@workbench/canvas-engine/editConcurrency.testStub';
-import { createHistory } from '@workbench/canvas-engine/history/history';
+import { createHistory, NO_HELD_ASSET_REFS } from '@workbench/canvas-engine/history/history';
 import { describe, expect, it, vi } from 'vitest';
 
 import { StagedResultController } from './stagedResultController';
@@ -207,7 +207,7 @@ describe('StagedResultController', () => {
     let reducerCanvas = makeCanvas();
     let mirrorDocument = reducerCanvas.document;
     const history = createHistory();
-    history.push({ bytes: 1, label: 'older edit', redo: vi.fn(), undo: vi.fn() });
+    history.push({ bytes: 1, heldAssetRefs: NO_HELD_ASSET_REFS, label: 'older edit', redo: vi.fn(), undo: vi.fn() });
     history.undo();
     expect(history.canRedo()).toBe(true);
     const controller = new StagedResultController({

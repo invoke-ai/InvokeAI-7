@@ -192,21 +192,3 @@ export const getVariantOptionsFor = (base: string, type: string): readonly strin
 
   return VARIANTS_BY_TYPE[type] ?? [];
 };
-
-const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'] as const;
-
-export const formatBytes = (bytes: number | null | undefined): string => {
-  if (bytes === null || bytes === undefined || !Number.isFinite(bytes) || bytes < 0) {
-    return '—';
-  }
-
-  let value = bytes;
-  let unitIndex = 0;
-
-  while (value >= 1024 && unitIndex < BYTE_UNITS.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-
-  return `${unitIndex === 0 ? value : value.toFixed(1)} ${BYTE_UNITS[unitIndex]}`;
-};

@@ -19,6 +19,7 @@ from invokeai.app.services.events.events_common import (
     ImageIndexUpdatedEvent,
     ImageMapProjectionReadyEvent,
     ImageUploadedEvent,
+    IntermediatesOperationChangedEvent,
     InvocationCompleteEvent,
     InvocationErrorEvent,
     InvocationProgressEvent,
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
     from invokeai.app.services.board_records.board_records_common import BoardRecord
     from invokeai.app.services.download.download_base import DownloadJob
     from invokeai.app.services.images.images_common import ImageDTO
+    from invokeai.app.services.intermediates.intermediates_common import IntermediatesOperation
     from invokeai.app.services.model_install.model_install_common import ModelInstallJob
     from invokeai.app.services.session_processor.session_processor_common import ProgressImage
     from invokeai.app.services.session_queue.session_queue_common import (
@@ -357,6 +359,14 @@ class EventServiceBase:
     def emit_image_map_projection_ready(self, user_id: str, point_count: int) -> None:
         """Emitted when a user's image map projection has been recomputed"""
         self.dispatch(ImageMapProjectionReadyEvent.build(user_id=user_id, point_count=point_count))
+
+    # endregion
+
+    # region Intermediates
+
+    def emit_intermediates_operation_changed(self, operation: "IntermediatesOperation") -> None:
+        """Emitted whenever an intermediates cleanup operation is created, progresses or finishes"""
+        self.dispatch(IntermediatesOperationChangedEvent.build(operation))
 
     # endregion
 

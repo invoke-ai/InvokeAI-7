@@ -50,6 +50,7 @@ import {
   isWanT5EncoderModelConfig,
   isWanVAEModelConfig,
   isZImageDiffusersMainModelConfig,
+  isZImageQwen3EncoderModelConfig,
 } from 'services/api/types';
 
 const buildModelsHook =
@@ -128,6 +129,7 @@ export const useQwenImageDiffusersModels = () => buildModelsHook(isQwenImageDiff
 export const useQwenImageVAEModels = () => buildModelsHook(isQwenImageVAEModelConfig)();
 export const useQwenVLEncoderModels = () => buildModelsHook(isQwenVLEncoderModelConfig)();
 export const useQwen3EncoderModels = () => buildModelsHook(isQwen3EncoderModelConfig)();
+export const useZImageQwen3EncoderModels = () => buildModelsHook(isZImageQwen3EncoderModelConfig)();
 export const useQwen3VLEncoderModels = () => buildModelsHook(isKrea2Qwen3VLEncoderModelConfig)();
 export const useWanDiffusersModels = () => buildModelsHook(isWanDiffusersMainModelConfig)();
 export const useWanSingleFileLowNoiseModels = () => buildModelsHook(isWanLowNoisePartnerOption)();
@@ -176,7 +178,7 @@ export const selectRegionalRefImageModels = buildModelsSelector(
   (config) => isIPAdapterModelConfig(config) || isFluxReduxModelConfig(config)
 );
 export const selectAnimaQwen3EncoderModels = buildModelsSelector(isAnimaQwen3EncoderModelConfig);
-export const selectQwen3EncoderModels = buildModelsSelector(isQwen3EncoderModelConfig);
+export const selectZImageQwen3EncoderModels = buildModelsSelector(isZImageQwen3EncoderModelConfig);
 export const selectQwenImageDiffusersModels = buildModelsSelector(isQwenImageDiffusersMainModelConfig);
 export const selectQwenImageVAEModels = buildModelsSelector(isQwenImageVAEModelConfig);
 export const selectQwenVLEncoderModels = buildModelsSelector(isQwenVLEncoderModelConfig);

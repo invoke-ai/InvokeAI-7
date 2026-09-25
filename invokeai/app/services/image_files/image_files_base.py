@@ -74,6 +74,11 @@ class ImageFileStorageBase(ABC):
         pass
 
     @abstractmethod
+    def get_file_size_bytes(self, image_name: str, image_subfolder: str = "") -> Optional[int]:
+        """Bytes the image and its thumbnail occupy; None when the full-size file is missing."""
+        pass
+
+    @abstractmethod
     def delete(self, image_name: str, image_subfolder: str = "") -> None:
         """Deletes an image and its thumbnail (if one exists)."""
         pass

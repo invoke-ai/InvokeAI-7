@@ -6,6 +6,7 @@
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { Rect, SelectionOp } from '@workbench/canvas-engine/types';
 
+import { NO_HELD_ASSET_REFS } from '@workbench/canvas-engine/history/history';
 import { isEmpty } from '@workbench/canvas-engine/math/rect';
 
 import type { SelectionCommit, SelectionSnapshot, SelectionState } from './selectionState';
@@ -71,6 +72,7 @@ export const withSelectionHistory = (selection: SelectionState, history: History
     lastAfter = after;
     history.push({
       bytes: beforeBytes + (after.alpha?.byteLength ?? 0),
+      heldAssetRefs: NO_HELD_ASSET_REFS,
       label,
       redo: () => selection.restore(after),
       undo: () => selection.restore(before),

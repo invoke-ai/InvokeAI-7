@@ -372,6 +372,7 @@ export const SUPPORTS_REF_IMAGES_BASE_MODELS: BaseModelType[] = [
   'qwen-image',
   'wan',
   'minimax-h3',
+  'krea-2',
 ];
 
 export const SUPPORTS_NEGATIVE_PROMPT_BASE_MODELS: BaseModelType[] = [

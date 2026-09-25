@@ -44,6 +44,7 @@ from invokeai.app.invocations.fields import (
 from invokeai.app.services.config.config_default import get_config
 from invokeai.app.services.shared.execution_effects import InvocationRunResult
 from invokeai.app.services.shared.invocation_context import InvocationContext
+from invokeai.app.services.shared.media_references import extract_media_references
 from invokeai.app.util.metaenum import MetaEnum
 from invokeai.app.util.misc import uuid_string
 from invokeai.backend.util.logging import InvokeAILogger
@@ -276,6 +277,13 @@ class BaseInvocation(ABC, BaseModel):
         if self.use_cache:
             key = services.invocation_cache.create_key(self)
             cached_value = services.invocation_cache.get(key)
+            if cached_value is not None:
+                references = extract_media_references(cached_value.model_dump(mode="json"))
+                if not references.is_empty() and not services.intermediates.hold_cached_media(
+                    context._data.queue_item.session_id, references
+                ):
+                    services.invocation_cache.delete(key)
+                    cached_value = None
             if cached_value is None:
                 services.logger.debug(f'Invocation cache miss for type "{self.get_type()}": {self.id}')
                 output = self.invoke(context)

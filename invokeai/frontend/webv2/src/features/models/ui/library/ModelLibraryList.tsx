@@ -6,11 +6,11 @@ import {
   groupModelsByType,
   type ModelLibraryFilters,
 } from '@features/models/core/library';
-import { formatBytes } from '@features/models/core/taxonomy';
 import { getModelImageUrl } from '@features/models/data/api';
 import { useModelsSelector } from '@features/models/data/modelsStore';
 import { MissingFileBadge, ModelBaseBadge, ModelFormatBadge } from '@features/models/ui/detail/ModelBadges';
 import { getLibraryScrollOffset, openModelManagerTab, saveLibraryScrollOffset } from '@features/models/ui/uiStore';
+import { formatBytes } from '@platform/i18n/languages';
 import { Button, Row } from '@platform/ui';
 import { EmptyState } from '@platform/ui/EmptyState';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';

@@ -44,12 +44,44 @@ const ARCHITECTURE_CAPABILITIES = JSON.parse(
   )
 );
 
-/** POST /__faults sets capabilities to error, empty, or ok until POST /__reset; independent of workload profile. */
+/**
+ * POST /__faults sets capabilities to error, empty, or ok, and `intermediatesCaller` to admin or user, until POST
+ * /__reset; independent of workload profile. `user` also turns on multi-user auth with a non-admin session: sign in
+ * with any email and password (or reload a page that already holds the token) to reach the non-admin UI.
+ */
 const CAPABILITY_FAULTS = new Set(['ok', 'error', 'empty']);
+const INTERMEDIATES_CALLERS = new Set(['admin', 'user']);
 
-const createFaults = () => ({ capabilities: 'ok' });
+const createFaults = () => ({ capabilities: 'ok', intermediatesCaller: 'admin' });
 
 const MOCK_USER_ID = 'fixture-user';
+
+/** The intermediates rows a summary shows under its filters; a `matching` preview scope resolves the same way. */
+const matchingIntermediates = (rows, { isAdmin, ownerFilter, projectId, search }) => {
+  const needle = (search ?? '').toLowerCase();
+  return rows
+    .filter((row) => ownerFilter === null || row.user_id === ownerFilter)
+    .filter((row) => projectId === null || row.project_id === projectId)
+    .filter(
+      (row) =>
+        !needle ||
+        [row.project_name, ...(isAdmin ? [row.user_display_name, row.user_email] : [])].some((value) =>
+          (value ?? '').toLowerCase().includes(needle)
+        )
+    );
+};
+const MOCK_USER_TOKEN = 'mock-user-token';
+
+const mockNonAdminUser = () => ({
+  created_at: '2026-01-01T00:00:00Z',
+  display_name: 'Fixture User',
+  email: 'fixture-user@example.com',
+  is_active: true,
+  is_admin: false,
+  last_login_at: null,
+  updated_at: '2026-01-01T00:00:00Z',
+  user_id: MOCK_USER_ID,
+});
 
 const clone = (value) => structuredClone(value);
 
@@ -93,6 +125,9 @@ const createState = (profile) => {
     openApiDocument: clone(fixture.openApiDocument),
     profile,
     projects: new Map(fixture.projects.map((project) => [project.project_id, clone(project)])),
+    intermediates: fixture.intermediates.map(clone),
+    intermediatesOperations: new Map(),
+    intermediatesPreviews: new Map(),
     queueItems: new Map(fixture.queueItems.map((item) => [item.item_id, clone(item)])),
     videos: new Map(fixture.videos.map((video) => [video.video_name, clone(video)])),
     workflows: new Map(fixture.workflows.map((workflow) => [workflow.workflow_id, clone(workflow)])),
@@ -679,6 +714,7 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
         if (method === 'POST') {
           const body = await readJsonBody(request);
           const requested = url.searchParams.get('capabilities') ?? body.capabilities;
+          const caller = url.searchParams.get('intermediatesCaller') ?? body.intermediatesCaller;
 
           if (requested !== undefined && requested !== null) {
             if (!CAPABILITY_FAULTS.has(requested)) {
@@ -686,6 +722,14 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
             }
 
             faults.capabilities = requested;
+          }
+
+          if (caller !== undefined && caller !== null) {
+            if (!INTERMEDIATES_CALLERS.has(caller)) {
+              return json(400, { detail: `Unknown intermediates caller: ${String(caller)}` });
+            }
+
+            faults.intermediatesCaller = caller;
           }
         }
 
@@ -699,10 +743,24 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
       if (method === 'GET' && path === '/api/v1/auth/status') {
         return json(200, {
           admin_email: null,
-          multiuser_enabled: false,
+          multiuser_enabled: faults.intermediatesCaller === 'user',
           setup_required: false,
           strict_password_checking: false,
         });
+      }
+
+      if (faults.intermediatesCaller === 'user' && path.startsWith('/api/v1/auth/')) {
+        if (method === 'POST' && path === '/api/v1/auth/login') {
+          return json(200, { expires_in: 86_400, token: MOCK_USER_TOKEN, user: mockNonAdminUser() });
+        }
+        if (method === 'GET' && path === '/api/v1/auth/me') {
+          return request.headers.authorization === `Bearer ${MOCK_USER_TOKEN}`
+            ? json(200, mockNonAdminUser())
+            : json(401, { detail: 'Not authenticated' });
+        }
+        if (method === 'POST' && (path === '/api/v1/auth/media-cookie' || path === '/api/v1/auth/logout')) {
+          return json(200, { success: true });
+        }
       }
 
       if (method === 'GET' && path === '/api/v1/image_map/points') {
@@ -1061,6 +1119,253 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
 
       if (method === 'GET' && (path === '/api/v1/wildcards' || path === '/api/v1/wildcards/')) {
         return json(200, []);
+      }
+
+      if ((method === 'PUT' || method === 'DELETE') && /^\/api\/v1\/intermediates\/holds\/[^/]+$/.test(path)) {
+        response.writeHead(204);
+        return response.end();
+      }
+
+      if (method === 'GET' && path === '/api/v1/intermediates/summary') {
+        // Mirrors IntermediatesService.get_summary: non-admins see only their rows and may not name another owner.
+        const isAdmin = faults.intermediatesCaller === 'admin';
+        const ownerId = url.searchParams.get('owner_id');
+        if (!isAdmin && ownerId !== null && ownerId !== MOCK_USER_ID) {
+          return json(403, { detail: 'Only administrators can inspect other accounts' });
+        }
+        const ownerFilter = isAdmin ? ownerId : MOCK_USER_ID;
+        const sort = url.searchParams.get('sort') ?? 'reclaimable_bytes';
+        const descending = (url.searchParams.get('order') ?? 'desc') === 'desc';
+        const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0));
+        const limit = Math.max(1, Number(url.searchParams.get('limit') ?? 50));
+        const rows = matchingIntermediates(state.intermediates, {
+          isAdmin,
+          ownerFilter,
+          projectId: url.searchParams.get('project_id'),
+          search: url.searchParams.get('search'),
+        }).sort((left, right) =>
+          (left.project_name ?? '').toLowerCase().localeCompare((right.project_name ?? '').toLowerCase())
+        );
+        if (sort === 'reclaimable_bytes') {
+          rows.sort((left, right) => (right.reclaimable_bytes - left.reclaimable_bytes) * (descending ? 1 : -1));
+        } else if (descending) {
+          rows.reverse();
+        }
+        const totals = rows.reduce(
+          (acc, row) => ({
+            rows: acc.rows + 1,
+            safe_images: acc.safe_images + row.images.safe,
+            safe_videos: acc.safe_videos + row.videos.safe,
+            in_use_images: acc.in_use_images + row.images.referenced + row.images.active + row.images.recent,
+            in_use_videos: acc.in_use_videos + row.videos.referenced + row.videos.active + row.videos.recent,
+            reclaimable_bytes: acc.reclaimable_bytes + row.reclaimable_bytes,
+            unknown_size_count: acc.unknown_size_count + row.unknown_size_count,
+          }),
+          {
+            rows: 0,
+            safe_images: 0,
+            safe_videos: 0,
+            in_use_images: 0,
+            in_use_videos: 0,
+            reclaimable_bytes: 0,
+            unknown_size_count: 0,
+          }
+        );
+        return json(200, {
+          items: rows.slice(offset, offset + limit),
+          total: rows.length,
+          offset,
+          limit,
+          totals,
+          recent_grace_seconds: 1800,
+          measuring: false,
+          can_manage_everyone: isAdmin,
+        });
+      }
+
+      if (method === 'POST' && path === '/api/v1/intermediates/previews') {
+        const requested = await readJsonBody(request);
+        // Mirrors IntermediatesService._authorize_scope.
+        const isAdmin = faults.intermediatesCaller === 'admin';
+        const scope = requested?.scope ?? {};
+        if (scope.kind === 'everyone' && !isAdmin) {
+          return json(403, { detail: "Only administrators can clear everyone's intermediates" });
+        }
+        if (scope.kind === 'owner' && !scope.user_id) {
+          return json(422, { detail: 'An owner scope names the account to clear' });
+        }
+        if (scope.kind === 'owner' && scope.user_id !== MOCK_USER_ID && !isAdmin) {
+          return json(403, { detail: "Only administrators can clear another account's intermediates" });
+        }
+        if (scope.kind === 'selection' && !(scope.targets?.length > 0)) {
+          return json(422, { detail: 'A selection scope names at least one row' });
+        }
+        if (scope.kind === 'selection' && !isAdmin && scope.targets.some((target) => target.user_id !== MOCK_USER_ID)) {
+          return json(403, { detail: "Only administrators can clear another account's intermediates" });
+        }
+        if (scope.kind === 'matching' && !isAdmin && scope.user_id && scope.user_id !== MOCK_USER_ID) {
+          return json(403, { detail: "Only administrators can delete another account's intermediates" });
+        }
+        if (scope.kind === 'matching' && (scope.excluded?.length ?? 0) > 1000) {
+          return json(422, { detail: 'Too many excluded rows' });
+        }
+        const previewId = `preview-${state.intermediatesPreviews.size + 1}`;
+        const targets =
+          scope.kind === 'selection'
+            ? state.intermediates.filter((row) =>
+                scope.targets.some(
+                  (target) => target.user_id === row.user_id && (target.project_id ?? null) === row.project_id
+                )
+              )
+            : scope.kind === 'owner'
+              ? state.intermediates.filter((row) => row.user_id === scope.user_id)
+              : scope.kind === 'matching'
+                ? // Mirrors IntermediatesService._resolve_scope: the summary's filters minus the excluded rows.
+                  matchingIntermediates(state.intermediates, {
+                    isAdmin,
+                    ownerFilter: isAdmin ? (scope.user_id ?? null) : MOCK_USER_ID,
+                    projectId: scope.project_id ?? null,
+                    search: scope.search ?? null,
+                  }).filter(
+                    (row) =>
+                      !(scope.excluded ?? []).some(
+                        (target) => target.user_id === row.user_id && (target.project_id ?? null) === row.project_id
+                      )
+                  )
+                : state.intermediates;
+        if (scope.kind === 'matching' && targets.length === 0) {
+          return json(422, { detail: 'No rows match the filter' });
+        }
+        const force = requested?.mode === 'force';
+        const affectedDocuments = force
+          ? targets
+              .filter((row) => row.images.referenced + row.videos.referenced > 0)
+              .map((row) => ({
+                kind: 'project',
+                user_id: row.user_id,
+                user_display_name: row.user_display_name,
+                user_email: row.user_email,
+                owner_id: row.project_id ?? 'unassigned',
+                name: row.project_name,
+                references: row.images.referenced + row.videos.referenced,
+              }))
+          : [];
+        const impact = targets.reduce(
+          (acc, row) => ({
+            delete_images: acc.delete_images + row.images.safe + (force ? row.images.referenced : 0),
+            delete_videos: acc.delete_videos + row.videos.safe + (force ? row.videos.referenced : 0),
+            keep_referenced_images: acc.keep_referenced_images + (force ? 0 : row.images.referenced),
+            keep_referenced_videos: acc.keep_referenced_videos + (force ? 0 : row.videos.referenced),
+            keep_active_images: acc.keep_active_images + row.images.active,
+            keep_active_videos: acc.keep_active_videos + row.videos.active,
+            keep_recent_images: acc.keep_recent_images + row.images.recent,
+            keep_recent_videos: acc.keep_recent_videos + row.videos.recent,
+            reclaimable_bytes: acc.reclaimable_bytes + row.reclaimable_bytes + (force ? row.referenced_bytes : 0),
+            unknown_size_count: acc.unknown_size_count + row.unknown_size_count,
+          }),
+          {
+            delete_images: 0,
+            delete_videos: 0,
+            keep_referenced_images: 0,
+            keep_referenced_videos: 0,
+            keep_active_images: 0,
+            keep_active_videos: 0,
+            keep_recent_images: 0,
+            keep_recent_videos: 0,
+            reclaimable_bytes: 0,
+            unknown_size_count: 0,
+          }
+        );
+        if (force && affectedDocuments.length > 10_000) {
+          return json(422, { detail: 'This force delete would break more than 10000 documents; narrow the scope' });
+        }
+        const preview = {
+          preview_id: previewId,
+          mode: requested?.mode ?? 'safe',
+          scope: {
+            kind: scope.kind ?? 'owner',
+            targets: scope.targets ?? [],
+            user_id: scope.user_id ?? null,
+            project_id: scope.project_id ?? null,
+            search: scope.search ?? null,
+            excluded: scope.excluded ?? [],
+          },
+          created_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + 600_000).toISOString(),
+          target_rows: targets.length,
+          impact,
+          affected_documents: affectedDocuments.slice(0, 200),
+          affected_documents_total: affectedDocuments.length,
+        };
+        state.intermediatesPreviews.set(previewId, { preview, targets });
+        return json(201, preview);
+      }
+
+      if (method === 'GET' && path === '/api/v1/intermediates/operations') {
+        // Newest first; the real server retains a handful of settled operations per account.
+        return json(200, { items: [...state.intermediatesOperations.values()].reverse().slice(0, 5) });
+      }
+
+      if (method === 'POST' && path === '/api/v1/intermediates/operations') {
+        const requested = await readJsonBody(request);
+        // Mirrors IntermediatesService.start_operation: a preview is confirmed once.
+        const frozen = state.intermediatesPreviews.get(requested?.preview_id);
+        if (!frozen) {
+          return json(404, { detail: 'Preview expired or unknown; request a new one' });
+        }
+        state.intermediatesPreviews.delete(requested.preview_id);
+        const operationId = `operation-${state.intermediatesOperations.size + 1}`;
+        const { impact } = frozen.preview;
+        const operation = {
+          operation_id: operationId,
+          user_id: MOCK_USER_ID,
+          mode: frozen.preview.mode,
+          scope: frozen.preview.scope,
+          status: 'completed',
+          created_at: new Date().toISOString(),
+          started_at: new Date().toISOString(),
+          completed_at: new Date().toISOString(),
+          error: null,
+          target_images: impact.delete_images,
+          target_videos: impact.delete_videos,
+          progress: {
+            processed_images: impact.delete_images,
+            processed_videos: impact.delete_videos,
+            deleted_images: impact.delete_images,
+            deleted_videos: impact.delete_videos,
+            retained_images: 0,
+            retained_videos: 0,
+            failed_images: 0,
+            failed_videos: 0,
+            reclaimed_bytes: impact.reclaimable_bytes,
+            unknown_size_count: impact.unknown_size_count,
+            pending_disk_cleanup: 0,
+          },
+        };
+        for (const row of frozen.targets) {
+          row.images = {
+            ...row.images,
+            safe: 0,
+            referenced: frozen.preview.mode === 'force' ? 0 : row.images.referenced,
+          };
+          row.videos = {
+            ...row.videos,
+            safe: 0,
+            referenced: frozen.preview.mode === 'force' ? 0 : row.videos.referenced,
+          };
+          row.reclaimable_bytes = 0;
+          row.unknown_size_count = 0;
+        }
+        state.intermediatesOperations.set(operationId, operation);
+        return json(202, operation);
+      }
+
+      {
+        const operationMatch = /^\/api\/v1\/intermediates\/operations\/([^/]+)$/.exec(path);
+        if (method === 'GET' && operationMatch) {
+          const operation = state.intermediatesOperations.get(decodeURIComponent(operationMatch[1]));
+          return operation ? json(200, operation) : json(404, { detail: 'Not found' });
+        }
       }
 
       if (method === 'GET' && path === '/api/v1/fonts') {

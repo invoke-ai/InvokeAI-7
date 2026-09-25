@@ -13,6 +13,7 @@ from invokeai.app.services.board_records.board_records_common import (
     BoardRecordNotFoundException,
     BoardVisibility,
 )
+from invokeai.app.services.project_records.project_records_common import ProjectRecordNotFoundError
 
 
 def _get_board_record(board_id: str) -> BoardRecord:
@@ -242,3 +243,18 @@ def assert_board_read_access(board_id: str, current_user: CurrentUserOrDefault) 
         return
 
     raise HTTPException(status_code=403, detail="Not authorized to access this board")
+
+
+def assert_project_owned(project_id: str | None, current_user: CurrentUserOrDefault) -> None:
+    """Raise 404 unless `project_id` names one of the caller's own projects.
+
+    Provenance is recorded only from a validated identity: an admin cannot attribute media to
+    someone else's project, and a project id nobody owns reads as absent rather than as a
+    permission decision, matching how the queue treats `Batch.project_id`.
+    """
+    if project_id is None:
+        return
+    try:
+        ApiDependencies.invoker.services.project_records.get_board_id(current_user.user_id, project_id)
+    except ProjectRecordNotFoundError:
+        raise HTTPException(status_code=404, detail="Project not found")

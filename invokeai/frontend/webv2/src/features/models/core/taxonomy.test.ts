@@ -3,29 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   EDITABLE_MODEL_FORMATS,
   getModelSourceHref,
-  formatBytes,
   getModelFormatLabel,
   getModelTypeLabel,
   getModelVariantLabel,
   getVariantOptionsFor,
 } from './taxonomy';
-
-describe('formatBytes', () => {
-  it('renders a dash for missing or invalid sizes', () => {
-    expect(formatBytes(null)).toBe('—');
-    expect(formatBytes(undefined)).toBe('—');
-    expect(formatBytes(-1)).toBe('—');
-    expect(formatBytes(Number.NaN)).toBe('—');
-  });
-
-  it('scales across unit boundaries', () => {
-    expect(formatBytes(0)).toBe('0 B');
-    expect(formatBytes(1023)).toBe('1023 B');
-    expect(formatBytes(1024)).toBe('1.0 KB');
-    expect(formatBytes(1024 * 1024)).toBe('1.0 MB');
-    expect(formatBytes(1.5 * 1024 * 1024 * 1024)).toBe('1.5 GB');
-  });
-});
 
 describe('label fallbacks', () => {
   it('title-cases unknown open-union values', () => {

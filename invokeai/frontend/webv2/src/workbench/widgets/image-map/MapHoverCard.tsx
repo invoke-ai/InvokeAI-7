@@ -163,7 +163,7 @@ export const MapHoverCard = ({
         </Text>
       </HStack>
       {clusterTags ? <HoverTagsRow prefix="Cluster tags: " tags={clusterTags} /> : null}
-      {imageTags ? <HoverTagsRow prefix="Tags: " tags={imageTags} /> : null}
+      {imageTags ? <HoverTagsRow prefix="Image tags: " tags={imageTags} /> : null}
     </Stack>
   );
 };

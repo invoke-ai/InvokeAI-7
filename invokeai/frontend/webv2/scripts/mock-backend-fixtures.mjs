@@ -700,9 +700,53 @@ const createWorkflows = (count) =>
     };
   });
 
+/** Per-project intermediates rows for the Settings manager; ids match the projects fixture so entry points preselect. */
+const createIntermediates = () => [
+  {
+    user_id: 'fixture-user',
+    user_display_name: 'Fixture User',
+    user_email: 'fixture@example.com',
+    project_id: 'fixture-project-001',
+    project_name: 'Fixture Project 001',
+    cover_image_name: 'fixture-image-0002.png',
+    images: { safe: 128, referenced: 6, active: 2, recent: 4 },
+    videos: { safe: 3, referenced: 1, active: 0, recent: 0 },
+    reclaimable_bytes: 2_580_000_000,
+    referenced_bytes: 120_000_000,
+    unknown_size_count: 0,
+  },
+  {
+    user_id: 'fixture-user',
+    user_display_name: 'Fixture User',
+    user_email: 'fixture@example.com',
+    project_id: 'fixture-project-002',
+    project_name: 'Fixture Project 002',
+    cover_image_name: null,
+    images: { safe: 12, referenced: 0, active: 0, recent: 1 },
+    videos: { safe: 0, referenced: 0, active: 0, recent: 0 },
+    reclaimable_bytes: 96_000_000,
+    referenced_bytes: 0,
+    unknown_size_count: 3,
+  },
+  {
+    user_id: 'fixture-user',
+    user_display_name: 'Fixture User',
+    user_email: 'fixture@example.com',
+    project_id: null,
+    project_name: null,
+    cover_image_name: null,
+    images: { safe: 40, referenced: 0, active: 0, recent: 0 },
+    videos: { safe: 1, referenced: 0, active: 0, recent: 0 },
+    reclaimable_bytes: 410_000_000,
+    referenced_bytes: 0,
+    unknown_size_count: 0,
+  },
+];
+
 const createEmptyFixture = () => ({
   boards: [],
   images: [],
+  intermediates: [],
   models: [],
   nodeCatalog: { custom_nodes_path: '/opt/invokeai/nodes', node_packs: [] },
   openApiDocument: createOpenApiDocument(0),
@@ -721,6 +765,7 @@ const createRepresentativeFixture = () => {
   return {
     boards: createBoards(images, videos, counts.projects),
     images,
+    intermediates: createIntermediates(),
     models: createModels(counts.models),
     nodeCatalog: {
       custom_nodes_path: '/opt/invokeai/nodes',

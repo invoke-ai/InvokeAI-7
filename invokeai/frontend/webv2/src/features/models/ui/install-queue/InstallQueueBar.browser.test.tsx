@@ -203,16 +203,16 @@ describe('InstallQueueBar', () => {
     expect(rowByStatus('downloading')?.textContent).toContain(
       'vantagewithai/Krea-2-Turbo-GGUF :: krea2_turbo-Q4_K_M.gguf'
     );
-    expect(rowByStatus('queued')?.textContent).toContain('Waiting · #1 in queue · 6.3 GB');
+    expect(rowByStatus('queued')?.textContent).toContain('Waiting · #1 in queue · 6.8 GB');
     expect(rowByStatus('failed')?.textContent).toContain('DuplicateModelException');
     expect(rowByStatus('failed')?.textContent).toContain('A model with this path is already installed.');
-    expect(rowByStatus('failed')?.textContent).toContain('Stopped · 0 B copied');
+    expect(rowByStatus('failed')?.textContent).toContain('Stopped · 0 bytes copied');
     expect(rowByStatus('unauthorized')?.textContent).toContain(
       'This repo is gated. Add a Hugging Face token to continue.'
     );
-    expect(rowByStatus('unauthorized')?.textContent).toContain('Not started · 319.5 MB');
+    expect(rowByStatus('unauthorized')?.textContent).toContain('Not started · 335.0 MB');
     expect(rowByStatus('installed')?.textContent).toContain('Done · LoRA');
-    expect(rowByStatus('cancelled')?.textContent).toContain('Cancelled · 11.4 MB copied');
+    expect(rowByStatus('cancelled')?.textContent).toContain('Cancelled · 12.0 MB copied');
 
     expect(await auditAccessibility(host!)).toEqual([]);
   });
@@ -241,7 +241,7 @@ describe('InstallQueueBar', () => {
     await settle();
 
     const caption = rowByStatus('downloading')?.textContent ?? '';
-    expect(caption).toContain('38% · 2.5 GB / 6.5 GB');
+    expect(caption).toContain('38% · 2.7 GB / 7.0 GB');
     expect(caption).toMatch(/MB\/s · ~\d+ (s|min|h) left/);
 
     await click('Install Queue');
@@ -249,7 +249,7 @@ describe('InstallQueueBar', () => {
     expect(rows()).toHaveLength(0);
     const bar = host?.textContent ?? '';
     expect(bar).toContain('krea2_turbo-Q4_K_M.gguf');
-    expect(bar).toContain('38% · 2.5 GB / 6.5 GB');
+    expect(bar).toContain('38% · 2.7 GB / 7.0 GB');
     expect(bar).toContain('+1 queued');
     expect(bar).toContain('2 need attention');
 

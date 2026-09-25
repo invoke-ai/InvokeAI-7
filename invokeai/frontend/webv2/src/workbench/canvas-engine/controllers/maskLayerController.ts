@@ -9,6 +9,7 @@ import { lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/docu
 import { getDocumentLayer } from '@workbench/canvas-engine/document/documentIndex';
 import { isLeafEditable } from '@workbench/canvas-engine/document/layerEligibility';
 import { getSourceContentRect, isMaskLayer } from '@workbench/canvas-engine/document/sources';
+import { collectHistoryMediaRefs } from '@workbench/canvas-engine/history/history';
 import { createImagePatchEntry } from '@workbench/canvas-engine/history/imagePatch';
 import { invert as invertMatrix } from '@workbench/canvas-engine/math/mat2d';
 import { isEmpty, roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
@@ -81,6 +82,7 @@ export class MaskLayerController {
     applyClear();
     this.deps.history.push({
       bytes: (before?.data.byteLength ?? 0) + 256,
+      heldAssetRefs: collectHistoryMediaRefs(originalBitmap),
       label: 'Clear mask',
       redo: applyClear,
       undo: applyRestore,

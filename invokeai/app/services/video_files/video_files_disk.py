@@ -4,7 +4,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
+from typing import Collection, Optional, Sequence, Union
 
 from PIL import Image
 
@@ -19,6 +19,7 @@ from invokeai.app.services.video_files.video_files_common import (
     VideoFileNotFoundException,
     VideoFileSaveException,
 )
+from invokeai.app.services.video_records.video_records_common import VideoRecordNotFoundException
 from invokeai.app.util.mp4_metadata import read_mp4_tags, write_mp4_tags
 from invokeai.app.util.thumbnails import make_thumbnail
 from invokeai.app.util.video_thumbnails import extract_representative_video_frame, get_video_thumbnail_name
@@ -29,6 +30,12 @@ from invokeai.backend.util.logging import InvokeAILogger
 class _StagedDelete:
     directory: Path
     files: list[tuple[Path, Path]]
+
+
+@dataclass
+class _PendingDelete:
+    directory: Path
+    videos: list[tuple[str, str]]
 
 
 # Prefix of the same-directory temp file a metadata remux writes before replacing the video.
@@ -151,11 +158,7 @@ class DiskVideoFileStorage(VideoFileStorageBase):
         self.commit_delete(token)
 
     def stage_delete(self, video_name: str, video_subfolder: str = "") -> _StagedDelete:
-        candidates = [
-            self.get_path(video_name, video_subfolder=video_subfolder),
-            self.get_path(video_name, thumbnail=True, video_subfolder=video_subfolder),
-            self.__get_sidecar_path(video_name, video_subfolder=video_subfolder),
-        ]
+        candidates = self.__delete_candidates(video_name, video_subfolder)
         staging_dir = Path(tempfile.mkdtemp(prefix=".delete_", dir=self.__output_folder))
         staged: list[tuple[Path, Path]] = []
         try:
@@ -177,10 +180,77 @@ class DiskVideoFileStorage(VideoFileStorageBase):
             shutil.rmtree(staging_dir, ignore_errors=True)
             raise VideoFileDeleteException from e
 
-    def commit_delete(self, token: object) -> None:
+    def begin_delete(self, videos: Sequence[tuple[str, str]]) -> _PendingDelete:
+        # Resolving each path validates the names before anything is journalled; the paths are re-derived at commit.
+        for name, subfolder in videos:
+            self.__delete_candidates(name, subfolder)
+        directory = Path(tempfile.mkdtemp(prefix=".delete_", dir=self.__output_folder))
+        try:
+            with open(directory / "manifest.json", "w", encoding="utf-8") as manifest:
+                json.dump({"version": 2, "videos": videos}, manifest)
+                manifest.flush()
+                os.fsync(manifest.fileno())
+            self.__fsync_directory(directory)
+            self.__fsync_directory(self.__output_folder)
+            return _PendingDelete(directory=directory, videos=list(videos))
+        except Exception as error:
+            shutil.rmtree(directory, ignore_errors=True)
+            raise VideoFileDeleteException from error
+
+    def abandon_delete(self, token: object) -> None:
+        if not isinstance(token, _PendingDelete):
+            raise VideoFileDeleteException("Invalid pending-delete token")
+        shutil.rmtree(token.directory, ignore_errors=True)
+
+    def commit_delete(self, token: object, video_names: Optional[Collection[str]] = None) -> None:
+        if isinstance(token, _PendingDelete):
+            self.__commit_pending_delete(token, video_names)
+            return
         if not isinstance(token, _StagedDelete):
             raise VideoFileDeleteException("Invalid staged-delete token")
         shutil.rmtree(token.directory)
+
+    def __commit_pending_delete(self, token: _PendingDelete, video_names: Optional[Collection[str]]) -> None:
+        selected = None if video_names is None else set(video_names)
+        purged: list[tuple[str, str]] = []
+        try:
+            for name, subfolder in token.videos:
+                if selected is not None and name not in selected:
+                    continue
+                self.__purge_files(name, subfolder)
+                purged.append((name, subfolder))
+            self.__persist_purges(purged)
+        except OSError as error:
+            # A retry must re-check the record before touching the live files.
+            raise VideoFileDeleteException from error
+        shutil.rmtree(token.directory, ignore_errors=True)
+
+    def __delete_candidates(self, name: str, subfolder: str) -> list[Path]:
+        return [
+            self.get_path(name, video_subfolder=subfolder),
+            self.get_path(name, thumbnail=True, video_subfolder=subfolder),
+            self.__get_sidecar_path(name, video_subfolder=subfolder),
+        ]
+
+    def __purge_files(self, name: str, subfolder: str) -> None:
+        for path in self.__delete_candidates(name, subfolder):
+            path.unlink(missing_ok=True)
+
+    @staticmethod
+    def __fsync_directory(directory: Path) -> None:
+        if os.name == "nt":
+            return
+        descriptor = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def __persist_purges(self, videos: Sequence[tuple[str, str]]) -> None:
+        parents = {path.parent for name, subfolder in videos for path in self.__delete_candidates(name, subfolder)}
+        for parent in parents:
+            if parent.exists():
+                self.__fsync_directory(parent)
 
     def rollback_delete(self, token: object) -> None:
         if not isinstance(token, _StagedDelete):
@@ -193,6 +263,21 @@ class DiskVideoFileStorage(VideoFileStorageBase):
             shutil.rmtree(token.directory, ignore_errors=True)
         except Exception as e:
             raise VideoFileDeleteException from e
+
+    def get_file_size_bytes(self, video_name: str, video_subfolder: str = "") -> Optional[int]:
+        try:
+            size = self.get_path(video_name, video_subfolder=video_subfolder).stat().st_size
+        except FileNotFoundError:
+            return None
+        for companion in (
+            self.get_path(video_name, thumbnail=True, video_subfolder=video_subfolder),
+            self.__get_sidecar_path(video_name, video_subfolder=video_subfolder),
+        ):
+            try:
+                size += companion.stat().st_size
+            except FileNotFoundError:
+                pass
+        return size
 
     def get_path(self, video_name: str, thumbnail: bool = False, video_subfolder: str = "") -> Path:
         base_folder = self.__thumbnails_folder if thumbnail else self.__output_folder
@@ -327,6 +412,16 @@ class DiskVideoFileStorage(VideoFileStorageBase):
             try:
                 with open(manifest_path, encoding="utf-8") as manifest:
                     data = json.load(manifest)
+                if data.get("version") == 2:
+                    videos = [(entry[0], entry[1]) for entry in data["videos"]]
+                    for video_name, video_subfolder in videos:
+                        try:
+                            self.__invoker.services.video_records.get(video_name)
+                        except VideoRecordNotFoundException:
+                            self.__purge_files(video_name, video_subfolder)
+                    self.__persist_purges(videos)
+                    shutil.rmtree(staging_dir)
+                    continue
                 video_name = data["video_name"]
                 video_subfolder = data.get("video_subfolder", "")
                 candidates = [
@@ -345,8 +440,6 @@ class DiskVideoFileStorage(VideoFileStorageBase):
                 self.__invoker.services.video_records.get(video_name)
                 self.rollback_delete(token)
             except Exception as error:
-                from invokeai.app.services.video_records.video_records_common import VideoRecordNotFoundException
-
                 if isinstance(error, VideoRecordNotFoundException):
                     shutil.rmtree(staging_dir, ignore_errors=True)
                 else:

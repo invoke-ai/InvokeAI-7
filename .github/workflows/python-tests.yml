@@ -56,19 +56,35 @@ jobs:
             os: ubuntu-24.04
             extra-index-url: 'https://download.pytorch.org/whl/cpu'
             github-env: $GITHUB_ENV
+            pytest-workers: logical
+            timeout-minutes: 30
           - platform: macos-default
             os: macOS-14
             github-env: $GITHUB_ENV
+            pytest-workers: logical
+            timeout-minutes: 30
           - platform: windows-cpu
             os: windows-2022
             github-env: $env:GITHUB_ENV
+            # Half the vCPUs, not one worker each. The tests that spawn helper processes --
+            # ffmpeg decoders, installer subprocesses -- bring their own threads, which the
+            # per-worker `OMP_NUM_THREADS=1` below does not cap, so a full-width run leaves this
+            # runner with no spare core and the deadline-sensitive tests miss their budgets
+            # non-deterministically. Two workers keep that headroom.
+            pytest-workers: '2'
+            # Roughly 1.5x the pytest step's four-worker wall time (~13.5 min), plus the job's
+            # ~1.5 min of checkout and install, plus margin.
+            timeout-minutes: 45
     name: 'py${{ matrix.python-version }}: ${{ matrix.platform }}'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30 # expected run time: 8-14 min, depending on platform and uv cache state
+    # Per platform: expected run time is 8-14 min on linux and macos, longer on windows, which
+    # runs fewer workers. See the matrix.
+    timeout-minutes: ${{ matrix.timeout-minutes }}
     env:
       PIP_USE_PEP517: '1'
       # One compute thread per worker. Torch otherwise sizes its thread pools to the whole
-      # machine, so `-n logical` puts vCPUs^2 threads on a runner that fight for the same cores.
+      # machine, so one worker per vCPU puts vCPUs^2 threads on a runner that fight for the same
+      # cores. This caps torch only; helper processes the tests spawn thread themselves.
       OMP_NUM_THREADS: '1'
       MKL_NUM_THREADS: '1'
 
@@ -136,5 +152,6 @@ jobs:
         if: ${{ steps.changed-files.outputs.python_any_changed == 'true' || inputs.always_run == true }}
         # `logical`, not `auto`: xdist's `auto` asks psutil for *physical* cores, which is half
         # the vCPUs a standard runner exposes. Much of the suite waits on timers and polls, so
-        # one worker per vCPU is the right level.
-        run: uv run --no-sync pytest -n logical --max-worker-restart=0
+        # one worker per vCPU is the right level where the runner has the headroom for it. The
+        # matrix carries the count, because windows needs a lower one.
+        run: uv run --no-sync pytest -n ${{ matrix.pytest-workers }} --max-worker-restart=0

@@ -89,6 +89,7 @@ describe('MapHoverCard', () => {
     });
 
     expect(mocks.getImageLabels).toHaveBeenCalledWith({ kind: 'video', name: 'clip.mp4' });
-    expect(text).toContain('clip');
+    // Named apart from the cluster's tags.
+    expect(text).toContain('Image tags: clip, surf');
   });
 });

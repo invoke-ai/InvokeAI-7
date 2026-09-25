@@ -465,3 +465,18 @@ def test_enqueue_batch_rejects_identity_reuse_for_another_origin(session_queue: 
 
     with pytest.raises(EnqueueIdempotencyConflictError):
         asyncio.run(session_queue.enqueue_batch("default", _batch(origin="webv2:project-2:item-2"), False, "user-1"))
+
+
+def test_enqueued_items_carry_their_project(session_queue: SqliteSessionQueue, mock_invoker: Invoker) -> None:
+    mock_invoker.services.project_records.create("system", "Owned", {}, project_id="project-1")
+
+    asyncio.run(
+        session_queue.enqueue_batch(
+            "default", _batch(idempotency_key="scoped", project_id="project-1"), False, "system"
+        )
+    )
+    asyncio.run(session_queue.enqueue_batch("default", _batch(idempotency_key="unscoped"), False, "system"))
+
+    items = session_queue.list_all_queue_items("default")
+    assert sorted(item.project_id for item in items if item.project_id is not None) == ["project-1", "project-1"]
+    assert [item.project_id for item in items].count(None) == 2

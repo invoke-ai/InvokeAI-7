@@ -7,6 +7,8 @@ import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationCon
 
 import type { HistoryEntry } from './history';
 
+import { collectHistoryMediaRefs } from './history';
+
 /** Nominal byte cost for a structural entry (small; actions are plain objects). */
 export const DOCUMENT_PATCH_DEFAULT_BYTES = 256;
 
@@ -32,6 +34,7 @@ export const createDocumentPatchEntry = (opts: CreateDocumentPatchEntryOptions):
 
   return {
     bytes,
+    heldAssetRefs: collectHistoryMediaRefs(forward, inverse),
     label,
     redo: () => dispatch(forward),
     undo: () => dispatch(inverse),

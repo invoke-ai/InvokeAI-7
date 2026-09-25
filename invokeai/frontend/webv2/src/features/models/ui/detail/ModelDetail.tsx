@@ -6,7 +6,7 @@ import { chakra, DataList, HStack, Icon, Menu, Portal, Separator, Stack, Text } 
 import { isConvertibleToDiffusers } from '@features/models/core/baseIdentity';
 import { isLinkableType } from '@features/models/core/relationships';
 import { isAbsoluteModelPath, resolveModelAbsolutePath } from '@features/models/core/schemas';
-import { formatBytes, getModelSourceHref } from '@features/models/core/taxonomy';
+import { getModelSourceHref } from '@features/models/core/taxonomy';
 import { useModelsSelector, type ModelsSnapshot } from '@features/models/data/modelsStore';
 import {
   ModelActionConfirmDialog,
@@ -14,6 +14,7 @@ import {
   type PendingModelAction,
 } from '@features/models/ui/shared/ModelActionsMenu';
 import { useNotify } from '@features/models/ui/useModelsNotify';
+import { formatBytes } from '@platform/i18n/languages';
 import { areArraysEqual } from '@platform/state/selectors';
 import { Button, IconButton, MenuContent } from '@platform/ui';
 import { HuggingFaceIcon } from '@platform/ui/VendoredIcon';

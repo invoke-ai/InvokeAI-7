@@ -10,6 +10,7 @@ import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
 import { getDocumentLayer, isNodeAbsent } from '@workbench/canvas-engine/document/documentIndex';
+import { collectHistoryMediaRefs } from '@workbench/canvas-engine/history/history';
 
 type ExportResult =
   | { status: 'ok'; surface: RasterSurface; rect: Rect; guard: LayerExportGuard; release(): void }
@@ -107,6 +108,7 @@ export class CopyLayerController {
       apply();
       this.deps.history.push({
         bytes: baked.rect.width * baked.rect.height * 4 + 256,
+        heldAssetRefs: collectHistoryMediaRefs(layer),
         label: 'Copy layer to raster',
         redo: apply,
         replayFailureAtomic: true,
