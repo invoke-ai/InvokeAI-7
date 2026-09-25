@@ -22,6 +22,7 @@ from invokeai.backend.quantization.fp8_scaled import (
     expand_weight_scale,
     extract_comfy_quant_hints,
     extract_fp8_scaled_layers,
+    forget_inconclusive_fp8_matmul_probe,
     is_matmul_usable_scale,
     is_scale_metadata_key,
     iter_weight_scale_pairs,
@@ -32,6 +33,7 @@ from invokeai.backend.quantization.fp8_scaled import (
     scaled_mm_linear,
     set_fp8_matmul_enabled,
     set_full_precision_hints_respected,
+    should_keep_fp8_weights,
     split_fp8_scaled_layers,
     strip_layer_path_prefix,
     warn_on_unattached_scales,
@@ -546,6 +548,18 @@ class TestDequantize:
         dequantize_fp8_scaled(sd, layers)
         assert torch.equal(sd["lin.weight"], dequantize_weight(q, scale, torch.bfloat16))
 
+    @pytest.mark.parametrize("grid_dtype", [torch.uint8, getattr(torch, "float8_e8m0fnu", torch.uint8)])
+    def test_an_undecoded_mx_grid_is_refused_not_multiplied(self, grid_dtype: torch.dtype):
+        """`reject_undecoded_mx_scale` keys on the scale's dtype, and this is the one caller that
+        used to cast the scale to the compute dtype first — which erases the evidence. An exponent
+        byte multiplied in as a linear factor is ~127x, paired with the wrong rows besides: the
+        finite-but-wrong noise the whole MX decode exists to prevent."""
+        q = torch.randn(256, 8, dtype=torch.bfloat16).to(FP8_DTYPE)
+        grid = torch.full((256, 8), 127, dtype=grid_dtype)
+
+        with pytest.raises(NotImplementedError, match="MXFP8"):
+            dequantize_weight(q, grid, torch.bfloat16)
+
 
 class TestAttach:
     def test_registers_non_persistent_buffers(self):
@@ -1001,7 +1015,9 @@ class TestProbeFailureCaching:
         with _probe_on_cpu():
             with mock.patch("torch._scaled_mm", side_effect=torch.OutOfMemoryError("transient")):
                 assert device_supports_fp8_matmul(device) is False
-            # A momentary OOM must not disable fp8 for the rest of the process.
+            # A momentary OOM must not disable fp8 for the rest of the process. The next *load* is
+            # what gives it another go; the forwards in between are answered from the record.
+            forget_inconclusive_fp8_matmul_probe(device)
             with mock.patch("torch._scaled_mm", return_value=torch.zeros(1)):
                 assert device_supports_fp8_matmul(device) is True
         reset_fp8_matmul_support_cache()
@@ -1308,10 +1324,44 @@ class TestProbeTransientFailures:
         with _probe_on_cpu():
             with mock.patch("torch._scaled_mm", side_effect=RuntimeError("CUDA driver reset")):
                 assert device_supports_fp8_matmul(device) is False
-            # Inconclusive, so the next load re-probes rather than the process losing fp8.
+            # Inconclusive, so the next *load* re-probes rather than the process losing fp8.
+            forget_inconclusive_fp8_matmul_probe(device)
             with mock.patch("torch._scaled_mm", return_value=torch.zeros(1)):
                 assert device_supports_fp8_matmul(device) is True
         reset_fp8_matmul_support_cache()
+
+    def test_an_inconclusive_probe_is_not_repeated_on_the_forward_path(self) -> None:
+        """`CustomLinear._can_use_fp8_matmul` asks once per quantized fp8 Linear per step.
+
+        Leaving an inconclusive answer unrecorded meant re-probing every one of them, every step,
+        for the whole generation -- measured on a 4090 at 32 probes/step for 32 Linears, against 1
+        in total once it is recorded. Each probe allocates three device tensors and launches a
+        `_scaled_mm` that is about to fail.
+        """
+        reset_fp8_matmul_support_cache()
+        device = torch.device("cuda", 0)
+        with _probe_on_cpu():
+            with mock.patch("torch._scaled_mm", side_effect=RuntimeError("CUDA driver reset")) as probe:
+                for _ in range(5):
+                    assert device_supports_fp8_matmul(device) is False
+            assert probe.call_count == 1, "the forward path re-probed"
+        reset_fp8_matmul_support_cache()
+
+    def test_a_load_gives_an_inconclusive_probe_another_go(self) -> None:
+        """The retry belongs to the load, which can afford one probe, and not to the forward."""
+        reset_fp8_matmul_support_cache()
+        device = torch.device("cuda", 0)
+        set_fp8_matmul_enabled(True)
+        try:
+            with _probe_on_cpu():
+                with mock.patch("torch._scaled_mm", side_effect=torch.OutOfMemoryError("transient")):
+                    assert should_keep_fp8_weights(device) is False
+                with mock.patch("torch._scaled_mm", return_value=torch.zeros(1)) as probe:
+                    assert should_keep_fp8_weights(device) is True
+                assert probe.call_count == 1
+        finally:
+            set_fp8_matmul_enabled(None)
+            reset_fp8_matmul_support_cache()
 
     def test_a_capability_error_is_cached(self) -> None:
         reset_fp8_matmul_support_cache()

@@ -13,6 +13,7 @@ called.
 
 from logging import getLogger
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -24,6 +25,19 @@ from invokeai.backend.util.fp8 import (
     get_model_compute_dtype,
     set_fp8_compute_dtype,
 )
+
+
+@pytest.fixture(autouse=True)
+def _device_holds_fp8():
+    """Answer the storage probe True for every test here.
+
+    These all drive the real cast through `_apply_fp8_layerwise_casting` on a `cuda` loader, and what
+    they assert is what `get_model_compute_dtype` reports afterwards -- not whether a device can hold
+    float8. The CUDA branch used to be answered True without asking, so this never had to be said;
+    the probe is real now, and a runner with no driver rightly fails it.
+    """
+    with patch("invokeai.backend.model_manager.load.load_default._device_supports_fp8_storage", return_value=True):
+        yield
 
 
 def _fp8_supported() -> bool:

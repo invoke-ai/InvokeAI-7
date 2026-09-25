@@ -393,11 +393,6 @@ class Ideogram4CheckpointModel(ModelLoader):
             # count the file already had. Measured on FLUX.2 Klein 4B, ~3% of the weights flush to
             # zero that way.
             keep_fp8 = self._keep_fp8_weights(config, SubModelType.Transformer)
-            if fp8_layers and not keep_fp8:
-                # Neither consumer asked. Fold the scales in: staying quantized would halve VRAM but
-                # dequantize on every forward, which is a cost nobody asked to pay.
-                dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
-                fp8_layers = {}
 
         with accelerate.init_empty_weights():
             model: torch.nn.Module = Ideogram4Transformer(Ideogram4Config())
@@ -429,8 +424,12 @@ class Ideogram4CheckpointModel(ModelLoader):
             )
             kept = 0
         else:
-            # Reserve before the split: it dequantizes the layers it cannot keep through float32,
-            # and a reservation made afterwards lets that transient peak land on an unreserved cache.
+            # Reserve before anything below widens a weight: the fold widens every scaled layer and
+            # the split dequantizes the ones it cannot keep through float32, so a reservation made
+            # afterwards lets either peak land on a cache that was only ever sized for the file.
+            # Where the weights are not kept the prediction charges every float at `model_dtype`,
+            # folded yet or not, so the number is the same on either side of the fold -- what changes
+            # is when the room exists.
             self._ram_cache.make_room(
                 predict_cast_state_dict_size(
                     sd,
@@ -441,6 +440,11 @@ class Ideogram4CheckpointModel(ModelLoader):
                     scaled_layers=fp8_layers,
                 )
             )
+            if fp8_layers and not keep_fp8:
+                # Neither consumer asked. Fold the scales in: staying quantized would halve VRAM but
+                # dequantize on every forward, which is a cost nobody asked to pay.
+                dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
+                fp8_layers = {}
             fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model, skip_patterns=skip_patterns)
             kept = cast_state_dict(sd, model_dtype, keep_fp8=keep_fp8, model=model, skip_patterns=skip_patterns)
 

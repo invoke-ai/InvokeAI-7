@@ -200,16 +200,21 @@ def test_with_the_fp8_matmul_the_codes_stay_and_the_scales_are_attached(monkeypa
     assert run.casting_calls == 0
 
 
-def test_room_is_reserved_before_the_scales_are_folded(monkeypatch, tmp_path) -> None:
-    # `split_fp8_scaled_layers` dequantizes what it cannot keep through float32, so a reservation
-    # made afterwards lets that transient peak land on an unreserved cache. Reserving first is
-    # invisible in the loaded model, so it is asserted where it happens.
+@pytest.mark.parametrize("keep_fp8", [True, False], ids=["fp8_compute", "folded"])
+def test_room_is_reserved_before_the_scales_are_folded(monkeypatch, tmp_path, keep_fp8: bool) -> None:
+    # Two steps widen weights and both must land on reserved room: `split_fp8_scaled_layers`
+    # dequantizes what it cannot keep through float32, and -- when neither consumer wants the codes
+    # -- the fold widens every scaled layer outright. Reserving first is invisible in the loaded
+    # model, so it is asserted where it happens.
+    #
+    # `keep_fp8=False` is the case that exercises the fold at all; with it true the fold never runs,
+    # so that parameter alone could not tell "reserved first" from "folded first".
     state_dict, _ = _checkpoint((KEPT, *SKIPPED))
 
-    _, run = _load(monkeypatch, tmp_path, state_dict, keep_fp8=True)
+    _, run = _load(monkeypatch, tmp_path, state_dict, keep_fp8=keep_fp8)
 
     fp8_at_reservation = sum(1 for dtype in run.dtypes_at_make_room.values() if dtype is FP8)
-    assert fp8_at_reservation == 3, "the fold ran before the cache was asked for room"
+    assert fp8_at_reservation == 3, "a weight was widened before the cache was asked for room"
 
 
 @pytest.mark.parametrize("path", SKIPPED)

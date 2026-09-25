@@ -220,6 +220,40 @@ def test_an_int8_convrot_layer_is_refused_rather_than_folded_unrotated(
     assert run.reserved == []
 
 
+def test_a_raw_fp8_weight_survives_a_split_that_empties_the_scaled_mapping(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The reservation and the cast have to decide with the same value, not the same expression.
+
+    `split_fp8_scaled_layers` rebinds `fp8_layers`, so reading `bool(fp8_layers)` at the cast reads
+    the *post-split* mapping while the reservation read the pre-split one. This checkpoint makes the
+    two disagree: its only scaled layer carries a block-wise scale that `scaled_mm` cannot apply, so
+    the split folds it and hands back nothing -- and a cast that re-derives its flag from that would
+    widen the *raw* fp8 weight too, after charging it one byte per element.
+    """
+    checkpoint, _, _ = _write_checkpoint(tmp_path, evidence="none")
+    tensors = load_file(checkpoint)
+    for layer in range(LAYERS):
+        # A layout the matmul cannot consume, so the split dequantizes this layer and drops it.
+        scaled = f"model.layers.{layer}.{FP8_PROJECTION}"
+        tensors[f"{scaled}.weight_scale"] = torch.full((KV_ROWS, HIDDEN // 16), 0.5)
+        # And one weight that arrives fp8 with no scale at all, which is what `keep_fp8` governs.
+        raw = f"model.layers.{layer}.self_attn.o_proj"
+        tensors[f"{raw}.weight"] = torch.randint(-8, 9, (HIDDEN, HIDDEN)).float().to(torch.float8_e4m3fn)
+    save_file(tensors, checkpoint)
+    run = prepare(SEAM, monkeypatch, geometry=_fp8_matmul(True), observe=WIDENING)
+
+    model = run.load(_config(checkpoint))
+
+    for layer in range(LAYERS):
+        attn = model.layers[layer].self_attn
+        # The premise: the split really did fold the only scaled layer, so `fp8_layers` came back empty.
+        assert attn.v_proj.weight.dtype is COMPUTE_DTYPE, "the block-wise layer was expected to be folded"
+        # The claim: the raw fp8 weight is still held the way the reservation was told it would be.
+        assert attn.o_proj.weight.dtype is torch.float8_e4m3fn
+    assert len(run.reserved) == 1
+
+
 def test_a_checkpoint_without_nvfp4_layers_loads_as_before(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     checkpoint, expected, _ = _write_checkpoint(tmp_path, evidence="none")
     run = prepare(SEAM, monkeypatch, geometry=_fp8_matmul(False), observe=WIDENING)

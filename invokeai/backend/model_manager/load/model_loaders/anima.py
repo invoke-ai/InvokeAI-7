@@ -188,24 +188,20 @@ class AnimaCheckpointModel(ModelLoader):
             **strip_layer_path_prefix(header_hints),
         }
         fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
-        if fp8_layers and not keep_fp8:
-            # Neither the matmul nor FP8 Storage asked for them, so keeping them quantized would
-            # dequantize on every forward to save memory nobody wanted saved. Fold the scale in.
-            dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
-            fp8_layers = {}
 
         # Create an empty AnimaTransformer with Anima's default architecture parameters
         with accelerate.init_empty_weights():
             model = AnimaTransformer(**ANIMA_TRANSFORMER_CONFIG)
 
         skip_patterns = _model_declared_skip_patterns(model)
-        # Layers the cast would dequantize anyway are folded here, scale applied, so the cast never
-        # strips a scale that can no longer be put back.
-        # Reserve before the split, not after: `split_fp8_scaled_layers` dequantizes its unusable
-        # subset through fp32, so reserving afterwards lets that transient peak land on an
-        # unreserved cache. `scaled_layers` is what keeps that honest: the split also widens layers
-        # whose scale layout `scaled_mm` cannot apply, and without the mapping the prediction would
-        # charge those 1 byte/element and arrive at 2.
+        # Reserve before anything below widens a weight -- the fold and the split both do, and
+        # reserving afterwards lets either peak land on a cache that was only ever sized for the
+        # file. `scaled_layers` is what keeps the prediction honest where the weights are kept: the
+        # split also widens layers whose scale layout `scaled_mm` cannot apply, and without the
+        # mapping the prediction would charge those 1 byte/element and arrive at 2. Where they are
+        # not kept the prediction charges every float at `model_dtype`, folded yet or not, so the
+        # number is the same on either side of the fold -- what changes is when the room exists.
+        # Building the model first costs nothing: `init_empty_weights` leaves every param on meta.
         self._ram_cache.make_room(
             predict_cast_state_dict_size(
                 sd,
@@ -217,6 +213,14 @@ class AnimaCheckpointModel(ModelLoader):
             )
         )
 
+        if fp8_layers and not keep_fp8:
+            # Neither the matmul nor FP8 Storage asked for them, so keeping them quantized would
+            # dequantize on every forward to save memory nobody wanted saved. Fold the scale in.
+            dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
+            fp8_layers = {}
+
+        # Layers the cast would dequantize anyway are folded here too, scale applied, so the cast
+        # never strips a scale that can no longer be put back.
         fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model, skip_patterns=skip_patterns)
         kept = cast_state_dict(sd, model_dtype, keep_fp8=keep_fp8, model=model, skip_patterns=skip_patterns)
 

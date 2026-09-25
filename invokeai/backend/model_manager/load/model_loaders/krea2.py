@@ -496,11 +496,6 @@ class Krea2CheckpointModel(ModelLoader):
             # ComfyUI 'scaled fp8' checkpoints (fp8 weight + .weight_scale, optionally .input_scale).
             fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
             keep_fp8 = self._keep_fp8_weights(config, SubModelType.Transformer)
-            if fp8_layers and not keep_fp8:
-                # Neither consumer asked for them: keeping them quantized would halve VRAM but
-                # dequantize on every forward, so fold the scales into the weights.
-                dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
-                fp8_layers = {}
 
         with accelerate.init_empty_weights():
             model = Krea2Transformer2DModel(**KREA2_TRANSFORMER_CONFIG)
@@ -537,16 +532,14 @@ class Krea2CheckpointModel(ModelLoader):
             fp8_layers = {}
             kept = 0
         else:
-            # Scaled layers the cast would dequantize anyway (skip patterns, non-Linear weights) are
-            # folded here, with their scale applied. Left to `cast_state_dict` they would be cast
-            # *without* it and `attach_fp8_scales` would then skip them for no longer being fp8 —
-            # a weight silently off by 1/weight_scale. Krea-2's `time_embed.linear_1/linear_2` are
-            # ordinary quantized Linears in a ComfyUI export and match the model's `time_embed` pattern.
-            # Reserve before the split, not after: `split_fp8_scaled_layers` dequantizes its unusable
-            # subset through fp32, so reserving afterwards lets that transient peak land on an
-            # unreserved cache. `scaled_layers` is what keeps that honest: the split also widens layers
-            # whose scale layout `scaled_mm` cannot apply, and without the mapping the prediction would
-            # charge those 1 byte/element and arrive at 2.
+            # Reserve before anything below widens a weight -- the fold and the split both do, and
+            # reserving afterwards lets either peak land on a cache that was only ever sized for the
+            # file. `scaled_layers` is what keeps the prediction honest where the weights are kept:
+            # the split also widens layers whose scale layout `scaled_mm` cannot apply, and without
+            # the mapping the prediction would charge those 1 byte/element and arrive at 2. Where
+            # they are not kept the prediction charges every float at `model_dtype`, folded yet or
+            # not, so the number is the same on either side of the fold -- what changes is when the
+            # room exists.
             self._ram_cache.make_room(
                 predict_cast_state_dict_size(
                     sd,
@@ -559,6 +552,17 @@ class Krea2CheckpointModel(ModelLoader):
                 + nvfp4_bytes
             )
 
+            if fp8_layers and not keep_fp8:
+                # Neither consumer asked for them: keeping them quantized would halve VRAM but
+                # dequantize on every forward, so fold the scales into the weights.
+                dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
+                fp8_layers = {}
+
+            # Scaled layers the cast would dequantize anyway (skip patterns, non-Linear weights) are
+            # folded by the split, with their scale applied. Left to `cast_state_dict` they would be
+            # cast *without* it and `attach_fp8_scales` would then skip them for no longer being fp8 —
+            # a weight silently off by 1/weight_scale. Krea-2's `time_embed.linear_1/linear_2` are
+            # ordinary quantized Linears in a ComfyUI export and match the model's `time_embed` pattern.
             fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model, skip_patterns=skip_patterns)
             # A checkpoint with raw fp8 weights (fp8 tensors and no weight_scale) yields no fp8_layers at
             # all, but its weights are still usable on the tensor cores, so the same `keep_fp8` covers
@@ -909,10 +913,6 @@ class Qwen3VLEncoderCheckpointLoader(_Qwen3VLEncoderSingleFileLoader[Qwen3VLEnco
             # *unscaled* fp8 -- on a scaled checkpoint that is ~3% of the weights lost to underflow,
             # for the byte count the file already had.
             use_fp8_storage = source_is_fp8 and _device_supports_fp8_storage(self._torch_device, self._logger)
-            if fp8_layers and not keep_matmul_fp8 and not use_fp8_storage:
-                # Neither consumer wants them packed: fold the scales into the weights.
-                dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
-                fp8_layers = {}
 
         te_config = self._load_te_config(config)
         with accelerate.init_empty_weights():
@@ -958,12 +958,20 @@ class Qwen3VLEncoderCheckpointLoader(_Qwen3VLEncoderSingleFileLoader[Qwen3VLEnco
             # GiB on the 4B encoder) for a round trip that ends where it started -- e4m3fn is a subset
             # of bf16, so it is value-exact. Keep them for either consumer.
             keep_fp8 = keep_matmul_fp8 or use_fp8_storage
-            # Reserve before the split: it dequantizes its unusable subset through fp32, so reserving
-            # afterwards lets that transient peak land on an unreserved cache. `scaled_layers` keeps the
-            # prediction in step with the split's own scale-layout filter.
+            # Reserve before anything below widens a weight: the fold widens every scaled layer and
+            # the split dequantizes its unusable subset through fp32, so reserving afterwards lets
+            # either peak land on a cache that was only ever sized for the file. `scaled_layers`
+            # keeps the prediction in step with the split's own scale-layout filter; where the
+            # weights are not kept it charges every float at `model_dtype`, folded yet or not, so the
+            # number is the same on either side of the fold.
             self._ram_cache.make_room(
                 predict_cast_state_dict_size(sd, model_dtype, keep_fp8=keep_fp8, model=model, scaled_layers=fp8_layers)
             )
+            if fp8_layers and not keep_fp8:
+                # Neither consumer wants them packed: fold the scales into the weights. Both consumers
+                # were resolved above, next to the matmul probe, because this fold is irreversible.
+                dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
+                fp8_layers = {}
             fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model)
             # No `skip_patterns` here on purpose: this model declares none, and the storage pass below
             # applies `_FP8_DEFAULT_SKIP_PATTERNS` itself. Those two lists used to have to not intersect

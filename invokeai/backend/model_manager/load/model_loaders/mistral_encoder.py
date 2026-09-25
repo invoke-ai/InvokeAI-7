@@ -1278,6 +1278,13 @@ class MistralEncoderCheckpointLoader(ModelLoader):
         }
         fp8_layers = {_bare_mistral_path(path): layer for path, layer in fp8_layers.items()}
 
+        # Decided once, here, and handed to both the prediction and the cast. Reading `bool(fp8_layers)`
+        # at each call site is not the same expression twice: `split_fp8_scaled_layers` rebinds the name
+        # below, so the cast would see the *post-split* mapping. An encoder whose scaled layers are all
+        # block-wise (or all skip-patterned) empties it, the cast would flip to `keep_fp8=False` and widen
+        # every *raw* fp8 weight too -- each charged one byte per element in the reservation above.
+        keep_raw_fp8 = bool(fp8_layers)
+
         # One reservation, before the dequantizing branch or the split widens a single weight -- `make_room` makes
         # that much room rather than adding to an earlier one. The state dict is sized by the predicate the split and
         # the cast below decide with, the nvfp4 layers as they will be held.
@@ -1285,7 +1292,7 @@ class MistralEncoderCheckpointLoader(ModelLoader):
             predict_cast_state_dict_size(
                 sd,
                 model_dtype,
-                keep_fp8=bool(fp8_layers),
+                keep_fp8=keep_raw_fp8,
                 model=model,
                 skip_patterns=skip_patterns,
                 scaled_layers=fp8_layers,
@@ -1307,7 +1314,7 @@ class MistralEncoderCheckpointLoader(ModelLoader):
         # Layers the cast would dequantize anyway are folded here, scale applied, so the cast never
         # strips a scale that can no longer be put back.
         fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model, skip_patterns=skip_patterns)
-        cast_state_dict(sd, model_dtype, keep_fp8=bool(fp8_layers), model=model, skip_patterns=skip_patterns)
+        cast_state_dict(sd, model_dtype, keep_fp8=keep_raw_fp8, model=model, skip_patterns=skip_patterns)
 
         if nvfp4_payloads:
             packed = install_nvfp4_layers(model, sd, nvfp4_payloads, model_dtype, skip_patterns)

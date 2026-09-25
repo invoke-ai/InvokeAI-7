@@ -829,13 +829,6 @@ class FluxCheckpointModel(ModelLoader):
         # The `match` above admits only the transformer, so that is the submodel the cast will be
         # asked about too -- keep and cast therefore decide on the same input.
         keep_fp8 = self._keep_fp8_weights(config, SubModelType.Transformer)
-        if fp8_layers and not keep_fp8:
-            # Neither consumer asked for them, and dequantizing per forward would cost speed for
-            # memory nobody wanted saved. Fold the scale into the weight instead — the legacy
-            # result, except the scale is now actually applied rather than dropped.
-            dequantize_fp8_scaled(sd, fp8_layers, torch.bfloat16)
-            fp8_layers = {}
-
         skip_patterns = _model_declared_skip_patterns(model)
 
         if int8_markers:
@@ -861,13 +854,13 @@ class FluxCheckpointModel(ModelLoader):
                 f"FLUX: kept {len(quantized)} layer(s) in int8 (int8_tensorwise checkpoint, dequantized per forward)"
             )
             return model
-        # Scaled layers that the cast would dequantize anyway are folded here, scale applied, so
-        # `cast_state_dict` never strips a scale that can no longer be put back.
-        # Reserve before the split, not after: `split_fp8_scaled_layers` dequantizes its unusable
-        # subset through fp32, so reserving afterwards lets that transient peak land on an
-        # unreserved cache. `scaled_layers` is what keeps that honest: the split also widens layers
-        # whose scale layout `scaled_mm` cannot apply, and without the mapping the prediction would
-        # charge those 1 byte/element and arrive at 2.
+        # Reserve before anything below widens a weight -- the fold and the split both do, and
+        # reserving afterwards lets either peak land on a cache that was only ever sized for the
+        # file. `scaled_layers` is what keeps the prediction honest where the weights are kept: the
+        # split also widens layers whose scale layout `scaled_mm` cannot apply, and without the
+        # mapping the prediction would charge those 1 byte/element and arrive at 2. Where they are
+        # not kept the prediction charges every float at the compute dtype, folded yet or not, so
+        # the number is the same on either side of the fold -- what changes is when the room exists.
         self._ram_cache.make_room(
             predict_cast_state_dict_size(
                 sd,
@@ -879,6 +872,15 @@ class FluxCheckpointModel(ModelLoader):
             )
         )
 
+        if fp8_layers and not keep_fp8:
+            # Neither consumer asked for them, and dequantizing per forward would cost speed for
+            # memory nobody wanted saved. Fold the scale into the weight instead — the legacy
+            # result, except the scale is now actually applied rather than dropped.
+            dequantize_fp8_scaled(sd, fp8_layers, torch.bfloat16)
+            fp8_layers = {}
+
+        # Scaled layers that the cast would dequantize anyway are folded here too, scale applied, so
+        # `cast_state_dict` never strips a scale that can no longer be put back.
         fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, torch.bfloat16, model=model, skip_patterns=skip_patterns)
         # Everything else is cast to bfloat16, the only dtype currently supported for inference.
         kept = cast_state_dict(sd, torch.bfloat16, keep_fp8=keep_fp8, model=model, skip_patterns=skip_patterns)
@@ -1237,6 +1239,18 @@ class Flux2CheckpointModel(ModelLoader):
             }
 
             fp8_layers = extract_fp8_scaled_layers(converted_sd, layer_hints=layer_hints)
+
+            if not keep_fp8:
+                # Reserve before the two steps below widen weights: the scale fold, and
+                # `_dequantize_fp8_weights`'s raw-fp8 conversion. Unlike its peers this loader cannot
+                # leave that to the one reservation further down -- the architecture is read off these
+                # very keys, so no model exists yet to size a prediction against. It does not need one
+                # here: `predict_cast_state_dict_size` consults the model only to decide what *stays*
+                # quantized, and with `keep_fp8` false nothing does, so the model-less number is the
+                # same one. With `keep_fp8` true neither step widens anything, and the reservation
+                # below covers the split on its own.
+                self._ram_cache.make_room(predict_cast_state_dict_size(converted_sd, torch.bfloat16, keep_fp8=False))
+
             if fp8_layers and not keep_fp8:
                 # Neither the matmul nor FP8 Storage asked for them, so keeping them quantized would
                 # dequantize on every forward to save memory nobody wanted saved. Fold the scale in

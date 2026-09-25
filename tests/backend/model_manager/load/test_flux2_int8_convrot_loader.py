@@ -136,7 +136,7 @@ SEAM = Seam(
 )
 
 
-def _driver(monkeypatch, tmp_path, state_dict: dict, header: dict | None = None):
+def _driver(monkeypatch, tmp_path, state_dict: dict, header: dict | None = None, observe: tuple[str, ...] = ()):
     checkpoint = tmp_path / "flux-2-klein-9b-int8-convrot.safetensors"
     checkpoint.touch()
     config = Main_Checkpoint_Flux2_Config.model_construct(
@@ -149,7 +149,7 @@ def _driver(monkeypatch, tmp_path, state_dict: dict, header: dict | None = None)
         # module symbol being gone.
         patch.setattr(flux, "should_keep_fp8_weights", lambda _device: False, raising=False)
 
-    run = prepare(SEAM, monkeypatch, state_dict=state_dict, metadata=header, geometry=geometry)
+    run = prepare(SEAM, monkeypatch, state_dict=state_dict, metadata=header, geometry=geometry, observe=observe)
     # An instance attribute shadows the method, which is what keeps this working either way.
     run.loader._keep_fp8_weights = lambda _config, _submodel=None: False
     return run, config
@@ -499,3 +499,24 @@ def test_a_header_hint_reaches_every_projection_the_fused_qkv_became(monkeypatch
         marked = model.get_submodule(f"transformer_blocks.0.attn.{projection}")
         assert marked._fp8_full_precision_matmul is True, projection
     assert model.get_submodule("transformer_blocks.0.attn.to_out.0")._fp8_full_precision_matmul is False
+
+
+def test_room_is_reserved_before_the_scales_are_folded(monkeypatch, tmp_path) -> None:
+    """This loader cannot reach its main reservation before it widens, so it needs an earlier one.
+
+    Its architecture is read off the converted keys, so no model exists at fold time to size a
+    prediction against -- unlike every peer in this series, which builds an empty model first and
+    reserves once. Left alone, the fold and `_dequantize_fp8_weights` both widen weights against a
+    cache that `_load_and_cache` sized for the file alone: roughly another file size, unreserved, on
+    the way to a 9B transformer.
+
+    The model-less prediction is exact here because it is only taken when nothing stays quantized,
+    and that is the only case in which either step widens anything.
+    """
+    state_dict, _ = _scaled_fp8_checkpoint()
+    run, config = _driver(monkeypatch, tmp_path, state_dict, observe=("dequantize_fp8_scaled",))
+
+    run.load(config)
+
+    assert [step for step, _ in run.order] == ["dequantize_fp8_scaled"], run.order
+    assert all(reserved for _step, reserved in run.order), run.order

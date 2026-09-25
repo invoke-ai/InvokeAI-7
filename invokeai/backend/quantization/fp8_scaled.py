@@ -722,6 +722,15 @@ _MM_ALIGNMENT = 16
 
 _fp8_mm_supported: dict[int, bool] = {}
 
+# Devices whose probe could not be *carried out* (see `_probe_fp8_matmul`). Deliberately apart from
+# the result cache above, because the two are read by callers with opposite needs. A load can afford
+# to re-probe and must, or one transient OOM would disable fp8 for the rest of the process; a
+# forward cannot, because `CustomLinear._can_use_fp8_matmul` asks once per quantized Linear per step
+# and an unrecorded inconclusive answer means probing all of them, every step, forever. So the
+# answer is recorded for the forward path and `should_keep_fp8_weights` drops it, which keeps the
+# retry on the load where it belongs.
+_fp8_mm_inconclusive: set[int] = set()
+
 # fp8 compute quantizes the *activations* as well, so it changes numerics: an existing install would
 # start producing different images at the same seed. It is therefore opt-in (`fp8_compute` in
 # invokeai.yaml) for one release before becoming the default.
@@ -844,6 +853,10 @@ def device_supports_fp8_matmul(device: torch.device) -> bool:
     cached = _fp8_mm_supported.get(index)
     if cached is not None:
         return cached
+    if index in _fp8_mm_inconclusive:
+        # A probe already failed to answer for this device and nothing has started a new load since.
+        # Re-running it here would run it on every quantized Linear of every step.
+        return False
     # The capability check is only a cheap pre-filter that spares older CUDA cards the probe;
     # it is deliberately not trusted on its own (see `_probe_fp8_matmul`).
     if not (torch.version.hip is not None or torch.cuda.get_device_capability(index) >= (8, 9)):
@@ -851,16 +864,31 @@ def device_supports_fp8_matmul(device: torch.device) -> bool:
         return False
     probed = _probe_fp8_matmul(index)
     if probed is None:
-        # Inconclusive: answer this call conservatively but leave the cache empty so the next load
-        # re-probes instead of the process being stuck without fp8 after one transient OOM.
+        # Inconclusive: answer conservatively, and record *that* rather than the verdict, so the next
+        # load re-probes while the forwards in between stay cheap.
+        _fp8_mm_inconclusive.add(index)
         return False
     _fp8_mm_supported[index] = probed
     return probed
 
 
+def forget_inconclusive_fp8_matmul_probe(device: torch.device) -> None:
+    """Let the next support check re-probe a device whose probe could not be carried out.
+
+    Called at the head of a load. A probe that failed for want of VRAM, or during a driver hiccup,
+    must not outlive the load it happened on -- but it also must not be retried from the forward
+    path. This is the boundary between the two.
+    """
+    if device.type != "cuda" or not torch.cuda.is_available():
+        return
+    index = device.index if device.index is not None else torch.cuda.current_device()
+    _fp8_mm_inconclusive.discard(index)
+
+
 def reset_fp8_matmul_support_cache() -> None:
     """Forget the probed per-device support. For tests; the answer cannot change at runtime."""
     _fp8_mm_supported.clear()
+    _fp8_mm_inconclusive.clear()
 
 
 def should_keep_fp8_weights(device: torch.device) -> bool:
@@ -869,8 +897,13 @@ def should_keep_fp8_weights(device: torch.device) -> bool:
     Only true when the fp8 matmul is both enabled and usable, because keeping weights quantized
     without it is the worst of both worlds: the same VRAM as fp8 but a dequantize round trip on
     every forward (measured slower than plain bf16).
+
+    This is the load path's only way in, so it is where an inconclusive probe is given another go.
     """
-    return is_fp8_matmul_enabled() and device_supports_fp8_matmul(device)
+    if not is_fp8_matmul_enabled():
+        return False
+    forget_inconclusive_fp8_matmul_probe(device)
+    return device_supports_fp8_matmul(device)
 
 
 def _is_fp8_matmul_weight(key: str, tensor: Any, model: torch.nn.Module | None) -> bool:
@@ -1111,6 +1144,11 @@ def dequantize_weight(weight: torch.Tensor, weight_scale: torch.Tensor | None, d
     out = weight.to(dtype)
     if weight_scale is None:
         return out
+    # Refuse an MX grid here, before the cast. `expand_weight_scale` makes the same check, but it
+    # keys on the scale's dtype, and casting to the compute dtype is exactly what erases that
+    # evidence — so the guard below would be unreachable on this path and an undecoded exponent
+    # byte would be multiplied in as a linear factor (~127x, and paired with the wrong rows).
+    reject_undecoded_mx_scale("<weight_scale>", weight_scale)
     scale = weight_scale.to(device=out.device, dtype=dtype)
     return out * expand_weight_scale(out, scale)
 

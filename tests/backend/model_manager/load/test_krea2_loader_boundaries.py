@@ -718,7 +718,7 @@ class _TinyNativeKrea2(torch.nn.Module):
         self.transformer_blocks = torch.nn.ModuleList([_TinyNativeKrea2Block(self.WIDTH)])
 
 
-def _native_fp8_driver(monkeypatch, tmp_path, state_dict):
+def _native_fp8_driver(monkeypatch, tmp_path, state_dict, observe: tuple[str, ...] = ()):
     import diffusers
     import safetensors.torch
 
@@ -737,6 +737,7 @@ def _native_fp8_driver(monkeypatch, tmp_path, state_dict):
         state_dict=state_dict,
         metadata=None,
         geometry=lambda patch: patch.setattr(diffusers, "Krea2Transformer2DModel", _TinyNativeKrea2, raising=False),
+        observe=observe,
     )
     return run, config
 
@@ -823,3 +824,34 @@ def test_a_scale_on_a_reshaped_table_is_reported_rather_than_silently_absorbed(m
 
     reports = [call.args[0] for call in run.loader._logger.info.call_args_list if "side-channel" in call.args[0]]
     assert reports and "blocks.0.mod" in reports[0], f"the lost scale was not reported: {reports}"
+
+
+def test_room_is_reserved_before_the_scaled_weights_are_widened(monkeypatch, tmp_path) -> None:
+    """Both widening steps have to land on reserved room, and the fold is the earlier one.
+
+    `_load_and_cache` reserves the *file* size before this loader runs, so a fold that widens every
+    scaled layer 1 -> 2 bytes before `make_room` puts roughly another file size on a cache that was
+    never asked for it. The split has the same problem and its own fp32 transient besides.
+
+    Watched through `run.order` rather than `dtypes_at_make_room`: this path renames into a fresh
+    dict, so the served one never shows the widening at all.
+    """
+    from tests.fixtures.quantized_payloads import quantize_scaled_fp8
+
+    width = _TinyNativeKrea2.WIDTH
+    torch.manual_seed(0)
+    payload = quantize_scaled_fp8(torch.randn(width, width))
+    state_dict = {
+        **_native_block(width),
+        "blocks.0.attn.wq.weight": payload.codes,
+        "blocks.0.attn.wq.weight_scale": payload.scale,
+    }
+    widening = ("dequantize_fp8_scaled", "split_fp8_scaled_layers")
+    run, config = _native_fp8_driver(monkeypatch, tmp_path, state_dict, observe=widening)
+
+    model = run.load(config)
+
+    # The premise: neither consumer wanted the codes, so the fold really did run.
+    assert torch.allclose(model.transformer_blocks[0].attn.to_q.weight.float(), payload.dequantized, atol=1e-5)
+    assert [step for step, _ in run.order] == list(widening), run.order
+    assert all(reserved for _step, reserved in run.order), run.order

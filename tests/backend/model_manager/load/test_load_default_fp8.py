@@ -14,6 +14,7 @@ Covers:
 """
 
 import copy
+from contextlib import contextmanager
 from logging import getLogger
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -67,6 +68,22 @@ def _make_quantized_config(fmt: ModelFormat = ModelFormat.GGUFQuantized):
     return config
 
 
+_STORAGE_PROBE = "invokeai.backend.model_manager.load.load_default._device_supports_fp8_storage"
+
+
+@contextmanager
+def _device_holds_fp8():
+    """Answer the storage probe True.
+
+    For the tests that ask *which* models opt into fp8, or what the cast does to a model that did.
+    Neither question is about whether a device can hold float8, and the answer has to be supplied
+    because the probe is real now: the CUDA branch used to be answered True without asking, which is
+    why these tests used to pass on a runner with no driver. One that has none rightly fails it.
+    """
+    with patch(_STORAGE_PROBE, return_value=True):
+        yield
+
+
 @pytest.mark.parametrize(
     "config,submodel",
     [
@@ -88,21 +105,19 @@ def test_should_use_fp8_does_not_probe_the_device_for_excluded_models(config, su
     SYCL init on a thread that never generates.
     """
     loader = _make_loader("xpu")
-    probe_path = "invokeai.backend.model_manager.load.load_default._device_supports_fp8_storage"
-    with patch(probe_path) as mock_probe:
+    with patch(_STORAGE_PROBE) as mock_probe:
         assert loader._should_use_fp8(config, submodel) is False
     mock_probe.assert_not_called()
 
 
 def test_should_use_fp8_probes_the_device_when_fp8_is_requested():
     loader = _make_loader("xpu")
-    probe_path = "invokeai.backend.model_manager.load.load_default._device_supports_fp8_storage"
     config = _make_config(ModelType.Main, fp8=True)
-    with patch(probe_path, return_value=True) as mock_probe:
+    with patch(_STORAGE_PROBE, return_value=True) as mock_probe:
         assert loader._should_use_fp8(config, None) is True
     mock_probe.assert_called_once()
     # An unsupported device still vetoes, just without probing on every unrelated load.
-    with patch(probe_path, return_value=False):
+    with patch(_STORAGE_PROBE, return_value=False):
         assert loader._should_use_fp8(config, None) is False
 
 
@@ -124,7 +139,8 @@ def test_should_use_fp8_excludes_lora():
 
 def test_should_use_fp8_returns_true_for_main_with_fp8():
     loader = _make_loader(device="cuda")
-    assert loader._should_use_fp8(_make_config(ModelType.Main, fp8=True)) is True
+    with _device_holds_fp8():
+        assert loader._should_use_fp8(_make_config(ModelType.Main, fp8=True)) is True
 
 
 def test_should_use_fp8_returns_false_for_main_without_fp8():
@@ -149,10 +165,11 @@ def test_should_use_fp8_excludes_prompt_enhancer(submodel_type: SubModelType):
     """
     loader = _make_loader(device="cuda")
     config = _make_config(ModelType.Main, fp8=True, base=BaseModelType.ErnieImage)
-    assert loader._should_use_fp8(config, submodel_type) is False
-    # Sanity: the same config *does* opt the transformer in, so the assertion above is about the
-    # submodel exclusion and not about the config failing to enable fp8 at all.
-    assert loader._should_use_fp8(config, SubModelType.Transformer) is True
+    with _device_holds_fp8():
+        assert loader._should_use_fp8(config, submodel_type) is False
+        # Sanity: the same config *does* opt the transformer in, so the assertion above is about the
+        # submodel exclusion and not about the config failing to enable fp8 at all.
+        assert loader._should_use_fp8(config, SubModelType.Transformer) is True
 
 
 class _RaisingModule(torch.nn.Module):
@@ -184,7 +201,7 @@ def test_wrap_forward_restores_storage_dtype_on_exception():
     for p in module.parameters(recurse=False):
         p.data = p.data.to(storage_dtype)
 
-    ModelLoader._wrap_forward_with_fp8_cast(module, storage_dtype, compute_dtype)
+    ModelLoader._wrap_forward_with_fp8_cast(module, compute_dtype)
 
     # Sanity: params start in storage dtype.
     assert module.weight.dtype == storage_dtype
@@ -219,12 +236,89 @@ def test_wrap_forward_casts_to_compute_then_back_on_success():
     for p in module.parameters(recurse=False):
         p.data = p.data.to(storage_dtype)
 
-    ModelLoader._wrap_forward_with_fp8_cast(module, storage_dtype, compute_dtype)
+    ModelLoader._wrap_forward_with_fp8_cast(module, compute_dtype)
 
     module(torch.zeros(4, dtype=compute_dtype))
 
     assert seen_dtypes == [compute_dtype]
     assert module.weight.dtype == storage_dtype
+
+
+@pytest.mark.skipif(not _fp8_supported(), reason="torch.float8_e4m3fn not available")
+def test_the_forward_puts_the_stored_weights_back_rather_than_re_quantizing():
+    """The exit must restore the same tensors, or the cache's RAM copy is orphaned.
+
+    `CachedModelWithPartialLoad` snapshots `model.state_dict()` at `put()` and charges the RAM
+    budget from it. A post-hook that re-derived the storage dtype with `.to()` allocated new
+    storage, so from the first forward on, every CPU-resident param pointed at a private copy
+    while that snapshot pinned the original: both live, 2 bytes per element against a budget that
+    still said 1, for as long as the weights stayed in RAM.
+    """
+    model = torch.nn.Sequential(*[torch.nn.Linear(64, 64, bias=False) for _ in range(4)]).to(torch.bfloat16)
+    ModelLoader._apply_fp8_to_nn_module(model, storage_dtype=torch.float8_e4m3fn, compute_dtype=torch.bfloat16)
+    cached = model.state_dict()
+
+    model(torch.randn(1, 64, dtype=torch.bfloat16))
+
+    for name, snapshot in cached.items():
+        param = model.get_parameter(name)
+        assert param.dtype is torch.float8_e4m3fn, name
+        assert param.data_ptr() == snapshot.data_ptr(), f"{name}: the RAM snapshot now pins a second copy"
+
+
+@pytest.mark.skipif(not _fp8_supported(), reason="torch.float8_e4m3fn not available")
+def test_a_doubly_wrapped_module_still_ends_with_the_weights_stored():
+    """Only the outermost hook pair may restore, which is what the depth counter is for.
+
+    `_apply_fp8_to_nn_module` carries no idempotency guard of its own — the marker check lives in
+    its caller — so a second pass over the same tree registers a second hook pair. Without the
+    counter the inner pre-hook records the *widened* weight as the stored one and the module stays
+    in compute dtype for good: fp8 storage silently off, and the cache under-counting it by half.
+    """
+    model = torch.nn.Sequential(torch.nn.Linear(8, 8, bias=False)).to(torch.bfloat16)
+    ModelLoader._apply_fp8_to_nn_module(model, storage_dtype=torch.float8_e4m3fn, compute_dtype=torch.bfloat16)
+    cached = model.state_dict()
+    ModelLoader._apply_fp8_to_nn_module(model, storage_dtype=torch.float8_e4m3fn, compute_dtype=torch.bfloat16)
+    assert len(model[0]._forward_pre_hooks) == 2, "the premise is a module wrapped twice"
+
+    model(torch.randn(1, 8, dtype=torch.bfloat16))
+
+    assert model[0].weight.dtype is torch.float8_e4m3fn
+    assert model[0].weight.data_ptr() == cached["0.weight"].data_ptr()
+
+
+@pytest.mark.skipif(not _fp8_supported(), reason="torch.float8_e4m3fn not available")
+def test_a_widening_that_runs_out_of_memory_leaves_the_weights_stored():
+    """The widening is the likeliest allocation here to fail, and it must not strand the module.
+
+    It asks for twice the param's storage on a device the cache deliberately drives to its ceiling.
+    `always_call=True` runs the post-hook when it raises, so the record of what the params held has
+    to be in place before the first cast — otherwise the already-widened ones stay widened, and the
+    next forward records *those* as the stored ones, which makes it permanent.
+    """
+    module = torch.nn.Linear(8, 8).to(torch.bfloat16)
+    for p in module.parameters(recurse=False):
+        p.data = p.data.to(torch.float8_e4m3fn)
+    cached = {name: p.data for name, p in module.named_parameters()}
+    ModelLoader._wrap_forward_with_fp8_cast(module, torch.bfloat16)
+
+    real_to = torch.Tensor.to
+    calls = {"n": 0}
+
+    def failing_to(self, *args, **kwargs):
+        # Fail on the second widening, so one param is already widened when it raises.
+        if args and args[0] is torch.bfloat16:
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise torch.OutOfMemoryError("probe")
+        return real_to(self, *args, **kwargs)
+
+    with patch.object(torch.Tensor, "to", failing_to), pytest.raises(torch.OutOfMemoryError):
+        module(torch.randn(1, 8, dtype=torch.bfloat16))
+
+    for name, param in module.named_parameters():
+        assert param.dtype is torch.float8_e4m3fn, name
+        assert param.data_ptr() == cached[name].data_ptr(), f"{name}: restored a copy, not the stored tensor"
 
 
 def test_apply_fp8_to_nn_module_uses_wrapper():
@@ -234,7 +328,7 @@ def test_apply_fp8_to_nn_module_uses_wrapper():
     module = torch.nn.Linear(4, 4)
     with patch.object(ModelLoader, "_wrap_forward_with_fp8_cast") as mock_wrap:
         ModelLoader._apply_fp8_to_nn_module(module, torch.float16, torch.float32)
-    mock_wrap.assert_called_once_with(module, torch.float16, torch.float32)
+    mock_wrap.assert_called_once_with(module, torch.float32)
 
 
 def test_apply_fp8_to_nn_module_skips_norm_modules():
@@ -478,7 +572,8 @@ def test_should_use_fp8_allows_z_image():
     dtype now comes from the model itself, so the exclusion is obsolete.
     """
     loader = _make_loader(device="cuda")
-    assert loader._should_use_fp8(_make_config(ModelType.Main, fp8=True, base=BaseModelType.ZImage)) is True
+    with _device_holds_fp8():
+        assert loader._should_use_fp8(_make_config(ModelType.Main, fp8=True, base=BaseModelType.ZImage)) is True
 
 
 def test_wrap_forward_reaches_custom_linear_after_apply_custom_layers():
@@ -509,7 +604,7 @@ def test_wrap_forward_reaches_custom_linear_after_apply_custom_layers():
     parent = Parent()
     original_linear = parent.child
 
-    ModelLoader._wrap_forward_with_fp8_cast(original_linear, torch.float16, torch.float32)
+    ModelLoader._wrap_forward_with_fp8_cast(original_linear, torch.float32)
 
     apply_custom_layers_to_model(parent)
     new_child = parent.child
@@ -612,9 +707,23 @@ def _clear_fp8_probe_cache():
     _FP8_PROBE_FAILURE_REPORTED.clear()
 
 
-def test_device_supports_fp8_storage_cuda_is_unconditional():
-    """CUDA is answered without probing, so the result holds on machines with no GPU."""
-    assert _device_supports_fp8_storage(torch.device("cuda")) is True
+def test_device_supports_fp8_storage_probes_cuda_too():
+    """ROCm reports `device.type == "cuda"` and its float8 coverage varies by architecture.
+
+    Answering the whole CUDA branch True without asking let such a build pass the gate, have its
+    weights cast on the CPU -- which always works -- and moved to VRAM, and then raise
+    "not implemented for 'Float8_e4m3fn'" on the first forward, after the VRAM was committed.
+    """
+    ok, log = _probe_with_recorder(torch.device("cuda", 1))
+    assert ok is True
+    assert log == [torch.float8_e4m3fn, torch.device("cuda", 1), torch.bfloat16, torch.float16]
+
+
+def test_device_supports_fp8_storage_rejects_a_cuda_build_without_an_e4m3fn_upcast():
+    """Older gfx has no `e4m3fn` conversion at all, and gfx90a prefers `e4m3fnuz`. The fallback has
+    to be chosen here, not discovered mid-generation."""
+    ok, _ = _probe_with_recorder(torch.device("cuda"), fail_on=torch.bfloat16)
+    assert ok is False
 
 
 def test_device_supports_fp8_storage_rejects_cpu():
@@ -739,6 +848,37 @@ def test_keep_in_fp32_modules_are_not_cast():
     assert model.attn.weight.dtype == torch.float8_e4m3fn
 
 
+class TestComputeDtypeIsAlwaysAFloat:
+    """The compute dtype is read off the model's parameters, and not every parameter is arithmetic.
+
+    `_is_quantized_param` exists because a checkpoint quantized by an external tool can reach the
+    cast with packed `uint8` weights that `_should_use_fp8`'s format check cannot see. Taking the
+    *first* parameter's dtype would record one of those as the dtype the model computes in: the
+    pre-hook would widen every other layer to `uint8`, and `get_model_compute_dtype` would hand
+    `uint8` to the denoise loop. Finite garbage, nothing logged.
+    """
+
+    def _model(self, leading: torch.Tensor) -> torch.nn.Module:
+        model = torch.nn.Module()
+        # Registered first, so `model.parameters()` yields it first.
+        model.register_parameter("packed", torch.nn.Parameter(leading, requires_grad=False))
+        model.add_module("attn", torch.nn.Linear(4, 4).to(torch.bfloat16))
+        return model
+
+    def test_a_packed_leading_param_is_not_taken_as_the_compute_dtype(self) -> None:
+        """A leading *float8* param is covered by a different guard — `count_fp8_weights` returns
+        before the dtype is derived at all — so only the packed-integer case reaches this code."""
+        loader = _make_loader(device="cuda")
+        model = self._model(torch.zeros(4, 4, dtype=torch.uint8))
+
+        with patch.object(ModelLoader, "_should_use_fp8", return_value=True):
+            loader._apply_fp8_layerwise_casting(model, _make_config(ModelType.Main, fp8=True))
+
+        assert getattr(model, FP8_COMPUTE_DTYPE_ATTR) is torch.bfloat16
+        # And the cast actually ran against that dtype rather than skipping the model.
+        assert model.attn.weight.dtype is torch.float8_e4m3fn
+
+
 class TestAlreadyFp8StorageGuard:
     """FP8 storage must not run over weights that are already fp8 and headed for the tensor cores.
 
@@ -774,7 +914,10 @@ class TestAlreadyFp8StorageGuard:
         loader = _make_loader("cuda")
         model = torch.nn.Sequential(torch.nn.Linear(16, 32))
 
-        with patch("invokeai.backend.model_manager.load.load_default.should_keep_fp8_weights", return_value=True):
+        with (
+            _device_holds_fp8(),
+            patch("invokeai.backend.model_manager.load.load_default.should_keep_fp8_weights", return_value=True),
+        ):
             loader._apply_fp8_layerwise_casting(model, _make_config(ModelType.Main, fp8=True))
 
         assert model[0].weight.dtype is torch.float8_e4m3fn
@@ -792,7 +935,10 @@ class TestAlreadyFp8StorageGuard:
         loader = _make_loader("cuda")
         model = torch.nn.Sequential(torch.nn.Linear(16, 32))
 
-        with patch("invokeai.backend.model_manager.load.load_default.should_keep_fp8_weights", return_value=False):
+        with (
+            _device_holds_fp8(),
+            patch("invokeai.backend.model_manager.load.load_default.should_keep_fp8_weights", return_value=False),
+        ):
             loader._apply_fp8_layerwise_casting(model, _make_config(ModelType.Main, fp8=True))
 
         assert model[0].weight.dtype is torch.float8_e4m3fn
