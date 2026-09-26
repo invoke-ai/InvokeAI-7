@@ -1541,12 +1541,26 @@ class TestReservationCoversTheSideChannelItHolds:
     `make_room`, so those bytes are resident while the cache decides what to evict -- and they are in
     no reservation, because the predictor walks the state dict they are no longer in.
 
-    Measured on a 512x512 toy layer: the prediction comes back at exactly the widened weight,
-    524288 bytes, while the decoded grid holds another 32768 -- 6.2% short, in the direction that
-    makes the cache hand out room that is already spoken for. The grid is one entry per 32 weight
-    elements, so on Comfy-Org's 12 GB MXFP8 build it is around 1.5 GB. Same class as the overshoots
-    recorded at `z_image.py:697` and `krea2.py:588`; it reads as a rounding error only because one
-    reachable build uses the scheme.
+    Measured on a 512x512 toy layer, per element of the weight:
+
+        predicted (the widened bf16 weight)            2.000 B/element   524288 B
+        decoded grids, held for every layer at once    0.125 B/element    32768 B
+        per-layer fold transients (below)             12.000 B/element
+
+    The grid is the *smallest* unreserved term, and the only one held for the whole quantized set at
+    once, which is why it is what this class pins: one entry per 32 weight elements, so around 1.5 GB
+    on Comfy-Org's 12 GB MXFP8 build.
+
+    The larger term is transient and bounded differently. `dequantize_fp8_scaled` folds one layer at a
+    time, and for a block-wise grid `expand_weight_scale` `repeat_interleave`s it to the weight's full
+    width in float32 -- 4 B/element -- beside `weight.float()` and the float32 product, so the peak is
+    ~14 B/element of the *largest* layer against 2 predicted. `int8_convrot.py:607` records the policy
+    that absorbs such a transient in the reservation's slack, on the grounds that "the widened set is
+    by construction the small one". That justification does not transfer here: a block-wise scale is
+    never matmul-usable (`is_matmul_usable_scale`), so for MXFP8 the widened set is every quantized
+    Linear in the file.
+
+    Same class as the overshoots recorded at `z_image.py:697` and `krea2.py:588`.
     """
 
     @staticmethod
@@ -1569,8 +1583,11 @@ class TestReservationCoversTheSideChannelItHolds:
 
         assert "lin.weight_scale" not in sd
         assert grid.dtype is torch.float32 and stored_bytes * 4 == grid.nelement() * grid.element_size()
+        # `keep_fp8=True`, which is what the seams that can receive an MX build pass. The layer is
+        # charged 2 B/element either way -- a block-wise scale fails `is_matmul_usable_scale` -- but
+        # this is the branch where `scaled_layers` and `model` are consulted at all.
         assert (
-            predict_cast_state_dict_size(sd, torch.bfloat16, keep_fp8=False, model=model, scaled_layers=layers)
+            predict_cast_state_dict_size(sd, torch.bfloat16, keep_fp8=True, model=model, scaled_layers=layers)
             == sd["lin.weight"].nelement() * 2
         )
 
@@ -1592,7 +1609,7 @@ class TestReservationCoversTheSideChannelItHolds:
         ),
     )
     def test_the_decoded_mx_grid_is_inside_the_reservation(self) -> None:
-        """What the reservation should cover. Strict, so PR D cannot land without removing it."""
+        """What the reservation should cover. Strict, so the fix cannot land without removing it."""
         sd, hints, model = self._mx_layer()
         layers = extract_fp8_scaled_layers(sd, layer_hints=hints)
         grid = layers["lin"].weight_scale

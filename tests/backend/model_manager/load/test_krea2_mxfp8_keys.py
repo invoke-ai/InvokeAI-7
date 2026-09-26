@@ -5,14 +5,15 @@ entry per 32 weight elements, it is a whole number of cuBLAS tiles, and the laye
 somewhere. Until this capture all four rested on the same synthetic construction that the tests
 build, so the tests and the decode agreed without either being checked against a producer.
 
-This is the one reachable MXFP8 file, and its weights cannot be checked in (`license: other`), so the
-captured header is the reference and `mxfp8_tensors` is measured against it.
+This is the one reachable MXFP8 file, and its weights cannot be checked in (`license: other`), so
+what is recorded is the layout. Four cells read it directly; a fifth takes the block width out of it
+and holds `MX_BLOCK_SIZE` -- the number every synthetic MXFP8 payload is built from -- against it.
 """
 
 import torch
 
 from invokeai.backend.quantization.block_scale_tiles import check_tile_layout
-from invokeai.backend.quantization.fp8_scaled import MXFP8_FORMAT, extract_fp8_scaled_layers
+from invokeai.backend.quantization.fp8_scaled import MXFP8_FORMAT
 from tests.backend.model_manager.load.state_dicts import krea2_turbo_mxfp8_keys as fixture
 from tests.fixtures.quantized_payloads import MX_BLOCK_SIZE, mxfp8_tensors
 
@@ -64,26 +65,27 @@ def test_no_hint_carries_a_block_size() -> None:
     assert not any("block_size" in hint for hint in fixture.layer_hints.values())
 
 
-def test_the_synthetic_payload_has_the_released_layouts_shape_relationship() -> None:
-    """The synthetic builder is what every MXFP8 cell drives; this is the one place it is held
-    against a producer.
+def test_the_block_width_the_builder_uses_is_the_one_the_released_build_stores() -> None:
+    """The one number the synthetic payload and the real file have to agree on.
 
-    Same relationship, not the same size: one real layer here is 6144x6144 with a 6144x192 grid, and
-    building that costs 36M elements to assert a ratio. So the ratio, the dtypes and the tile
-    condition are checked on a small layer, and the real numbers are read from the capture.
+    `MX_BLOCK_SIZE` is what every MXFP8 cell builds its grid from, and `decode_mx_block_scales` infers
+    the same width from the shapes it is given. Both sides being our own constant is how a scheme gets
+    tested against itself, so the width is read out of the capture here and our constant is checked
+    against it -- 40 real layers, five distinct geometries.
+
+    Deliberately not repeated here: that a distinct grid survives the de-swizzle. A constant grid is
+    invariant under every permutation, so it cannot see a tile error at all; that is
+    `TestMxfp8.test_the_exponents_are_decoded_and_unswizzled`, which uses varying exponents.
     """
-    # One tile, all exponents 127. The released layers are 6144 wide with a 6144x192 grid; building
-    # that would cost 36M elements to assert a ratio the capture already records exactly.
-    tensors, expected = mxfp8_tensors("lin", torch.full((128, 4), 127))
+    widths = set()
+    for path in QUANTIZED:
+        (_rows, columns), _dtype = KEYS[f"{path}.weight"]
+        (_scale_rows, blocks), _scale_dtype = KEYS[f"{path}.weight_scale"]
+        widths.add(columns // blocks)
+
+    assert widths == {MX_BLOCK_SIZE}
+
+    tensors, _expected = mxfp8_tensors("lin", torch.full((128, 4), 127))
     weight, scale = tensors["lin.weight"], tensors["lin.weight_scale"]
 
-    assert weight.dtype is torch.float8_e4m3fn
-    assert scale.dtype is torch.uint8
-    assert weight.shape[1] == scale.shape[1] * MX_BLOCK_SIZE
-    assert weight.shape[0] == scale.shape[0]
-    # 127 is `2**0`: the value that makes a fold-as-multiplier off by ~127x instead of by nothing.
-    assert torch.equal(expected, torch.ones_like(expected))
-
-    layers = extract_fp8_scaled_layers(dict(tensors), layer_hints={"lin": {"format": MXFP8_FORMAT}})
-
-    assert torch.equal(layers["lin"].weight_scale, expected)
+    assert weight.shape[1] // scale.shape[1] == widths.pop()

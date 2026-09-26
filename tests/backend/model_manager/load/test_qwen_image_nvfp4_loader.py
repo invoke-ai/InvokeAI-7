@@ -323,8 +323,11 @@ def test_an_nvfp4_layer_missing_its_global_scale_is_refused_before_the_cache_is_
     those two statements secures.
     """
     state_dict = {
-        "model.layers.0.self_attn.q_proj.weight": torch.zeros(64, 128, dtype=torch.uint8),
-        "model.layers.0.self_attn.q_proj.weight_scale": torch.zeros(64, 16).to(torch.float8_e4m3fn),
+        # 128 rows and a 16-block grid: a whole number of cuBLAS tiles, i.e. a layer a real build
+        # could hold. The refusal reads only the key pairing and the uint8 dtype, so it fires either
+        # way -- but a shape no build can contain is the wrong thing to assert the state against.
+        "model.layers.0.self_attn.q_proj.weight": torch.zeros(128, 128, dtype=torch.uint8),
+        "model.layers.0.self_attn.q_proj.weight_scale": torch.zeros(128, 16).to(torch.float8_e4m3fn),
     }
     checkpoint = tmp_path / "qwen_2.5_vl_7b_nvfp4_half.safetensors"
     checkpoint.touch()
@@ -342,16 +345,15 @@ def test_the_transformer_refuses_an_nvfp4_layer_missing_its_global_scale_before_
     """The same degraded half-state at the transformer seam, which had no `Seam` of its own.
 
     The encoder cell above covers the other Qwen-Image seam; this one is the transformer. Declared
-    through the shared driver rather than the
-    hand-rolled loader the cells above use, because `run.reserved` is the assertion -- the recorded
-    reservations are what say "before", and a `MagicMock` would only say "not called at all".
+    through the shared driver rather than the hand-rolled loader the cells above use, because
+    `run.reserved` is the assertion: the recorded reservations are what say "before", where a
+    `MagicMock` would only say "not called at all".
     """
     import diffusers
 
     state_dict = {
         "img_in.weight": torch.randn(128, 64),
         "img_in.bias": torch.randn(128),
-        # 128 rows and 4 blocks: a whole number of cuBLAS tiles, i.e. a layer a real build could hold.
         "transformer_blocks.0.attn.to_q.weight": torch.zeros(128, 32, dtype=torch.uint8),
         "transformer_blocks.0.attn.to_q.weight_scale": torch.zeros(128, 4).to(torch.float8_e4m3fn),
     }

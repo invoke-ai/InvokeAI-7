@@ -15,8 +15,8 @@ entry per 32 weight elements, a whole number of cuBLAS tiles, and the layer is n
 shapes for exactly that reason and lets the marker only cross-check it; a decode that required the
 field would refuse this file, and a re-upload that added it must not change the answer.
 
-No weights can be checked in -- this build is `license: other` -- so this records the layout and the
-synthetic `mxfp8_tensors` payload is checked against it, rather than the other way round.
+No weights can be checked in -- this build is `license: other` -- so what is recorded is the layout,
+and the block width the synthetic payloads are built from is checked against the width stored here.
 """
 
 state_dict_keys: dict[str, tuple[list[int], str]] = {

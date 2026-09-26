@@ -139,10 +139,10 @@ def test_an_mx_grid_that_is_not_whole_tiles_is_refused_rather_than_silently_zero
     zeros -- an exponent byte of 0 is `2**-127`, so the payload would look built and decode to
     nothing. The builder is shared now, so this would be wrong in every suite that used it.
     """
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="tile layout"):
         mxfp8_tensors("lin", torch.full((64, 4), 127))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="tile layout"):
         mxfp8_tensors("lin", torch.full((128, 3), 127))
 
     tensors, _expected = mxfp8_tensors("lin", torch.full((128, 4), 127))
