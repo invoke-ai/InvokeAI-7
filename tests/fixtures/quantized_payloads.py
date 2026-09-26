@@ -17,7 +17,7 @@ from typing import Any, NamedTuple
 
 import torch
 
-from invokeai.backend.quantization.fp8_scaled import MXFP8_FORMAT
+from invokeai.backend.quantization.block_scale_tiles import check_tile_layout
 from invokeai.backend.quantization.int8_convrot import CONVROT_GROUP_SIZE, build_regular_hadamard
 
 # e4m3's largest finite magnitude. A per-tensor scaled-fp8 export divides by this, so that the
@@ -30,11 +30,11 @@ INT8_LEVELS = 127.0
 
 # The two nvfp4 codes worth +1.0 and -1.0 in E2M1. Paired with a block scale and a global scale they
 # give a weight whose exact value is known without depending on the rest of the E2M1 table.
-#: One MX block is 32 elements wide in every published build; the marker only cross-checks it.
-MX_BLOCK_SIZE = 32
-
 NVFP4_CODE_PLUS_ONE = 2
 NVFP4_CODE_MINUS_ONE = 10
+
+# One MX block is 32 elements wide in every published build; the marker only cross-checks it.
+MX_BLOCK_SIZE = 32
 
 
 def comfy_quant_marker(marker: Mapping[str, Any], *, pad: int = 0) -> torch.Tensor:
@@ -167,20 +167,25 @@ def mxfp8_tensors(
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
     """One MXFP8 layer in checkpoint layout, and the block-wise float scale it decodes to.
 
-    MXFP8 is the scheme this repo only ever *refuses or folds* -- there is no kernel for it below
-    Blackwell -- which is exactly why it was missing here: the payload builders were drawn from what
-    `backend/quantization` decodes, and a layout nobody decodes for the matmul fell out of the set.
-    It is also the worst payload to leave unbuilt. The grid is E8M0 exponent *bytes*, so 127 means
-    `2**0`; folded as linear multipliers the weights come out around 127x too large, at the right
-    shape and the right dtype, with nothing raised and nothing logged.
+    This builder existed already, private to `tests/backend/quantization/test_fp8_scaled.py`, which
+    now imports it from here instead. That is the whole of the change: MXFP8 was tested, it just was
+    not available to the other suites, so a seam-level cell had to hand-roll the layout -- and the
+    layout is the part worth getting from one place, because getting it wrong is silent.
 
-    The grid is stored in cuBLAS tiles (:func:`stored_layout`), because that is how both published
-    builds store it and reading it row-major pairs blocks with the wrong rows.
+    The grid is E8M0 exponent *bytes*, so 127 means `2**0`; folded as linear multipliers the weights
+    come out around 127x too large, at the right shape and the right dtype, with nothing raised and
+    nothing logged. And it is stored in cuBLAS tiles (:func:`stored_layout`), because that is how
+    both published builds store it; read row-major it pairs blocks with the wrong rows.
 
-    The weight is all ones, so the decoded scale *is* the expected weight -- an assertion that moves
-    by a factor of `2**(byte - 127)` per block if either half of the decode is skipped.
+    The weight is all ones, so the returned scale *is* the expected decoded weight -- an expectation
+    that moves by `2**(byte - 127)` per block if either half of the decode is skipped. It is
+    independent of the decode: the tile order comes from the hand-written index formula in
+    :func:`stored_layout`, and the bias is the spec's 127 rather than `_E8M0_BIAS`.
     """
     rows, blocks = exponents.shape
+    # `stored_layout` is a bijection only over whole tiles. Off-tile, its `flat` keeps NaNs, and
+    # `.to(torch.uint8)` turns those into zeros -- every scale silently becomes `2**-127`.
+    check_tile_layout(rows, blocks)
     tensors = {
         f"{path}.weight": torch.ones(rows, blocks * block_size).to(torch.float8_e4m3fn),
         f"{path}.weight_scale": stored_layout(exponents.to(torch.float64)).to(torch.uint8),
@@ -191,6 +196,8 @@ def mxfp8_tensors(
 def mxfp8_marker(*, block_size: int = MX_BLOCK_SIZE) -> dict[str, object]:
     """What a layer has to say about itself before the decode will read its grid.
 
-    A `uint8` tensor beside an fp8 weight is otherwise just an unknown producer's convention.
+    A `uint8` tensor beside an fp8 weight is otherwise just an unknown producer's convention. The
+    format string is spelled out rather than imported from `fp8_scaled`: it is what the *producer*
+    writes, so a rename on our side has to be caught by a test, not mirrored by one.
     """
-    return {"format": MXFP8_FORMAT, "block_size": block_size}
+    return {"format": "mxfp8", "block_size": block_size}

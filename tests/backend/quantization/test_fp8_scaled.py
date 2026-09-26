@@ -42,7 +42,6 @@ from tests.fixtures.quantized_payloads import (
     MX_BLOCK_SIZE,
     mxfp8_marker,
     mxfp8_tensors,
-    stored_layout,
 )
 
 cuda_fp8 = pytest.mark.skipif(
@@ -1051,23 +1050,34 @@ class TestMxfp8:
 
     @staticmethod
     def _mx_layer(exponents: torch.Tensor, marker: dict | None) -> tuple[dict, dict]:
-        """One MXFP8 layer in checkpoint layout: fp8 codes, a tiled exponent grid, and the hints."""
-        rows, blocks = exponents.shape
-        sd = {
-            "lin.weight": torch.ones(rows, blocks * 32).to(FP8_DTYPE),
-            "lin.weight_scale": stored_layout(exponents.to(torch.float64)).to(torch.uint8),
-        }
-        return sd, ({"lin": marker} if marker else {})
+        """One MXFP8 layer and its hints, the layout coming from the shared builder.
+
+        The hints stay a parameter here because half these cells are about a layer that says the
+        wrong thing about itself, or nothing at all.
+        """
+        tensors, _expected = mxfp8_tensors("lin", exponents)
+        return dict(tensors), ({"lin": marker} if marker else {})
+
+    @staticmethod
+    def _mx_layer_with_expectation(exponents: torch.Tensor) -> tuple[dict, dict, torch.Tensor]:
+        """The well-formed case, plus the decoded scale the builder says to expect."""
+        tensors, expected = mxfp8_tensors("lin", exponents)
+        return dict(tensors), {"lin": mxfp8_marker()}, expected
 
     def test_the_exponents_are_decoded_and_unswizzled(self) -> None:
         """Distinct exponents across the grid, so a read in the stored order lands the wrong one on
-        all but a few entries."""
+        all but a few entries.
+
+        Against the expectation the shared builder returns, not a restatement of it here: that value
+        is derived from the hand-written tile formula and the spec's bias, so it is the one statement
+        of the decode that does not come from the decode.
+        """
         exponents = torch.arange(128 * 4, dtype=torch.int64).reshape(128, 4) % 8 + 124
 
-        sd, hints = self._mx_layer(exponents, {"format": "mxfp8", "block_size": 32})
+        sd, hints, expected = self._mx_layer_with_expectation(exponents)
         layers = extract_fp8_scaled_layers(sd, layer_hints=hints)
 
-        assert torch.equal(layers["lin"].weight_scale, torch.exp2(exponents.float() - 127))
+        assert torch.equal(layers["lin"].weight_scale, expected)
 
     def test_a_grid_no_marker_or_header_names_is_refused(self) -> None:
         """The dtype alone is not evidence. Reading an unknown producer's uint8 grid as MXFP8 is
@@ -1542,10 +1552,10 @@ class TestReservationCoversTheSideChannelItHolds:
     @staticmethod
     def _mx_layer(rows: int = 512, blocks: int = 16) -> tuple[dict, dict, torch.nn.Module]:
         exponents = (torch.arange(rows * blocks, dtype=torch.int64).reshape(rows, blocks) % 8) + 124
-        tensors, _expected = mxfp8_tensors("lin", exponents)
+        sd, hints, _expected = TestMxfp8._mx_layer_with_expectation(exponents)
         model = torch.nn.Module()
         model.add_module("lin", torch.nn.Linear(blocks * MX_BLOCK_SIZE, rows, bias=False))
-        return dict(tensors), {"lin": mxfp8_marker()}, model
+        return sd, hints, model
 
     def test_the_decode_widens_the_grid_before_anything_reserves_for_it(self) -> None:
         """The half of the finding that is true today, so the numbers are recorded rather than
@@ -1567,16 +1577,18 @@ class TestReservationCoversTheSideChannelItHolds:
     @pytest.mark.xfail(
         strict=True,
         reason=(
-            "The clean fix presupposes PR D. Adding the mapping's bytes to this predictor cannot be "
-            "unconditional: whether a scale is still resident after the split depends on whether its "
-            "layer stayed fp8, which is the three-way agreement between `cast_state_dict`, this "
-            "function and `split_fp8_scaled_layers` that §4.4 describes as held by call-order "
-            "accident -- `TestPredictionIsSplitAware` pins `predicted == actual` against the state "
-            "dict alone, and a flat term breaks it for the block-wise case the split folds. The "
-            "alternative, an eighth hand-assembled term at each of the eight seams beside "
-            "`predict_nvfp4_install_size`, is the per-loader assembly §0.1 already counts as a "
-            "defect. §4.4's `decide(...) -> LoadPlan` with `predict_size(plan)` makes the dict and "
-            "its side channel one argument, so the question cannot be asked of half of it."
+            "No fix for this belongs in this function as it stands. Adding the mapping's bytes "
+            "cannot be unconditional: whether a scale is still resident after the split depends on "
+            "whether its layer stayed fp8, so a flat term turns this function from 'bytes the state "
+            "dict will occupy' into 'peak bytes', and `TestPredictionIsSplitAware` pins the former "
+            "exactly -- measured: the flat term reddens all three `predicted == actual` "
+            "parametrizations and the under-count regression beside them. The alternative is a "
+            "second hand-assembled term at each of the nine call sites, beside the "
+            "`predict_nvfp4_install_size` each already adds by hand, which is the per-loader "
+            "assembly that keeps producing this class of gap. "
+            "Remove this marker when one object owns both the state dict and the scales recovered "
+            "from it and the reservation is computed from that object, so the size question cannot "
+            "be asked about half of the load."
         ),
     )
     def test_the_decoded_mx_grid_is_inside_the_reservation(self) -> None:
@@ -1585,6 +1597,6 @@ class TestReservationCoversTheSideChannelItHolds:
         layers = extract_fp8_scaled_layers(sd, layer_hints=hints)
         grid = layers["lin"].weight_scale
 
-        predicted = predict_cast_state_dict_size(sd, torch.bfloat16, keep_fp8=False, model=model, scaled_layers=layers)
+        predicted = predict_cast_state_dict_size(sd, torch.bfloat16, keep_fp8=True, model=model, scaled_layers=layers)
 
         assert predicted >= sd["lin.weight"].nelement() * 2 + grid.nelement() * grid.element_size()
