@@ -15,6 +15,7 @@ import { useTranslation } from 'react-i18next';
 
 import type { InvocationState } from './useInvocationState';
 
+import { RoutingBoardSelect } from './RoutingBoardSelect';
 import { RoutingDestinationSegments } from './RoutingDestinationSegments';
 
 const MENU_POSITIONING = { placement: 'bottom-end' } as const;
@@ -120,8 +121,11 @@ export const RoutingControl = ({ state }: { state: InvocationState }) => {
             <SourceRadioGroup sourceId={invocation.sourceId} sources={sources} />
             <Menu.Separator />
             <RoutingSectionHeader label={t('topbar.routing.destination')} />
-            <Stack px="3" pb="2">
+            <Stack px="3" pb="2" gap="2">
               <DestinationSegments destination={invocation.destination} />
+              {invocation.destination === 'gallery' ? (
+                <RoutingBoardSelect boardId={invocation.galleryBoardId ?? 'auto'} />
+              ) : null}
             </Stack>
             <Menu.Separator />
             <Menu.Item value={isLocked ? 'unlock-routing' : 'lock-routing'} onClick={generation.toggleRoutingLock}>

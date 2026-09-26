@@ -9,6 +9,8 @@ export type ResultDestination = 'canvas' | 'gallery';
 export interface InvocationRoute {
   sourceId: InvocationSourceId;
   destination: ResultDestination;
+  /** Auto (default) uses the Gallery selection; none sends to Uncategorized; a board id pins the destination. */
+  galleryBoardId?: string;
   sourceLocked: boolean;
   destinationLocked: boolean;
 }

@@ -260,6 +260,7 @@ const createCommands = (
         'setInvocationDestination',
         (destination: ActionPayload<'setInvocationDestination'>['destination']) => ({ destination })
       ),
+      setGalleryBoard: command('setInvocationGalleryBoard', (boardId: string) => ({ boardId })),
       setSettings: command(
         'setGenerateSettings',
         (
