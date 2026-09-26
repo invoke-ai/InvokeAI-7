@@ -1551,10 +1551,13 @@ class TestReservationCoversTheSideChannelItHolds:
     once, which is why it is what this class pins: one entry per 32 weight elements, so around 1.5 GB
     on Comfy-Org's 12 GB MXFP8 build.
 
-    The larger term is transient and bounded differently. `dequantize_fp8_scaled` folds one layer at a
-    time, and for a block-wise grid `expand_weight_scale` `repeat_interleave`s it to the weight's full
-    width in float32 -- 4 B/element -- beside `weight.float()` and the float32 product, so the peak is
-    ~14 B/element of the *largest* layer against 2 predicted. `int8_convrot.py:607` records the policy
+    The per-layer term is larger *per element* and not in absolute peak. `dequantize_fp8_scaled` folds
+    one layer at a time, and for a block-wise grid `expand_weight_scale` `repeat_interleave`s it to the
+    weight's full width in float32 -- 4 B/element -- beside `weight.float()` and the float32 product,
+    so the peak is ~14 B/element of the *largest* layer against 2 predicted. Measured on the released
+    12.6 GiB build: its largest quantized layers are 16384x6144, so ~1.21 GB for one of them, against
+    1.455 GiB of grids summed over all 256. The grids are the bigger number as well as the persistent
+    one, which is why they are what this class pins. `int8_convrot.py:607` records the policy
     that absorbs such a transient in the reservation's slack, on the grounds that "the widened set is
     by construction the small one". That justification does not transfer here: a block-wise scale is
     never matmul-usable (`is_matmul_usable_scale`), so for MXFP8 the widened set is every quantized

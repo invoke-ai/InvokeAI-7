@@ -73,6 +73,10 @@ def test_the_block_width_the_builder_uses_is_the_one_the_released_build_stores()
     tested against itself, so the width is read out of the capture here and our constant is checked
     against it -- 40 real layers, five distinct geometries.
 
+    The second half pins something separable: `mxfp8_tensors`' default `block_size` is a parameter that
+    can be edited away from `MX_BLOCK_SIZE`, and then every synthetic grid would be built at a width
+    the file does not use while the first assertion still passed.
+
     Deliberately not repeated here: that a distinct grid survives the de-swizzle. A constant grid is
     invariant under every permutation, so it cannot see a tile error at all; that is
     `TestMxfp8.test_the_exponents_are_decoded_and_unswizzled`, which uses varying exponents.
@@ -81,6 +85,9 @@ def test_the_block_width_the_builder_uses_is_the_one_the_released_build_stores()
     for path in QUANTIZED:
         (_rows, columns), _dtype = KEYS[f"{path}.weight"]
         (_scale_rows, blocks), _scale_dtype = KEYS[f"{path}.weight_scale"]
+        # Exact rather than floor division, which would let a remainder through: 6145 columns over
+        # 192 blocks still floors to 32.
+        assert columns % blocks == 0, path
         widths.add(columns // blocks)
 
     assert widths == {MX_BLOCK_SIZE}
@@ -88,4 +95,4 @@ def test_the_block_width_the_builder_uses_is_the_one_the_released_build_stores()
     tensors, _expected = mxfp8_tensors("lin", torch.full((128, 4), 127))
     weight, scale = tensors["lin.weight"], tensors["lin.weight_scale"]
 
-    assert weight.shape[1] // scale.shape[1] == widths.pop()
+    assert weight.shape[1] // scale.shape[1] == MX_BLOCK_SIZE
