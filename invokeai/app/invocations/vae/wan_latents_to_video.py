@@ -35,7 +35,10 @@ from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.app.util.video_encoding import make_mp4_writer
 from invokeai.backend.model_manager.load.model_cache.utils import get_effective_device
 from invokeai.backend.util.devices import TorchDevice
-from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_wan
+from invokeai.backend.util.vae_working_memory import (
+    estimate_vae_working_memory_wan,
+    should_pretile_vae_decode,
+)
 from invokeai.backend.wan.vae_decode import iter_wan_vae_decode_chunks
 
 
@@ -129,29 +132,23 @@ class WanLatentsToVideoInvocation(BaseInvocation, WithMetadata, WithBoard):
             streaming=optimize_memory,
         )
         # Long/high-res clips can need a working set no card fits. When the full-frame
-        # estimate exceeds the execution device's total VRAM, fall back to spatial tiling
-        # and budget for the tiled working set instead. (A cpu_only VAE runs in system
-        # RAM, where the working set is not the constraint.)
-        use_tiling = False
-        if not getattr(vae_info.config, "cpu_only", None):
-            exec_device = TorchDevice.choose_torch_device()
-            total_vram: int | None = None
-            if exec_device.type == "cuda":
-                total_vram = torch.cuda.get_device_properties(exec_device).total_memory
-            elif exec_device.type == "xpu":
-                total_vram = torch.xpu.get_device_properties(exec_device).total_memory
-            if total_vram is not None and estimated_working_memory > 0.9 * total_vram:
-                use_tiling = True
-                tile_size = int(getattr(vae_info.model, "tile_sample_min_height", 256))
-                estimated_working_memory = estimate_vae_working_memory_wan(
-                    operation="decode",
-                    vae=vae_info.model,
-                    pixel_height=h_pixel,
-                    pixel_width=w_pixel,
-                    pixel_frames=t_pixel,
-                    tile_size=tile_size,
-                    streaming=False,
-                )
+        # estimate would claim most of the VAE's device, fall back to spatial tiling and
+        # budget for the tiled working set instead. (A cpu_only VAE runs in system RAM,
+        # where the working set is not the constraint; the helper never tiles off-GPU.)
+        use_tiling = context.config.get().auto_tiled_decode and should_pretile_vae_decode(
+            vae_info.compute_device, estimated_working_memory
+        )
+        if use_tiling:
+            tile_size = int(getattr(vae_info.model, "tile_sample_min_height", 256))
+            estimated_working_memory = estimate_vae_working_memory_wan(
+                operation="decode",
+                vae=vae_info.model,
+                pixel_height=h_pixel,
+                pixel_width=w_pixel,
+                pixel_frames=t_pixel,
+                tile_size=tile_size,
+                streaming=False,
+            )
 
         tmp = tempfile.NamedTemporaryFile(prefix="invokeai_wan_video_", suffix=".mp4", delete=False)
         tmp.close()

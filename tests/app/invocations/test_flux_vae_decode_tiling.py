@@ -9,15 +9,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 
 from invokeai.app.invocations.vae.flux_vae_decode import FluxVaeDecodeInvocation
 from invokeai.backend.flux.modules.autoencoder import DEFAULT_TILE_SAMPLE_MIN_SIZE
 from invokeai.backend.flux.modules.autoencoder import AutoEncoder as FluxAutoEncoder
 
 
-def _build_decode_mocks(latents: torch.Tensor, decoded: torch.Tensor, force_tiled_decode: bool = False):
+def _build_decode_mocks(
+    latents: torch.Tensor, decoded: torch.Tensor, force_tiled_decode: bool = False, vae_class: type = FluxAutoEncoder
+):
     """Wire FluxVaeDecodeInvocation.invoke to run end-to-end on CPU against a mocked FLUX VAE."""
-    vae = MagicMock(spec=FluxAutoEncoder)
+    vae = MagicMock(spec=vae_class)
     # A fresh iterator per call: the decode path reads `parameters()` after the estimator already
     # has, and a single stored iterator would be exhausted by then.
     vae.parameters.side_effect = lambda: iter([torch.zeros(1, dtype=torch.float16)])
@@ -77,6 +80,41 @@ class TestForceTiledDecode:
         with patch(path, return_value=1024) as estimate:
             _build_invocation().invoke(context)
         assert estimate.call_args.kwargs["tile_size"] == expected_tile_size
+
+    @pytest.mark.parametrize("auto", [True, False], ids=["auto-tiled-decode-on", "auto-tiled-decode-off"])
+    def test_a_decode_too_large_for_its_gpu_is_tiled_up_front_unless_switched_off(self, auto):
+        module = "invokeai.app.invocations.vae.flux_vae_decode"
+        vae, vae_info, context = _build_decode_mocks(torch.zeros(1, 16, 64, 64), torch.zeros(1, 3, 512, 512))
+        context.config.get.return_value.auto_tiled_decode = auto
+        with (
+            patch(f"{module}.estimate_vae_working_memory_flux", side_effect=[20 * 2**30, 2 * 2**30]) as estimate,
+            patch(f"{module}.should_pretile_vae_decode", return_value=True) as pretile,
+        ):
+            _build_invocation().invoke(context)
+
+        if auto:
+            pretile.assert_called_once_with(vae_info.compute_device, 20 * 2**30)
+            assert estimate.call_args.kwargs["tile_size"] == 0
+            vae_info.model_on_device.assert_called_once_with(working_mem_bytes=2 * 2**30)
+            vae.enable_tiling.assert_called_once_with(tile_sample_min_size=DEFAULT_TILE_SAMPLE_MIN_SIZE)
+        else:
+            pretile.assert_not_called()
+            vae.disable_tiling.assert_called_once()
+
+
+class TestDiffusersLayoutVae:
+    def test_a_diffusers_layout_flux_vae_reserves_its_working_memory(self):
+        """It runs the same network; a decode with nothing reserved is the one Windows pages instead of failing."""
+        vae, vae_info, context = _build_decode_mocks(
+            torch.zeros(1, 16, 64, 64), torch.zeros(1, 3, 512, 512), vae_class=AutoencoderKL
+        )
+        vae.config = MagicMock(scaling_factor=0.3611, shift_factor=0.1159)
+        vae.decode.return_value = (torch.zeros(1, 3, 512, 512),)
+
+        _build_invocation().invoke(context)
+
+        (reservation,) = vae_info.model_on_device.call_args.kwargs.values()
+        assert reservation > 0
 
 
 class TestOomFallback:

@@ -24,11 +24,11 @@ def _mock_flux_vae(element_size_bytes: int = 2) -> MagicMock:
 class TestFluxWorkingMemoryEstimate:
     @pytest.fixture(autouse=True)
     def _fused_non_rocm_build(self, monkeypatch):
-        """`estimate_vae_working_memory_flux` takes no device: it resolves one itself and prices the
-        mid-block score matrix for it. On a ROCm rig that resolves to `cuda`, where the head-dim
-        guard charges 4.25GiB for the 1024px case below -- which the expected value here clears by
-        1%, so these exact-value assertions turn build-dependent the moment either constant moves.
-        Pin the fused, non-HIP regime they are written for; `TestClassicVaeEstimators` in
+        """`estimate_vae_working_memory_flux` resolves a device when the caller passes none, and prices the mid-block
+        score matrix for it. On a ROCm rig that resolves to `cuda`, where the head-dim guard charges 4.25GiB for the
+        1024px case below -- which the expected value here clears by 1%, so these exact-value assertions turn
+        build-dependent the moment either constant moves. Pin the fused, non-HIP regime they are written for, which
+        is also the cuDNN column of `_FLUX_VAE_SCALING_CONSTANTS`; `TestClassicVaeEstimators` in
         `tests/backend/util/test_rocm_sdpa_head_dim_guard.py` owns the ROCm side of this estimator.
         """
         import invokeai.backend.util.attention as attention
@@ -36,6 +36,30 @@ class TestFluxWorkingMemoryEstimate:
 
         monkeypatch.setattr(attention, "_IS_ROCM", False)
         monkeypatch.setattr(vwm.TorchDevice, "choose_torch_device", classmethod(lambda cls: torch.device("cpu")))
+
+    @pytest.mark.parametrize(
+        ("hip", "operation", "constant"),
+        [(None, "decode", 2200), (None, "encode", 1100), ("7.14.0", "decode", 3600), ("7.14.0", "encode", 2750)],
+        ids=["cudnn-decode", "cudnn-encode", "miopen-decode", "miopen-encode"],
+    )
+    def test_the_convolution_backend_of_the_vaes_device_picks_the_constant(self, monkeypatch, hip, operation, constant):
+        """MIOpen's workspaces are larger than cuDNN's: measured 3451 decode / 2688 encode on an RX 9060 XT, the same
+        as the FLUX.2 VAE. A HIP build reports its GPU as "cuda", so the torch build decides, for the VAE's device."""
+        import invokeai.backend.util.vae_working_memory as vwm
+
+        monkeypatch.setattr(torch.version, "hip", hip)
+        monkeypatch.setattr(vwm, "_vae_mid_block_score_matrix_bytes", lambda *args, **kwargs: 0)
+        tensor = torch.zeros(1, 16, 64, 64) if operation == "decode" else torch.zeros(1, 3, 512, 512)
+
+        estimate = estimate_vae_working_memory_flux(
+            operation=operation, image_tensor=tensor, vae=_mock_flux_vae(), device=torch.device("cuda", 0)
+        )
+        on_cpu = estimate_vae_working_memory_flux(
+            operation=operation, image_tensor=tensor, vae=_mock_flux_vae(), device=torch.device("cpu")
+        )
+
+        assert estimate == 512 * 512 * 2 * constant
+        assert on_cpu == 512 * 512 * 2 * (2200 if operation == "decode" else 1100), "a cpu_only VAE runs on cuDNN terms"
 
     def test_the_default_reproduces_the_untiled_estimate(self):
         """Regression guard for the six call sites that pass no tile_size at all."""
@@ -233,6 +257,39 @@ class TestTilingIsWired:
         vae, _, context = _build_decode_mocks(torch.zeros(1, 16, 64, 64), torch.zeros(1, 3, 512, 512))
         _build_invocation(tiled=True, tile_size=384).invoke(context)
         vae.enable_tiling.assert_called_once_with(tile_sample_min_size=384)
+
+    @pytest.mark.parametrize("auto", [True, False], ids=["auto-tiled-decode-on", "auto-tiled-decode-off"])
+    def test_a_decode_too_large_for_its_gpu_is_tiled_up_front_unless_switched_off(self, auto):
+        """Where the driver pages instead of raising an OOM, the retry below never fires: the estimate decides."""
+        module = "invokeai.app.invocations.vae.z_image_latents_to_image"
+        vae, vae_info, context = _build_decode_mocks(torch.zeros(1, 16, 64, 64), torch.zeros(1, 3, 512, 512))
+        context.config.get.return_value.auto_tiled_decode = auto
+        with (
+            patch(f"{module}.estimate_vae_working_memory_flux", side_effect=[20 * 2**30, 2 * 2**30]) as estimate,
+            patch(f"{module}.should_pretile_vae_decode", return_value=True) as pretile,
+        ):
+            _build_invocation().invoke(context)
+
+        if auto:
+            pretile.assert_called_once_with(vae_info.compute_device, 20 * 2**30)
+            assert estimate.call_args.kwargs["tile_size"] == 0
+            vae_info.model_on_device.assert_called_once_with(working_mem_bytes=2 * 2**30)
+            vae.enable_tiling.assert_called_once_with(tile_sample_min_size=DEFAULT_TILE_SAMPLE_MIN_SIZE)
+        else:
+            pretile.assert_not_called()
+            assert estimate.call_count == 1
+            vae.disable_tiling.assert_called_once()
+
+    def test_requested_tiling_skips_the_untiled_estimate(self):
+        module = "invokeai.app.invocations.vae.z_image_latents_to_image"
+        _, _, context = _build_decode_mocks(torch.zeros(1, 16, 64, 64), torch.zeros(1, 3, 512, 512))
+        with (
+            patch(f"{module}.estimate_vae_working_memory_flux", return_value=2 * 2**30) as estimate,
+            patch(f"{module}.should_pretile_vae_decode") as pretile,
+        ):
+            _build_invocation(tiled=True).invoke(context)
+        assert estimate.call_count == 1
+        pretile.assert_not_called()
 
     @pytest.mark.parametrize("tiled,expected_tile_size", [(False, None), (True, 0)])
     def test_the_estimate_is_tile_bounded_only_when_tiling(self, tiled, expected_tile_size):

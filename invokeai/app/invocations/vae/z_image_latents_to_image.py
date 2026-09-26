@@ -23,7 +23,10 @@ from invokeai.backend.stable_diffusion.extensions.seamless import SeamlessExt
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.oom import is_oom_error
 from invokeai.backend.util.vae_tiling_scope import scoped_vae_tiling
-from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_flux
+from invokeai.backend.util.vae_working_memory import (
+    estimate_vae_working_memory_flux,
+    should_pretile_vae_decode,
+)
 
 # Z-Image can use either the Diffusers AutoencoderKL or the FLUX AutoEncoder
 ZImageVAE = Union[AutoencoderKL, FluxAutoEncoder]
@@ -60,7 +63,8 @@ class ZImageLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
             )
 
         is_flux_vae = isinstance(vae_info.model, FluxAutoEncoder)
-        use_tiling = self.tiled or context.config.get().force_tiled_decode
+        config = context.config.get()
+        use_tiling = self.tiled or config.force_tiled_decode
 
         # Estimate working memory needed for VAE decode
         estimated_working_memory = estimate_vae_working_memory_flux(
@@ -68,7 +72,21 @@ class ZImageLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
             image_tensor=latents,
             vae=vae_info.model,
             tile_size=self.tile_size if use_tiling else None,
+            device=vae_info.compute_device,
         )
+        if (
+            not use_tiling
+            and config.auto_tiled_decode
+            and should_pretile_vae_decode(vae_info.compute_device, estimated_working_memory)
+        ):
+            use_tiling = True
+            estimated_working_memory = estimate_vae_working_memory_flux(
+                operation="decode",
+                image_tensor=latents,
+                vae=vae_info.model,
+                tile_size=self.tile_size,
+                device=vae_info.compute_device,
+            )
 
         # FLUX VAE doesn't support seamless, so only apply for AutoencoderKL
         seamless_context = (

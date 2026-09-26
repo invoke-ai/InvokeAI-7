@@ -14,7 +14,6 @@ from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.backend.flux.modules.autoencoder import AutoEncoder
 from invokeai.backend.model_manager.load.load_base import LoadedModel
 from invokeai.backend.stable_diffusion.diffusers_pipeline import image_resized_to_grid_as_tensor
-from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_flux
 
 
@@ -44,13 +43,15 @@ class FluxVaeEncodeInvocation(BaseInvocation):
         # should be used for VAE encode sampling.
         assert isinstance(vae_info.model, AutoEncoder)
         estimated_working_memory = estimate_vae_working_memory_flux(
-            operation="encode", image_tensor=image_tensor, vae=vae_info.model
+            operation="encode", image_tensor=image_tensor, vae=vae_info.model, device=vae_info.compute_device
         )
-        generator = torch.Generator(device=TorchDevice.choose_torch_device()).manual_seed(0)
+        generator = torch.Generator(device=vae_info.compute_device).manual_seed(0)
         with vae_info.model_on_device(working_mem_bytes=estimated_working_memory) as (_, vae):
             assert isinstance(vae, AutoEncoder)
             vae_dtype = next(iter(vae.parameters())).dtype
-            image_tensor = image_tensor.to(device=TorchDevice.choose_torch_device(), dtype=vae_dtype)
+            # The VAE's own device, as in the decode nodes: a cpu_only VAE (or another worker's GPU)
+            # is not the session device, and encoding there would fail or run on the wrong card (#9373).
+            image_tensor = image_tensor.to(device=vae_info.compute_device, dtype=vae_dtype)
             latents = vae.encode(image_tensor, sample=True, generator=generator)
             return latents
 

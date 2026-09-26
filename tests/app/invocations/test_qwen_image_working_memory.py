@@ -14,7 +14,10 @@ from invokeai.backend.util.qwen_image_vae import (
     QWEN_IMAGE_VAE_DEFAULT_TILE_SIZE,
     patch_qwen_image_vae_tiling,
 )
-from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_qwen_image
+from invokeai.backend.util.vae_working_memory import (
+    estimate_vae_working_memory_qwen_image,
+    qwen_image_untiled_decode_peak_bytes,
+)
 
 
 class TestQwenImageWorkingMemoryEstimate:
@@ -51,7 +54,7 @@ class TestQwenImageWorkingMemoryEstimate:
         hip_value = "7.1.0" if is_rocm else None
         with patch("torch.version.hip", hip_value):
             result = estimate_vae_working_memory_qwen_image(
-                operation=operation, image_tensor=image_tensor, vae=mock_vae
+                operation=operation, image_tensor=image_tensor, vae=mock_vae, device=torch.device("cuda")
             )
 
         assert result == h * w * 2 * expected_constant
@@ -491,6 +494,154 @@ class TestQwenImageWorkingMemory:
 
         assert mock_estimate.call_args.kwargs["tile_size"] == QWEN_IMAGE_VAE_DEFAULT_TILE_SIZE
         mock_vae.enable_tiling.assert_called_once()
+
+    @pytest.mark.parametrize("auto", [True, False], ids=["auto-tiled-decode-on", "auto-tiled-decode-off"])
+    def test_a_decode_too_large_for_its_gpu_is_tiled_up_front_unless_switched_off(self, auto):
+        """Krea-2 decodes through this node, and it has no OOM retry at all: the estimate is the only trigger."""
+        module = "invokeai.app.invocations.vae.qwen_image_latents_to_image"
+        mock_vae, mock_vae_info = self._mock_vae_info()
+        mock_vae.decode.side_effect = RuntimeError("stop at decode")
+        mock_vae.config.z_dim = 16
+        mock_vae.config.latents_mean = [0.0] * 16
+        mock_vae.config.latents_std = [1.0] * 16
+
+        mock_context = MagicMock()
+        mock_context.models.load.return_value = mock_vae_info
+        mock_context.tensors.load.return_value = torch.zeros(1, 16, 1, 64, 64)
+        mock_context.config.get.return_value.force_tiled_decode = False
+        mock_context.config.get.return_value.auto_tiled_decode = auto
+
+        with (
+            patch(f"{module}.estimate_vae_working_memory_qwen_image", side_effect=[20 * 2**30, 2 * 2**30]) as estimate,
+            patch(f"{module}.qwen_image_untiled_decode_peak_bytes", return_value=14 * 2**30) as peak,
+            patch(f"{module}.should_pretile_vae_decode", return_value=True) as pretile,
+            patch(f"{module}.SeamlessExt.static_patch_model", return_value=nullcontext()),
+        ):
+            invocation = QwenImageLatentsToImageInvocation.model_construct(
+                latents=MagicMock(latents_name="test_latents"),
+                vae=MagicMock(vae=MagicMock(), seamless_axes=[]),
+                tiled=False,
+                tile_size=0,
+            )
+            with pytest.raises(RuntimeError, match="stop at decode"):
+                invocation.invoke(mock_context)
+
+        if auto:
+            # The decision is priced from the measured peak, not from the reservation, which is deliberately padded.
+            peak.assert_called_once()
+            pretile.assert_called_once_with(mock_vae_info.compute_device, 14 * 2**30)
+            assert estimate.call_args.kwargs["tile_size"] == QWEN_IMAGE_VAE_DEFAULT_TILE_SIZE
+            mock_vae_info.model_on_device.assert_called_once_with(working_mem_bytes=2 * 2**30)
+            mock_vae.enable_tiling.assert_called_once()
+        else:
+            peak.assert_not_called()
+            pretile.assert_not_called()
+            assert estimate.call_count == 1
+            mock_vae.enable_tiling.assert_not_called()
+
+
+# Peak reserved bytes per output pixel per element byte actually measured for the Qwen-Image VAE
+# decode on ROCm, from the per-point table in `estimate_vae_working_memory_qwen_image`. The shipped
+# constant is a flat 5500 -- "max observed + ~8% headroom" -- which is the right figure to *reserve*,
+# but the real curve is not flat, so it over-predicts the peak by up to 68%.
+MEASURED_ROCM_DECODE_CONSTANT = {512: 5132, 768: 4596, 1024: 4570, 1536: 3273, 1792: 3735, 2048: 4813}
+
+
+class TestMeasuredDecodePeak:
+    """`qwen_image_untiled_decode_peak_bytes` prices the tiling decision from the measured curve, so a decode whose
+    real peak fits is not tiled by a reservation's headroom."""
+
+    def _peak(self, px: int, device: str = "cuda", hip: str | None = "7.2.0") -> int:
+        mock_vae = MagicMock(spec=AutoencoderKLQwenImage)
+        mock_vae.parameters.side_effect = lambda: iter([torch.zeros(1, dtype=torch.float16)])
+        with patch("torch.version.hip", hip):
+            return qwen_image_untiled_decode_peak_bytes(
+                torch.zeros(1, 16, 1, px // 8, px // 8), mock_vae, torch.device(device)
+            )
+
+    @pytest.mark.parametrize("px, constant", [(512, 5132), (1024, 4570), (1536, 3273), (2048, 4813)])
+    def test_a_measured_point_is_its_measured_peak(self, px, constant):
+        assert self._peak(px) == px * px * 2 * constant
+
+    def test_between_two_points_takes_the_larger(self):
+        # 1280^2 sits between the 1024^2 (4570) and 1536^2 (3273) measurements.
+        assert self._peak(1280) == 1280 * 1280 * 2 * 4570
+
+    def test_past_the_measured_range_takes_the_largest(self):
+        assert self._peak(3072) == 3072 * 3072 * 2 * 5132
+
+    def test_a_cuda_card_is_priced_from_the_cuda_measurements(self):
+        assert self._peak(1536, hip=None) == 1536 * 1536 * 2 * 2690
+
+    def test_the_peak_stays_under_the_reservation(self):
+        """The reservation must remain the conservative figure of the two, or it would stop being an upper bound."""
+        mock_vae = MagicMock(spec=AutoencoderKLQwenImage)
+        mock_vae.parameters.side_effect = lambda: iter([torch.zeros(1, dtype=torch.float16)])
+        latents = torch.zeros(1, 16, 1, 192, 192)
+        with patch("torch.version.hip", "7.2.0"):
+            reserved = estimate_vae_working_memory_qwen_image(
+                operation="decode", image_tensor=latents, vae=mock_vae, device=torch.device("cuda")
+            )
+            peak = qwen_image_untiled_decode_peak_bytes(latents, mock_vae, torch.device("cuda"))
+
+        assert peak < reserved
+
+
+class TestPretilingDoesNotFireOnReservationHeadroom:
+    """A decode whose real peak fits the card must not be tiled.
+
+    Tiling is not pixel-identical, so it must be triggered by a decode that genuinely does not fit --
+    not by the headroom baked into a reservation constant. Over-reserving used to cost only cache
+    eviction; comparing that padded figure against a share of the card turns it into a silent output
+    change for images that would have decoded in a single pass.
+
+    Krea-2 decodes through this node too, and it has no out-of-memory retry, so the estimate is the
+    only trigger either way.
+    """
+
+    @pytest.mark.parametrize("px, total_gib", [(1536, 24), (1792, 32)])
+    def test_a_decode_whose_measured_peak_fits_the_card_is_not_tiled(self, px, total_gib, monkeypatch):
+        total_bytes = total_gib * 2**30
+        latents = torch.zeros(1, 16, 1, px // 8, px // 8)
+
+        # The constants are measured per backend, so pin it rather than inheriting the host's build.
+        monkeypatch.setattr(torch.version, "hip", "7.2.0")
+        monkeypatch.setattr("torch.cuda.get_device_properties", lambda device: MagicMock(total_memory=total_bytes))
+
+        # The measured table is fp16, and the estimator runs once here and once inside the node,
+        # so `parameters()` has to hand out a fresh iterator on every call.
+        mock_vae = MagicMock(spec=AutoencoderKLQwenImage)
+        mock_vae.parameters.side_effect = lambda: iter([torch.zeros(1, dtype=torch.float16)])
+        mock_vae_info = MagicMock()
+        mock_vae_info.model = mock_vae
+        mock_vae_info.compute_device = torch.device("cuda", 0)
+        # Stop the moment the decision has been made: everything after this would need a real GPU.
+        mock_vae_info.model_on_device.side_effect = RuntimeError("stop after the tiling decision")
+
+        untiled = estimate_vae_working_memory_qwen_image(
+            operation="decode", image_tensor=latents, vae=mock_vae, tile_size=None
+        )
+        measured_peak = px * px * 2 * MEASURED_ROCM_DECODE_CONSTANT[px]
+        assert measured_peak < 0.9 * total_bytes, "test shape must actually fit the card"
+
+        mock_context = MagicMock()
+        mock_context.models.load.return_value = mock_vae_info
+        mock_context.tensors.load.return_value = latents
+        mock_context.config.get.return_value.force_tiled_decode = False
+        mock_context.config.get.return_value.auto_tiled_decode = True
+
+        invocation = QwenImageLatentsToImageInvocation.model_construct(
+            latents=MagicMock(latents_name="test_latents"),
+            vae=MagicMock(vae=MagicMock(), seamless_axes=[]),
+            tiled=False,
+            tile_size=0,
+        )
+        with pytest.raises(RuntimeError, match="stop after the tiling decision"):
+            invocation.invoke(mock_context)
+
+        # A pre-tiled decode re-estimates against one tile, so the reservation shrinks. Reserving the
+        # full-frame figure is what "decoded in a single pass" looks like from here.
+        assert mock_vae_info.model_on_device.call_args.kwargs["working_mem_bytes"] == untiled
 
 
 class TestQwenImageVaeTiling:
