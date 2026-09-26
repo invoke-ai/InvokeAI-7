@@ -605,8 +605,8 @@ def test_an_nvfp4_layer_missing_its_global_scale_is_refused_before_the_cache_is_
     A packed uint8 weight with a block-scale grid and no `weight_scale_2` is what a guard keyed on
     `weight_scale_2` -- the key the decode keys on -- lets straight through. `_find_nvfp4_layers`
     refuses it and `test_nvfp4.py` pins that; what only a seam can answer is whether this loader
-    reaches the detector before it asks the cache for room, and this seam has the longest run between
-    the two -- `pop_nvfp4_layers` to the reservation is 24 lines and a key conversion.
+    reaches the detector before it asks the cache for room. Here a key conversion stands between the
+    pop and the reservation, and nothing but their order keeps them that way round.
     """
     sd = _tiny_transformer_checkpoint()
     target = _official_name(f"{NVFP4_LAYER}.weight")[: -len(".weight")]
@@ -616,7 +616,7 @@ def test_an_nvfp4_layer_missing_its_global_scale_is_refused_before_the_cache_is_
     _tiny_geometry(monkeypatch)
     run = prepare(_transformer_seam(), monkeypatch)
 
-    with pytest.raises(ValueError, match="no weight_scale_2"):
+    with pytest.raises(ValueError, match="with a weight_scale but no weight_scale_2"):
         run.load(_checkpoint_config(tmp_path, sd))
 
     assert run.reserved == []

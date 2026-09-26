@@ -867,15 +867,18 @@ def test_an_nvfp4_layer_missing_its_global_scale_is_refused_before_the_cache_is_
     *native* keys, before the conversion that remaps the payload paths, so the refusal has to survive
     being upstream of the rename as well as upstream of the reservation.
     """
-    width = _TinyNativeKrea2.WIDTH
+    # A whole number of cuBLAS tiles -- 128 rows, 8 blocks of 16 -- rather than the tiny model's
+    # width, which would give an empty grid. The refusal reads only the key pairing and the uint8
+    # dtype, so it fires either way; a layer no nvfp4 build could contain is the wrong thing to
+    # assert against, and it would stop representing the state if that check is ever tightened.
     state_dict = {
-        **_native_block(width),
-        "blocks.0.attn.wq.weight": torch.zeros(width, width // 2, dtype=torch.uint8),
-        "blocks.0.attn.wq.weight_scale": torch.zeros(width, width // 16).to(torch.float8_e4m3fn),
+        **_native_block(_TinyNativeKrea2.WIDTH),
+        "blocks.0.attn.wq.weight": torch.zeros(128, 64, dtype=torch.uint8),
+        "blocks.0.attn.wq.weight_scale": torch.zeros(128, 8).to(torch.float8_e4m3fn),
     }
     run, config = _native_fp8_driver(monkeypatch, tmp_path, state_dict)
 
-    with pytest.raises(ValueError, match="no weight_scale_2"):
+    with pytest.raises(ValueError, match="with a weight_scale but no weight_scale_2"):
         run.load(config)
 
     assert run.reserved == []

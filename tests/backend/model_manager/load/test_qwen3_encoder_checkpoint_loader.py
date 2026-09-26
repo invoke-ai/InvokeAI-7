@@ -278,7 +278,7 @@ def test_an_nvfp4_layer_missing_its_global_scale_is_refused_before_the_cache_is_
     loader._ram_cache = SimpleNamespace(make_room=MagicMock())
     config = Qwen3Encoder_Checkpoint_Config.model_construct(path=str(checkpoint), variant=Qwen3VariantType.Qwen3_4B)
 
-    with pytest.raises(ValueError, match="no weight_scale_2"):
+    with pytest.raises(ValueError, match="with a weight_scale but no weight_scale_2"):
         loader._load_from_singlefile(config)
 
     loader._ram_cache.make_room.assert_not_called()

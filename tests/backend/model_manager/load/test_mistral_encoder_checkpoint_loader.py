@@ -315,7 +315,7 @@ def test_an_nvfp4_layer_missing_its_global_scale_is_refused_before_the_cache_is_
     save_file(tensors, checkpoint)
     run = prepare(SEAM, monkeypatch, geometry=_fp8_matmul(keep_fp8))
 
-    with pytest.raises(ValueError, match="no weight_scale_2"):
+    with pytest.raises(ValueError, match="with a weight_scale but no weight_scale_2"):
         run.load(_config(checkpoint))
 
     assert run.reserved == []

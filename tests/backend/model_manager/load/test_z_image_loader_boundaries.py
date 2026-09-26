@@ -418,8 +418,8 @@ def test_an_nvfp4_layer_missing_its_global_scale_is_refused_before_the_cache_is_
     A packed uint8 weight with a block-scale grid and no `weight_scale_2` is the shape a guard keyed
     on `weight_scale_2` -- the key the decode keys on -- lets straight through. `_find_nvfp4_layers`
     refuses it and `test_nvfp4.py` pins that; what only a seam can answer is whether this loader
-    reaches the detector before it asks the cache for room. Here `pop_nvfp4_layers` sits 68 lines
-    above the reservation, and nothing but that order keeps it there.
+    reaches the detector before it asks the cache for room, which nothing but the order of those two
+    statements secures.
     """
     state_dict = {
         "x_embedder.weight": torch.randn(4, 4),
@@ -428,7 +428,7 @@ def test_an_nvfp4_layer_missing_its_global_scale_is_refused_before_the_cache_is_
     }
     run, config = _driver(monkeypatch, tmp_path, state_dict)
 
-    with pytest.raises(ValueError, match="no weight_scale_2"):
+    with pytest.raises(ValueError, match="with a weight_scale but no weight_scale_2"):
         run.load(config)
 
     assert run.reserved == []
