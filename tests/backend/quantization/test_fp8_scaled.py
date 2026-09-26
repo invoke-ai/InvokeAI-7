@@ -38,7 +38,12 @@ from invokeai.backend.quantization.fp8_scaled import (
     strip_layer_path_prefix,
     warn_on_unattached_scales,
 )
-from tests.backend.quantization.test_block_scale_tiles import stored_layout
+from tests.fixtures.quantized_payloads import (
+    MX_BLOCK_SIZE,
+    mxfp8_marker,
+    mxfp8_tensors,
+    stored_layout,
+)
 
 cuda_fp8 = pytest.mark.skipif(
     not (torch.cuda.is_available() and device_supports_fp8_matmul(torch.device("cuda"))),
@@ -1515,3 +1520,71 @@ class TestMalformedWeightScale:
         tensor a (32) must match tensor b (7)" from inside the fold, naming neither layer nor file."""
         with pytest.raises(ValueError, match="neither per-tensor nor per-output-channel"):
             expand_weight_scale(torch.ones(32, 16), torch.full((7,), 2.0))
+
+
+class TestReservationCoversTheSideChannelItHolds:
+    """The reservation is made *after* the side channel has been taken out of the state dict.
+
+    `extract_fp8_scaled_layers` pops every scale key and hands back a mapping of tensors, and for an
+    MXFP8 layer it does more than move them: `decode_mx_block_scales` replaces the stored `uint8`
+    exponent grid with a float one, four times the size. That happens before the caller's
+    `make_room`, so those bytes are resident while the cache decides what to evict -- and they are in
+    no reservation, because the predictor walks the state dict they are no longer in.
+
+    Measured on a 512x512 toy layer: the prediction comes back at exactly the widened weight,
+    524288 bytes, while the decoded grid holds another 32768 -- 6.2% short, in the direction that
+    makes the cache hand out room that is already spoken for. The grid is one entry per 32 weight
+    elements, so on Comfy-Org's 12 GB MXFP8 build it is around 1.5 GB. Same class as the overshoots
+    recorded at `z_image.py:697` and `krea2.py:588`; it reads as a rounding error only because one
+    reachable build uses the scheme.
+    """
+
+    @staticmethod
+    def _mx_layer(rows: int = 512, blocks: int = 16) -> tuple[dict, dict, torch.nn.Module]:
+        exponents = (torch.arange(rows * blocks, dtype=torch.int64).reshape(rows, blocks) % 8) + 124
+        tensors, _expected = mxfp8_tensors("lin", exponents)
+        model = torch.nn.Module()
+        model.add_module("lin", torch.nn.Linear(blocks * MX_BLOCK_SIZE, rows, bias=False))
+        return dict(tensors), {"lin": mxfp8_marker()}, model
+
+    def test_the_decode_widens_the_grid_before_anything_reserves_for_it(self) -> None:
+        """The half of the finding that is true today, so the numbers are recorded rather than
+        argued: the stored grid leaves the state dict and a four-times-larger one takes its place in
+        a mapping the predictor is handed but does not weigh."""
+        sd, hints, model = self._mx_layer()
+        stored_bytes = sd["lin.weight_scale"].nelement() * sd["lin.weight_scale"].element_size()
+
+        layers = extract_fp8_scaled_layers(sd, layer_hints=hints)
+        grid = layers["lin"].weight_scale
+
+        assert "lin.weight_scale" not in sd
+        assert grid.dtype is torch.float32 and stored_bytes * 4 == grid.nelement() * grid.element_size()
+        assert (
+            predict_cast_state_dict_size(sd, torch.bfloat16, keep_fp8=False, model=model, scaled_layers=layers)
+            == sd["lin.weight"].nelement() * 2
+        )
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "The clean fix presupposes PR D. Adding the mapping's bytes to this predictor cannot be "
+            "unconditional: whether a scale is still resident after the split depends on whether its "
+            "layer stayed fp8, which is the three-way agreement between `cast_state_dict`, this "
+            "function and `split_fp8_scaled_layers` that §4.4 describes as held by call-order "
+            "accident -- `TestPredictionIsSplitAware` pins `predicted == actual` against the state "
+            "dict alone, and a flat term breaks it for the block-wise case the split folds. The "
+            "alternative, an eighth hand-assembled term at each of the eight seams beside "
+            "`predict_nvfp4_install_size`, is the per-loader assembly §0.1 already counts as a "
+            "defect. §4.4's `decide(...) -> LoadPlan` with `predict_size(plan)` makes the dict and "
+            "its side channel one argument, so the question cannot be asked of half of it."
+        ),
+    )
+    def test_the_decoded_mx_grid_is_inside_the_reservation(self) -> None:
+        """What the reservation should cover. Strict, so PR D cannot land without removing it."""
+        sd, hints, model = self._mx_layer()
+        layers = extract_fp8_scaled_layers(sd, layer_hints=hints)
+        grid = layers["lin"].weight_scale
+
+        predicted = predict_cast_state_dict_size(sd, torch.bfloat16, keep_fp8=False, model=model, scaled_layers=layers)
+
+        assert predicted >= sd["lin.weight"].nelement() * 2 + grid.nelement() * grid.element_size()

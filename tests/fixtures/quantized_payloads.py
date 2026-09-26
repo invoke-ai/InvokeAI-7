@@ -17,6 +17,7 @@ from typing import Any, NamedTuple
 
 import torch
 
+from invokeai.backend.quantization.fp8_scaled import MXFP8_FORMAT
 from invokeai.backend.quantization.int8_convrot import CONVROT_GROUP_SIZE, build_regular_hadamard
 
 # e4m3's largest finite magnitude. A per-tensor scaled-fp8 export divides by this, so that the
@@ -29,6 +30,9 @@ INT8_LEVELS = 127.0
 
 # The two nvfp4 codes worth +1.0 and -1.0 in E2M1. Paired with a block scale and a global scale they
 # give a weight whose exact value is known without depending on the rest of the E2M1 table.
+#: One MX block is 32 elements wide in every published build; the marker only cross-checks it.
+MX_BLOCK_SIZE = 32
+
 NVFP4_CODE_PLUS_ONE = 2
 NVFP4_CODE_MINUS_ONE = 10
 
@@ -140,3 +144,53 @@ def nvfp4_signed_tensors(path: str, positive: torch.Tensor) -> tuple[dict[str, t
     codes = nvfp4_codes(positive)
     tensors = nvfp4_tensors(path, codes, block_scale=2.0, global_scale=0.25)
     return tensors, torch.where(positive, 0.5, -0.5)
+
+
+def stored_layout(grid: torch.Tensor) -> torch.Tensor:
+    """Lay a row-major grid out the way checkpoints store it.
+
+    By the measured index formula: element ``[m, k]`` lands at flat position ``position``. Shared
+    with the nvfp4 and MXFP8 decode tests so both check against the same independent statement of
+    the layout rather than against each other.
+    """
+    rows, blocks = grid.shape
+    flat = torch.full((rows * blocks,), float("nan"), dtype=grid.dtype)
+    for m in range(rows):
+        for k in range(blocks):
+            position = ((((m // 128) * (blocks // 4) + k // 4) * 32 + m % 32) * 4 + (m % 128) // 32) * 4 + k % 4
+            flat[position] = grid[m, k]
+    return flat.reshape(rows, blocks)
+
+
+def mxfp8_tensors(
+    path: str, exponents: torch.Tensor, *, block_size: int = MX_BLOCK_SIZE
+) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+    """One MXFP8 layer in checkpoint layout, and the block-wise float scale it decodes to.
+
+    MXFP8 is the scheme this repo only ever *refuses or folds* -- there is no kernel for it below
+    Blackwell -- which is exactly why it was missing here: the payload builders were drawn from what
+    `backend/quantization` decodes, and a layout nobody decodes for the matmul fell out of the set.
+    It is also the worst payload to leave unbuilt. The grid is E8M0 exponent *bytes*, so 127 means
+    `2**0`; folded as linear multipliers the weights come out around 127x too large, at the right
+    shape and the right dtype, with nothing raised and nothing logged.
+
+    The grid is stored in cuBLAS tiles (:func:`stored_layout`), because that is how both published
+    builds store it and reading it row-major pairs blocks with the wrong rows.
+
+    The weight is all ones, so the decoded scale *is* the expected weight -- an assertion that moves
+    by a factor of `2**(byte - 127)` per block if either half of the decode is skipped.
+    """
+    rows, blocks = exponents.shape
+    tensors = {
+        f"{path}.weight": torch.ones(rows, blocks * block_size).to(torch.float8_e4m3fn),
+        f"{path}.weight_scale": stored_layout(exponents.to(torch.float64)).to(torch.uint8),
+    }
+    return tensors, torch.exp2(exponents.float() - 127)
+
+
+def mxfp8_marker(*, block_size: int = MX_BLOCK_SIZE) -> dict[str, object]:
+    """What a layer has to say about itself before the decode will read its grid.
+
+    A `uint8` tensor beside an fp8 weight is otherwise just an unknown producer's convention.
+    """
+    return {"format": MXFP8_FORMAT, "block_size": block_size}
