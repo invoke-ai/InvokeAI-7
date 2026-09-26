@@ -340,3 +340,47 @@ def test_an_nvfp4_layer_missing_its_global_scale_is_refused_before_the_cache_is_
         run.load(QwenVLEncoder_Checkpoint_Config.model_construct(path=str(checkpoint)))
 
     assert run.reserved == []
+
+
+def test_the_transformer_refuses_an_nvfp4_layer_missing_its_global_scale_before_the_cache_is_evicted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """The same degraded half-state at the transformer seam, which had no `Seam` of its own.
+
+    The encoder cell above covers the other Qwen-Image seam; this one is the transformer, where the
+    pop sits 25 lines above the reservation. Declared through the shared driver rather than the
+    hand-rolled loader the cells above use, because `run.reserved` is the assertion -- the recorded
+    reservations are what say "before", and a `MagicMock` would only say "not called at all".
+    """
+    import diffusers
+
+    state_dict = {
+        "img_in.weight": torch.randn(128, 64),
+        "img_in.bias": torch.randn(128),
+        "transformer_blocks.0.attn.to_q.weight": torch.zeros(128, 32, dtype=torch.uint8),
+        "transformer_blocks.0.attn.to_q.weight_scale": torch.zeros(128, 4).to(torch.float8_e4m3fn),
+    }
+    checkpoint = tmp_path / "qwen_image_nvfp4_half.safetensors"
+    checkpoint.touch()
+    seam = Seam(
+        loader=QwenImageCheckpointModel,
+        module=qwen_image,
+        entry="_load_from_singlefile",
+        load_file_host=safetensors.torch,
+        compute_dtype=COMPUTE_DTYPE,
+        patches_device=True,
+    )
+    run = prepare(
+        seam,
+        monkeypatch,
+        state_dict=state_dict,
+        metadata=None,
+        geometry=lambda patch: patch.setattr(
+            diffusers, "QwenImageTransformer2DModel", _TinyQwenImageTransformer, raising=False
+        ),
+    )
+
+    with pytest.raises(ValueError, match="no weight_scale_2"):
+        run.load(Main_Checkpoint_QwenImage_Config.model_construct(path=str(checkpoint), name="qwen_image_nvfp4_half"))
+
+    assert run.reserved == []
