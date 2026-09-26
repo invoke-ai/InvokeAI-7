@@ -3,11 +3,26 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 
 import { Box } from '@chakra-ui/react';
 import { useDndMonitor, type DragEndEvent } from '@dnd-kit/core';
-import { useQueueItemProgressImage } from '@features/queue/react';
+import {
+  getRemoteParentBackendItemId,
+  getRemoteDispatchPlan,
+  isRemoteDispatchItemSettled,
+  getQueueItemSnapshotBatchCount,
+  getRemoteProgressIdentity,
+  getRemoteProgressTarget,
+  getRemoteSyntheticBackendItemId,
+} from '@features/queue';
+import { useQueueItemProgressImage, useRemoteBridgeSessions } from '@features/queue/react';
 import { useMountEffect } from '@platform/react/useMountEffect';
+import { apiFetchJson, getApiErrorMessage } from '@platform/transport/http';
 import { preloadCanvasInvocation } from '@workbench/activeInvocationSubmission';
 import { getCanvasImportNotice } from '@workbench/canvas-operations/api';
-import { getCanvasStagingSlots } from '@workbench/canvasStagingView';
+import {
+  getCanvasRemotePreviewSnapshot,
+  getCanvasRemotePreviewsForDisplay,
+  subscribeCanvasRemotePreviews,
+} from '@workbench/canvasRemotePreviews';
+import { getCanvasStagingSlots, type CanvasStagingSlot } from '@workbench/canvasStagingView';
 import { recordCanvasImportError } from '@workbench/image-actions/canvasImportError';
 import { readLayerPanelState } from '@workbench/layerPanelState';
 import { useWorkbenchSettingsSelector } from '@workbench/settings/store';
@@ -22,7 +37,17 @@ import {
   useWorkbenchCommands,
   useWorkbenchQueries,
 } from '@workbench/WorkbenchContext';
-import { lazy, Suspense, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useModelGridSize } from './bboxGrid';
@@ -146,12 +171,187 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
     engine?.interaction.set('checkerColors', resolveCheckerColors());
   }, [engine, themeId]);
 
-  const stagingSlots = getCanvasStagingSlots(canvas, queueItems);
-  const selectedSlot = stagingSlots[stagingArea.selectedImageIndex];
+  const stagingSlots = useMemo(() => getCanvasStagingSlots(canvas, queueItems), [canvas, queueItems]);
+  const remotePreviews = useSyncExternalStore(
+    subscribeCanvasRemotePreviews,
+    getCanvasRemotePreviewSnapshot,
+    getCanvasRemotePreviewSnapshot
+  );
+  const recoveredBridges = useRemoteBridgeSessions();
+  const remotePreviewSlots = useMemo<CanvasStagingSlot[]>(() => {
+    const planned = queueItems.flatMap((item) => {
+      const plan = getRemoteDispatchPlan(item.id);
+      if (
+        !plan?.remoteSlots.length ||
+        item.snapshot.destination !== 'canvas' ||
+        item.status === 'cancelled' ||
+        item.status === 'failed' ||
+        item.snapshot.canvas.documentRevision !== canvas.documentRevision
+      ) {
+        return [];
+      }
+      const count = item.backendItemIds?.length ?? getQueueItemSnapshotBatchCount(item);
+      const bbox = item.snapshot.canvas.document.bbox;
+      return Array.from({ length: count }, (_, index) => index).flatMap((index) =>
+        plan.remoteSlots.flatMap((slot) => {
+          const backendItemId = item.backendItemIds?.[index];
+          if (isRemoteDispatchItemSettled(item.id, slot, backendItemId)) {
+            return [];
+          }
+          const syntheticId = getRemoteSyntheticBackendItemId(item.id, slot, backendItemId);
+          if (
+            stagingArea.pendingImages.some(
+              (candidate) => candidate.sourceQueueItemId === item.id && candidate.sourceBackendItemId === syntheticId
+            )
+          ) {
+            return [];
+          }
+          const target = getRemoteProgressTarget(item.id, slot, backendItemId);
+          return [
+            {
+              id: `remote-placeholder:${item.id}:${slot}:${backendItemId ?? `pending-${index}`}`,
+              itemIndex: backendItemId === undefined ? index + 1 : target.itemIndex,
+              kind: 'placeholder' as const,
+              queueItemId: target.queueItemId,
+              width: bbox.width,
+              height: bbox.height,
+            },
+          ];
+        })
+      );
+    });
+    const actual = getCanvasRemotePreviewsForDisplay(remotePreviews, recoveredBridges, queueItems, projectId)
+      .flatMap((remote) => {
+        const item = queueItems.find((entry) => entry.id === remote.queueItemId);
+        if (
+          !item ||
+          item.snapshot.destination !== 'canvas' ||
+          item.status === 'cancelled' ||
+          item.snapshot.canvas.documentRevision !== canvas.documentRevision
+        ) {
+          return [];
+        }
+        const backendItemId = getRemoteSyntheticBackendItemId(remote.queueItemId, remote.slot, remote.backendItemId);
+        if (
+          stagingArea.pendingImages.some(
+            (candidate) =>
+              candidate.sourceQueueItemId === remote.queueItemId && candidate.sourceBackendItemId === backendItemId
+          )
+        ) {
+          return [];
+        }
+        const target = getRemoteProgressTarget(remote.queueItemId, remote.slot, remote.backendItemId);
+        const bbox = item.snapshot.canvas.document.bbox;
+        return [
+          {
+            id: `remote-placeholder:${remote.queueItemId}:${remote.slot}:${remote.backendItemId ?? 0}`,
+            itemIndex: target.itemIndex,
+            kind: 'placeholder' as const,
+            queueItemId: target.queueItemId,
+            width: bbox.width,
+            height: bbox.height,
+          },
+        ];
+      })
+      .sort((left, right) => {
+        const a = getRemoteProgressIdentity(left);
+        const b = getRemoteProgressIdentity(right);
+        const aItem = queueItems.find((item) => item.id === a?.localQueueItemId);
+        const bItem = queueItems.find((item) => item.id === b?.localQueueItemId);
+        const ai = aItem?.backendItemIds?.indexOf(a?.backendItemId ?? -1) ?? -1;
+        const bi = bItem?.backendItemIds?.indexOf(b?.backendItemId ?? -1) ?? -1;
+        return (
+          (ai < 0 ? Number.MAX_SAFE_INTEGER : ai) - (bi < 0 ? Number.MAX_SAFE_INTEGER : bi) ||
+          (a?.slot ?? 0) - (b?.slot ?? 0)
+        );
+      });
+    // A live bridge replaces (rather than duplicates) its reserved tile.
+    const actualKeys = new Set(actual.map((slot) => `${slot.queueItemId}:${slot.itemIndex}`));
+    return [...planned.filter((slot) => !actualKeys.has(`${slot.queueItemId}:${slot.itemIndex}`)), ...actual];
+  }, [canvas.documentRevision, projectId, queueItems, recoveredBridges, remotePreviews, stagingArea.pendingImages]);
+  // Temporary display slots never enter the persisted Canvas reducer.
+  const displaySlots = useMemo(() => {
+    // The backend helper is not a local image for Remotes only. Do not display
+    // its normal queue placeholder alongside the reserved remote slot.
+    const slots = [
+      ...stagingSlots.filter((slot) => {
+        const plan = getRemoteDispatchPlan(slot.queueItemId);
+        return slot.kind !== 'placeholder' || !plan || plan.local;
+      }),
+      ...remotePreviewSlots,
+    ];
+    const ownerId = (slot: CanvasStagingSlot): string =>
+      getRemoteProgressIdentity(slot)?.localQueueItemId ?? slot.queueItemId;
+    // Visible slot arrival order is not invoke order: remote-only jobs otherwise
+    // move to the end when their temporary backend placeholder disappears.
+    const chronological = queueItems
+      .map((item, index) => ({ item, index }))
+      .sort((a, b) => {
+        const aid = a.item.backendItemIds?.[0];
+        const bid = b.item.backendItemIds?.[0];
+        if (aid !== undefined && bid !== undefined && aid !== bid) {
+          return aid - bid;
+        }
+        const at = Date.parse(a.item.snapshot.submittedAt);
+        const bt = Date.parse(b.item.snapshot.submittedAt);
+        return Number.isFinite(at) && Number.isFinite(bt) && at !== bt ? at - bt : b.index - a.index;
+      });
+    const ownerOrder = new Map(chronological.map(({ item }, index) => [item.id, index]));
+    const slotOrder = (slot: CanvasStagingSlot): number => {
+      const item = queueItems.find((entry) => entry.id === ownerId(slot));
+      const remote = getRemoteProgressIdentity(slot);
+      const sourceId = slot.kind === 'candidate' ? slot.candidate.sourceBackendItemId : undefined;
+      const parentId = remote?.backendItemId ?? getRemoteParentBackendItemId(sourceId ?? -1) ?? sourceId;
+      const index = item?.backendItemIds?.indexOf(parentId ?? -1) ?? -1;
+      const sequence = index >= 0 ? index : slot.itemIndex !== undefined ? slot.itemIndex - 1 : 1_000_000;
+      const remoteSlot = remote?.slot ?? (sourceId && getRemoteParentBackendItemId(sourceId) ? sourceId % 1024 : 0);
+      return sequence * 1024 + remoteSlot;
+    };
+    return slots.sort(
+      (left, right) =>
+        (ownerOrder.get(ownerId(left)) ?? Number.MAX_SAFE_INTEGER) -
+          (ownerOrder.get(ownerId(right)) ?? Number.MAX_SAFE_INTEGER) || slotOrder(left) - slotOrder(right)
+    );
+  }, [queueItems, remotePreviewSlots, stagingSlots]);
+  const [pinnedRemote, setPinnedRemote] = useState<{
+    id: string;
+    queueItemId: string;
+    slot: number;
+    backendItemId?: number;
+  } | null>(null);
+  const pinnedDisplayIndex = pinnedRemote ? displaySlots.findIndex((slot) => slot.id === pinnedRemote.id) : -1;
+  const selectedStagingSlot = stagingSlots[stagingArea.selectedImageIndex];
+  const unpinnedDisplayIndex = selectedStagingSlot
+    ? displaySlots.findIndex((slot) => slot.id === selectedStagingSlot.id)
+    : 0;
+  const selectedDisplayIndex = pinnedDisplayIndex !== -1 ? pinnedDisplayIndex : Math.max(0, unpinnedDisplayIndex);
+  const selectedSlot = displaySlots[selectedDisplayIndex];
   const selectedCandidate = selectedSlot?.kind === 'candidate' ? selectedSlot.candidate : undefined;
   const selectedPlaceholder = selectedSlot?.kind === 'placeholder' ? selectedSlot : null;
-  const hasStagingSlots = stagingSlots.length > 0;
-  const hasMultipleStagingSlots = stagingSlots.length > 1;
+  const hasStagingSlots = displaySlots.length > 0;
+  const hasMultipleStagingSlots = displaySlots.length > 1;
+
+  // Follow the real staging candidate when a pinned remote placeholder disappears.
+  // Keep the transient pin until the next click.
+  useEffect(() => {
+    if (!pinnedRemote) {
+      return;
+    }
+    const finishedBackendId = getRemoteSyntheticBackendItemId(
+      pinnedRemote.queueItemId,
+      pinnedRemote.slot,
+      pinnedRemote.backendItemId
+    );
+    const candidateIndex = stagingSlots.findIndex(
+      (slot) =>
+        slot.kind === 'candidate' &&
+        slot.queueItemId === pinnedRemote.queueItemId &&
+        slot.candidate.sourceBackendItemId === finishedBackendId
+    );
+    if (candidateIndex !== -1 && candidateIndex !== stagingArea.selectedImageIndex) {
+      canvasDispatch({ imageIndex: candidateIndex, type: 'setStagedImageIndex' });
+    }
+  }, [canvasDispatch, pinnedRemote, stagingArea.selectedImageIndex, stagingSlots]);
   const isCanvasGenerationInFlight = queueItems.some(
     (item) =>
       item.snapshot.destination === 'canvas' &&
@@ -295,10 +495,86 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   /* eslint-enable react/preserve-manual-memoization */
   const acceptStagedImage = useCallback(() => commitSelectedStagedImage(false), [commitSelectedStagedImage]);
   const saveStagedImageAndContinue = useCallback(() => commitSelectedStagedImage(true), [commitSelectedStagedImage]);
-  const cancelQueueItem = useCallback((queueItemId: string) => queue.cancel(undefined, queueItemId), [queue]);
+  const cancelQueueItem = useCallback(
+    (queueItemId: string) => {
+      const item = queueItems.find((entry) => entry.id === queueItemId);
+      if (!item || item.snapshot.destination !== 'canvas') {
+        return;
+      }
+      // The local item may have already completed while R1 is still rendering.
+      if (item.status === 'pending' || item.status === 'running') {
+        queue.cancel(undefined, queueItemId);
+      }
+      // This authenticated endpoint locates only the signed-in user's remotes;
+      // it never accepts arbitrary worker URLs or backend item IDs.
+      void apiFetchJson<{ failed: number }>('/api/v1/remote_workers/cancel', {
+        body: JSON.stringify({ queue_item_id: queueItemId }),
+        headers: { 'Content-Type': 'application/json' },
+        method: 'PUT',
+      })
+        .then((result) => {
+          if (result.failed > 0) {
+            notifications.reportError({
+              area: 'queue-results',
+              message: `${result.failed} remote worker cancellation request(s) failed. Check the server log.`,
+              namespace: 'queue',
+              projectId,
+            });
+          }
+        })
+        .catch((error: unknown) => {
+          notifications.reportError({
+            area: 'queue-results',
+            message: getApiErrorMessage(error, 'Could not cancel the remote workers'),
+            namespace: 'queue',
+            projectId,
+          });
+        });
+    },
+    [notifications, projectId, queue, queueItems]
+  );
+  const selectDisplaySlot = useCallback(
+    (index: number) => {
+      const slot = displaySlots[index];
+      if (!slot) {
+        return;
+      }
+      // When remote alternatives are present, a manual thumbnail choice should
+      // remain pinned as another machine finishes. Keep stock local-only
+      // auto-switch behavior when no remote display slots exist.
+      if (remotePreviewSlots.length > 0) {
+        canvasDispatch({ mode: 'off', type: 'setCanvasStagingAutoSwitch' });
+      }
+      if (slot.kind === 'placeholder' && slot.id.startsWith('remote-placeholder:')) {
+        const remote = Object.values(remotePreviews).find(
+          (entry) =>
+            getRemoteProgressTarget(entry.queueItemId, entry.slot, entry.backendItemId).queueItemId === slot.queueItemId
+        );
+        if (remote) {
+          setPinnedRemote({
+            id: slot.id,
+            queueItemId: remote.queueItemId,
+            slot: remote.slot,
+            backendItemId: remote.backendItemId,
+          });
+        }
+        return;
+      }
+      setPinnedRemote(null);
+      const actualIndex = stagingSlots.findIndex((entry) => entry.id === slot.id);
+      if (actualIndex !== -1) {
+        canvasDispatch({ imageIndex: actualIndex, type: 'setStagedImageIndex' });
+      }
+    },
+    [canvasDispatch, displaySlots, remotePreviews, remotePreviewSlots.length, stagingSlots]
+  );
   const cycleStagedImage = useCallback(
-    (direction: -1 | 1) => canvasDispatch({ direction, type: 'cycleStagedImage' }),
-    [canvasDispatch]
+    (direction: -1 | 1) => {
+      if (displaySlots.length > 0) {
+        selectDisplaySlot((selectedDisplayIndex + direction + displaySlots.length) % displaySlots.length);
+      }
+    },
+    [displaySlots.length, selectedDisplayIndex, selectDisplaySlot]
   );
   const discardAllStagedImages = useCallback(
     () => canvasDispatch({ type: 'discardAllStagedImages' }),
@@ -311,10 +587,6 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   const preloadStagedCandidate = useCallback(
     (imageName: string) => engine?.previews.preloadStagedPreview(imageName),
     [engine]
-  );
-  const selectStagedImage = useCallback(
-    (imageIndex: number) => canvasDispatch({ imageIndex, type: 'setStagedImageIndex' }),
-    [canvasDispatch]
   );
   const setStagingAutoSwitch = useCallback(
     (mode: 'off' | 'latest' | 'progress') => canvasDispatch({ mode, type: 'setCanvasStagingAutoSwitch' }),
@@ -341,7 +613,9 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
     bboxHeight: document.bbox.height,
     bboxWidth: document.bbox.width,
     isGenerationInFlight: selectedPlaceholder !== null,
-    isVisible: stagingArea.isVisible,
+    // The local item may have settled (and hidden staging) while a remote
+    // bridge is still running. A selected remote live frame must stay visible.
+    isVisible: stagingArea.isVisible || selectedPlaceholder?.id.startsWith('remote-placeholder:') === true,
     progressImage,
     selectedImageName: selectedCandidate?.imageName ?? null,
     selectedPlacement: selectedCandidate?.placement ?? null,
@@ -527,19 +801,19 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
                 autoSwitchMode={stagingArea.autoSwitchMode}
                 canAccept={interactionCapabilities.canAcceptStagedImage}
                 hasMultipleSlots={hasMultipleStagingSlots}
-                isGenerating={isCanvasGenerationInFlight}
+                isGenerating={isCanvasGenerationInFlight || remotePreviewSlots.length > 0}
                 isVisible={stagingArea.isVisible}
                 selectedCandidate={selectedCandidate}
-                selectedImageIndex={stagingArea.selectedImageIndex}
+                selectedImageIndex={selectedDisplayIndex}
                 selectedSlot={selectedSlot}
-                slots={stagingSlots}
+                slots={displaySlots}
                 onAccept={acceptStagedImage}
                 onCancelQueueItem={cancelQueueItem}
                 onCycle={cycleStagedImage}
                 onDiscardAll={discardAllStagedImages}
                 onDiscardSelected={discardSelectedStagedImage}
                 onPreloadCandidate={preloadStagedCandidate}
-                onSelectImage={selectStagedImage}
+                onSelectImage={selectDisplaySlot}
                 onSaveToLayerAndContinue={saveStagedImageAndContinue}
                 onSetAutoSwitch={setStagingAutoSwitch}
                 onToggleThumbnails={toggleStagingThumbnails}

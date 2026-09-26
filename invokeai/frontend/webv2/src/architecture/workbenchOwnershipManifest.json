@@ -95,6 +95,7 @@
     "canvasSchemaVersion.ts": "workbench",
     "canvasProjectMutationPort.ts": "workbench",
     "canvasProjectMutations.ts": "workbench",
+    "canvasRemotePreviews.ts": "workbench",
     "canvasStagingView.ts": "workbench",
     "controlAdapters.ts": "workbench",
     "controlLayerChecks.ts": "workbench",

@@ -1,6 +1,7 @@
 import type { CanvasStagingCandidateContract, CanvasStateContractV3 } from '@workbench/canvas-engine/api';
 import type { WorkbenchQueueItem as QueueItem } from '@workbench/queueHistoryContracts';
 
+import { getRemoteProgressIdentity, getRemoteParentBackendItemId } from '@features/queue';
 import { getQueueItemSnapshotBatchCount, getQueueItemSnapshotDimensions } from '@features/queue/contracts';
 
 export interface CanvasQueuePlaceholderSlot {
@@ -199,13 +200,28 @@ const getCanvasStagingSlotsForQueueItem = (
         if (candidate) {
           slots.push(createCandidateSlot(candidate, itemIndex));
         }
-
-        continue;
-      }
-
-      if (isActive && !completedBackendItemIds.has(backendItemId) && !cancelledBackendItemIds.has(backendItemId)) {
+      } else if (
+        isActive &&
+        !completedBackendItemIds.has(backendItemId) &&
+        !cancelledBackendItemIds.has(backendItemId)
+      ) {
         slots.push(createPlaceholderSlot(item, itemIndex));
       }
+      // A remote image belongs immediately after its parent local iteration,
+      // not at the end of the queue item in remote completion order.
+      const matchingRemoteCandidates: CanvasStagingCandidateContract[] = [];
+      for (let candidateIndex = remainingCandidates.length - 1; candidateIndex >= 0; candidateIndex -= 1) {
+        const candidate = remainingCandidates[candidateIndex]!;
+        if (getRemoteParentBackendItemId(candidate.sourceBackendItemId ?? -1) !== backendItemId) {
+          continue;
+        }
+        remainingCandidates.splice(candidateIndex, 1);
+        matchingRemoteCandidates.push(candidate);
+      }
+      matchingRemoteCandidates.sort(
+        (left, right) => (left.sourceBackendItemId ?? 0) - (right.sourceBackendItemId ?? 0)
+      );
+      slots.push(...matchingRemoteCandidates.map((candidate) => createCandidateSlot(candidate, itemIndex)));
     }
 
     return [...slots, ...remainingCandidates.map((candidate) => createCandidateSlot(candidate))];
@@ -257,5 +273,11 @@ export const getFirstCanvasPlaceholderSlotIndex = (
   queueItems: readonly QueueItem[]
 ): number => getCanvasStagingSlots(canvas, queueItems).findIndex((slot) => slot.kind === 'placeholder');
 
-export const getCancelableCanvasStagingQueueItemId = (slot: CanvasStagingSlot | undefined): string | null =>
-  slot?.kind === 'placeholder' ? slot.queueItemId : null;
+export const getCancelableCanvasStagingQueueItemId = (slot: CanvasStagingSlot | undefined): string | null => {
+  if (slot?.kind !== 'placeholder') {
+    return null;
+  }
+  // Remote placeholders belong to the originating local generation; the Canvas
+  // Cancel button cancels all work for that generation, not a synthetic ID.
+  return getRemoteProgressIdentity(slot)?.localQueueItemId ?? slot.queueItemId;
+};

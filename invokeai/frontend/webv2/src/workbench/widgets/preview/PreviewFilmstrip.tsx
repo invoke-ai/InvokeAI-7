@@ -5,7 +5,7 @@ import { Box, HStack, Icon, ProgressCircle, Skeleton } from '@chakra-ui/react';
 import { useDraggable } from '@dnd-kit/core';
 import { toGalleryItemKey, toGalleryItemRef } from '@features/gallery/contracts';
 import { getGalleryItemDragData, getGalleryItemDragId } from '@features/gallery/utility';
-import { getDeterminateProgressPercent } from '@features/queue/contracts';
+import { getDeterminateProgressPercent, getRemoteProgressIdentity } from '@features/queue/contracts';
 import { useDeviceLabel } from '@features/queue/devices';
 import { useItemProgress, useQueueItemProgressImage } from '@features/queue/react';
 import { Scrollable } from '@platform/ui/Scrollable';
@@ -18,7 +18,7 @@ import { useTranslation } from 'react-i18next';
 import type { PreviewDensity } from './previewDensity';
 
 /**
- * Render board thumbnails below the stage with live GPU slots leading in gallery order and settling into result
+ * Render board thumbnails below the stage with live sessions leading in gallery order and settling into result
  * thumbnails in place. Reserve height outside media; item drag payloads work with existing gallery targets.
  */
 
@@ -137,6 +137,7 @@ const FilmstripLiveThumb = ({
   const image = useQueueItemProgressImage(session.queueItemId, session.itemIndex);
   const progress = useItemProgress(session.backendItemId);
   const deviceLabel = useDeviceLabel(progress?.device);
+  const remoteSlot = getRemoteProgressIdentity(session)?.slot ?? null;
   const percentage = getDeterminateProgressPercent(progress?.percentage);
   const isRunning = session.state === 'running';
   const name =
@@ -226,6 +227,24 @@ const FilmstripLiveThumb = ({
       >
         {session.state === 'queued' ? <Box bg="bg.subtle" h="full" w="full" /> : <Skeleton h="full" w="full" />}
       </StreamingImageFrame>
+      {remoteSlot !== null ? (
+        <Box
+          aria-hidden
+          bg="bg/85"
+          fontSize="xs"
+          fontWeight="bold"
+          lineHeight="1"
+          px="1"
+          py="0.5"
+          pointerEvents="none"
+          position="absolute"
+          right="0.5"
+          rounded="sm"
+          top="0.5"
+        >
+          R{remoteSlot}
+        </Box>
+      ) : null}
       <Box
         bg="bg/85"
         bottom="0.5"

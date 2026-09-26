@@ -1,4 +1,5 @@
 import type { QueueItemReadModel } from '@features/queue/core/types';
+import type { RemoteOnlyDispatchDisplay } from '@features/queue/data/remoteOnlyDispatchDisplay';
 import type { ReactNode } from 'react';
 
 import { Box, DataList, Separator, Text } from '@chakra-ui/react';
@@ -32,10 +33,16 @@ const ItemActionsPlaceholder = () => {
 const ITEM_ACTIONS_PLACEHOLDER = <ItemActionsPlaceholder />;
 
 /** Expanded detail grid + actions for a RECENT queue item row. */
-export const QueueItemDetails = ({ item }: { item: QueueItemReadModel }) => {
+export const QueueItemDetails = ({
+  item,
+  remoteOnlyDisplay,
+}: {
+  item: QueueItemReadModel;
+  remoteOnlyDisplay?: RemoteOnlyDispatchDisplay | null;
+}) => {
   const { t } = useTranslation();
   const { ItemActions } = useQueueUi();
-  const meta = extractGenerationMeta(item);
+  const meta = remoteOnlyDisplay ?? extractGenerationMeta(item);
   const duration = formatDuration(item.startedAt, item.completedAt);
   const deviceLabel = useDeviceLabel(item.device);
 

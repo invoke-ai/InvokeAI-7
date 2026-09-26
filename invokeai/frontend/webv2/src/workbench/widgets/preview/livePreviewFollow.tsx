@@ -3,11 +3,20 @@ import type { ReactNode } from 'react';
 
 import {
   getFollowedProgressSession,
+  getRemoteProgressIdentity,
+  getRemoteProgressTarget,
+  parseRemoteProgressMessage,
+  getRecoveredRemoteSessions,
   getQueueActiveSessions,
   getQueueProgressSessions,
   isGalleryProgressItem,
 } from '@features/queue/contracts';
-import { useActiveProgressTargets, useFollowedProgressTargets } from '@features/queue/react';
+import {
+  useActiveProgressTargets,
+  useFollowedProgressTargets,
+  useGeneratingRemotePreviewIds,
+  useRemoteBridgeSessions,
+} from '@features/queue/react';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { createContext, use, useMemo, useState } from 'react';
 
@@ -15,15 +24,19 @@ interface LivePreviewFollow {
   sessions: QueueActiveSession[];
   gallerySessions: QueueProgressSession[];
   pinnedSessionId: string | null;
+  /** A deliberate saved Gallery selection temporarily takes priority over live rendering. */
+  viewingSaved: boolean;
   /**
    * Shared live target: pinned, then newest-started running session, then first settling session in gallery order,
    * else null.
    */
   followedSessionId: string | null;
-  /** Turns live-follow on and pins `sessionId`: a tile click, or an arrow step onto a tile. */
+  /** Turns live-follow on and pins `sessionId` when a live thumbnail or navigation step is selected. */
   follow(sessionId: string): void;
   pin(sessionId: string): void;
   showAll(): void;
+  /** A Gallery click opens saved media without stopping the running generations. */
+  showSaved(): void;
 }
 
 const LivePreviewFollowContext = createContext<LivePreviewFollow | null>(null);
@@ -37,33 +50,79 @@ export const LivePreviewFollowProvider = ({ children }: { children: ReactNode })
   }));
   const running = useActiveProgressTargets();
   const followed = useFollowedProgressTargets();
-  const sessions = useMemo(
-    () => getQueueActiveSessions(items.filter(isGalleryProgressItem), running, followed),
-    [items, running, followed]
-  );
+  const recovered = useRemoteBridgeSessions();
+  const sessions = useMemo(() => {
+    const galleryItems = items.filter(isGalleryProgressItem);
+    const active = getQueueActiveSessions(galleryItems, running, followed);
+    const activeIds = new Set(active.map((session) => session.id));
+    return [
+      ...active,
+      ...getRecoveredRemoteSessions(galleryItems, projectId, recovered).filter((session) => !activeIds.has(session.id)),
+    ];
+  }, [items, projectId, running, followed, recovered]);
   const gallerySessions = useMemo(
     () => getQueueProgressSessions(items.filter(isGalleryProgressItem), sessions),
     [items, sessions]
   );
-  const [selection, setSelection] = useState<{ projectId: string; sessionId: string | null }>({
+  const [selection, setSelection] = useState<{
+    projectId: string;
+    sessionId: string | null;
+    viewingSaved: boolean;
+  }>({
     projectId,
     sessionId: null,
+    viewingSaved: false,
   });
   const isStale =
     selection.projectId !== projectId ||
-    !enabled ||
+    (!selection.viewingSaved && !enabled) ||
+    (selection.viewingSaved && sessions.length === 0) ||
     (selection.sessionId !== null &&
       !sessions.some((session) => session.id === selection.sessionId && session.state === 'running'));
-  if (isStale && (selection.sessionId !== null || selection.projectId !== projectId)) {
-    setSelection({ projectId, sessionId: null });
+  if (isStale && (selection.sessionId !== null || selection.viewingSaved || selection.projectId !== projectId)) {
+    setSelection({ projectId, sessionId: null, viewingSaved: false });
   }
-  const pinnedSessionId = isStale ? null : selection.sessionId;
-  // Follow the highest-id running session (FIFO start order), not the latest progress frame; pins take precedence.
-  const newestRunningSessionId = sessions.filter((session) => session.state === 'running').at(-1)?.id ?? null;
+  const viewingSaved = !isStale && selection.viewingSaved;
+  const pinnedSessionId = isStale || viewingSaved ? null : selection.sessionId;
+  // Follow the newest rendering session; queued remotes remain visible in Gallery/Canvas only.
+  const generatingRemoteIds = useGeneratingRemotePreviewIds();
+  const recoveredGeneratingIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const event of recovered) {
+      const remote = typeof event.message === 'string' ? parseRemoteProgressMessage(event.message) : null;
+      if (remote && remote.state === 'running' && remote.message !== `Remote ${remote.slot} queued`) {
+        const target = getRemoteProgressTarget(remote.queueItemId, remote.slot, remote.backendItemId);
+        ids.add(`${target.queueItemId}:${target.itemIndex}`);
+      }
+    }
+    return ids;
+  }, [recovered]);
+  const previewSessions = useMemo(
+    () =>
+      sessions.filter(
+        (session) =>
+          getRemoteProgressIdentity(session) === null ||
+          generatingRemoteIds.has(session.id) ||
+          recoveredGeneratingIds.has(session.id)
+      ),
+    [generatingRemoteIds, recoveredGeneratingIds, sessions]
+  );
+  const previewGallerySessions = useMemo(
+    () =>
+      gallerySessions.filter(
+        (session) =>
+          getRemoteProgressIdentity(session) === null ||
+          generatingRemoteIds.has(session.id) ||
+          recoveredGeneratingIds.has(session.id)
+      ),
+    [gallerySessions, generatingRemoteIds, recoveredGeneratingIds]
+  );
+  const newestRunningSessionId = previewSessions.filter((session) => session.state === 'running').at(-1)?.id ?? null;
   const preferredSessionId = pinnedSessionId ?? newestRunningSessionId;
-  const followedSessionId = enabled
-    ? (getFollowedProgressSession(gallerySessions, preferredSessionId)?.id ?? null)
-    : null;
+  const followedSessionId =
+    enabled && !viewingSaved
+      ? (getFollowedProgressSession(previewGallerySessions, preferredSessionId)?.id ?? null)
+      : null;
   const { account } = useWorkbenchCommands();
   const value = useMemo<LivePreviewFollow>(
     () => ({
@@ -71,14 +130,16 @@ export const LivePreviewFollowProvider = ({ children }: { children: ReactNode })
       gallerySessions,
       pinnedSessionId,
       followedSessionId,
+      viewingSaved,
       follow: (sessionId) => {
         account.updateProjectPreferences({ showProgressImagesInViewer: true });
-        setSelection({ projectId, sessionId });
+        setSelection({ projectId, sessionId, viewingSaved: false });
       },
-      pin: (sessionId) => setSelection({ projectId, sessionId }),
-      showAll: () => setSelection({ projectId, sessionId: null }),
+      pin: (sessionId) => setSelection({ projectId, sessionId, viewingSaved: false }),
+      showAll: () => setSelection({ projectId, sessionId: null, viewingSaved: false }),
+      showSaved: () => setSelection({ projectId, sessionId: null, viewingSaved: true }),
     }),
-    [account, sessions, gallerySessions, followedSessionId, pinnedSessionId, projectId]
+    [account, sessions, gallerySessions, followedSessionId, pinnedSessionId, projectId, viewingSaved]
   );
   return <LivePreviewFollowContext value={value}>{children}</LivePreviewFollowContext>;
 };

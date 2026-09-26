@@ -1,9 +1,10 @@
 import type { GalleryItem } from '@features/gallery';
+import type { QueueActiveSession } from '@features/queue/contracts';
 
 import { GALLERY_MAX_ROWS } from '@features/gallery/queries';
 import { describe, expect, it } from 'vitest';
 
-import { getVideoFrameCopyNotice } from './PreviewWidgetView';
+import { filterPreviewRemoteSessions, getVideoFrameCopyNotice } from './PreviewWidgetView';
 import { mergePreviewBoardItems } from './usePreviewNavigation';
 
 describe('mergePreviewBoardItems', () => {
@@ -108,6 +109,22 @@ describe('mergePreviewBoardItems', () => {
     expect(merged[0]?.name).toBe('optimistic-59');
     expect(merged).toContainEqual(expect.objectContaining({ kind: 'image', name: 'shared' }));
     expect(merged).toContainEqual(expect.objectContaining({ kind: 'video', name: 'shared' }));
+  });
+});
+
+describe('filterPreviewRemoteSessions', () => {
+  const session = (queueItemId: string, id = queueItemId): QueueActiveSession =>
+    ({ id, queueItemId }) as QueueActiveSession;
+
+  it('keeps local and rendering remote sessions while excluding queued remotes', () => {
+    const local = session('queue-local');
+    const queuedRemote = session('queue-1::irw-remote:1:101');
+    const renderingRemote = session('queue-1::irw-remote:2:101');
+
+    expect(filterPreviewRemoteSessions([local, queuedRemote, renderingRemote], new Set([renderingRemote.id]))).toEqual([
+      local,
+      renderingRemote,
+    ]);
   });
 });
 

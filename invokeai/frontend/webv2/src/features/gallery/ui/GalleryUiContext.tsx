@@ -114,6 +114,8 @@ export interface GalleryUiAdapter {
   /** Follow `sessionId` live; a tile click also reveals Preview, an arrow step must not move the layout. */
   followProgressSession(sessionId: string, options: { revealPreview: boolean }): void;
   liveFollowEnabled: boolean;
+  /** Cancels all remote workers attached to this original generation, including after local completion. */
+  cancelRemoteGeneration?(queueItemId: string): Promise<void>;
   widgets: {
     /** Open (or reveal) the Gallery widget; false when no region can host it. */
     openGallery(): boolean;

@@ -1,3 +1,5 @@
+import { assertAccountScopeCurrent, captureAccountScope } from '@platform/state/accountLifecycle';
+
 import type { QueueFeatureCommands, QueueQueryScope, QueueReadModel, QueueWorkflowRunSink } from './core/types';
 import type { QueueItemProgressPort, QueueRealtimeRuntime } from './data/realtimeRuntime';
 import type {
@@ -12,6 +14,8 @@ import type { QueueModelLoadPort, QueueNodeExecutionPort } from './runtime/coord
 import { queueBackend } from './data/httpRealtimeQueueBackend';
 import { queueReadModelOptions } from './data/queries';
 import { createQueueRealtimeRuntime } from './data/realtimeRuntime';
+import { cancelWithRemoteWorkers } from './data/remoteQueueCancellation';
+import { getCurrentQueueItem } from './data/serverApi';
 import { createQueueRuntime } from './runtime';
 import { createQueueReceiptAcknowledgements, type QueueReceiptStorePort } from './runtime/receiptAcknowledgements';
 
@@ -23,11 +27,30 @@ export const createProductionQueueReceiptAcknowledgements = (store: QueueReceipt
   });
 
 export const queueCommands: QueueFeatureCommands = {
-  cancelCurrentItem: queueBackend.cancelCurrentItem,
-  cancelItem: async (itemId) => {
-    await queueBackend.cancelItem(itemId);
+  cancelCurrentItem: async () => {
+    const owner = captureAccountScope();
+    const current = await getCurrentQueueItem({}, owner.signal);
+    assertAccountScopeCurrent(owner);
+    if (current) {
+      await cancelWithRemoteWorkers(
+        { item_id: current.item_id },
+        () => queueBackend.cancelItem(current.item_id),
+        owner
+      );
+    }
   },
-  cancelScopedItems: queueBackend.cancelScopedItems,
+  cancelItem: async (itemId) => {
+    const owner = captureAccountScope();
+    await cancelWithRemoteWorkers({ item_id: itemId }, () => queueBackend.cancelItem(itemId), owner);
+  },
+  cancelScopedItems: async (scope = {}, options = {}) => {
+    const owner = captureAccountScope();
+    await cancelWithRemoteWorkers(
+      { origin_prefix: scope.originPrefix ?? null, keep_current: options.keepCurrent ?? false },
+      () => queueBackend.cancelScopedItems(scope, options),
+      owner
+    );
+  },
   clearFailedItems: queueBackend.clearFailedItems,
   clearItems: queueBackend.clearItems,
   pauseProcessor: async () => {

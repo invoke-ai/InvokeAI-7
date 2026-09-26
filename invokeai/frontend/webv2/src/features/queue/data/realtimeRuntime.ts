@@ -5,6 +5,7 @@ import type {
   QueueItemStatusChangedEvent,
 } from '@features/queue/data/events';
 
+import { parseRemoteProgressMessage } from '@features/queue/core/remoteProgress';
 import { isTerminalBackendStatus } from '@features/queue/data/events';
 import { captureAccountScope, isAccountScopeCurrent } from '@platform/state/accountLifecycle';
 
@@ -107,6 +108,14 @@ export const createQueueRealtimeRuntime = ({
         }
 
         const event = payload as unknown as InvocationProgressEvent;
+
+        // IRW remote previews are synthetic sessions. The Queue coordinator
+        // handles them separately using a synthetic backend item id. If they
+        // also update the real local backend item here, the native progress rail
+        // alternates between local and remote percentages in one segment.
+        if (parseRemoteProgressMessage(event.message)) {
+          return;
+        }
 
         progress.set(event.item_id, {
           device: event.device,

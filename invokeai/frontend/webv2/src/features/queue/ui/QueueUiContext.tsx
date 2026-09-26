@@ -1,4 +1,6 @@
 import type { QueueItemReadModel } from '@features/queue/core/types';
+import type { RemoteOnlyDispatchDisplay } from '@features/queue/data/remoteOnlyDispatchDisplay';
+import type { RemoteQueueProgressItem } from '@features/queue/data/remoteWorkersDispatch';
 
 import { createContext, useContext, type ComponentType, type ReactNode } from 'react';
 
@@ -24,6 +26,11 @@ export interface QueueUiAdapter {
    */
   preloadItemActions?(): void;
   queueJobsScope: 'active-project' | 'all';
+  /** Browser-account-owned, display-only remotes; never counted as backend items. */
+  remoteQueueProgressItems?: RemoteQueueProgressItem[];
+  /** Original parameters for our remote-only kickoff, never the serialized graph. */
+  getRemoteOnlyDispatchDisplay?(item: QueueItemReadModel): RemoteOnlyDispatchDisplay | null;
+  cancelRemoteGeneration?(queueItemId: string): Promise<void>;
 }
 
 const QueueUiContext = createContext<QueueUiAdapter | null>(null);

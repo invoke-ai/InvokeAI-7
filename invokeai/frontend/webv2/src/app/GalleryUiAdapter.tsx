@@ -3,6 +3,7 @@ import type { GalleryUiAdapter } from '@features/gallery/react';
 import type { ReactNode } from 'react';
 
 import { GalleryUiProvider } from '@features/gallery/react';
+import { cancelRemoteGeneration, expandGalleryRemoteProgressSessions } from '@features/queue';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { captureAccountScope, isAccountScopeCurrent } from '@platform/state/accountLifecycle';
 import { useExportLibraryProject } from '@workbench/projects/useProjectFileActions';
@@ -39,6 +40,7 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
       antialiasProgressImages: project.settings.antialiasProgressImages,
       liveFollowEnabled: project.settings.showProgressImagesInViewer,
     }));
+  const queueItems = useActiveProjectSelector((project) => project.queue.items);
   const livePreview = useLivePreviewFollow();
   const { gallery, notifications, widgets } = useWorkbenchCommands();
   const queries = useWorkbenchQueries();
@@ -55,6 +57,22 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
       exportProject,
       gallery: {
         ...gallery,
+        selectItem: (item) => {
+          livePreview.showSaved();
+          gallery.selectItem(item);
+        },
+        selectImage: (image) => {
+          livePreview.showSaved();
+          gallery.selectImage(image);
+        },
+        setItemMultiSelection: (itemKeys, primaryItem) => {
+          livePreview.showSaved();
+          gallery.setItemMultiSelection(itemKeys, primaryItem);
+        },
+        toggleItemSelection: (item, nextPrimaryItem) => {
+          livePreview.showSaved();
+          gallery.toggleItemSelection(item, nextPrimaryItem);
+        },
         updateSettings: (settings) => {
           if (isAccountScopeCurrent(accountScope) && queries.isActiveProject(projectId)) {
             gallery.updateSettings(settings, projectId);
@@ -67,7 +85,16 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
       ItemActionsProvider: GalleryItemActionsAdapter,
       ImageContextMenu: GalleryImageContextMenu,
       liveFollowEnabled,
-      progressSessions: livePreview.gallerySessions,
+      cancelRemoteGeneration: (queueItemId) => {
+        if (
+          !queries.isActiveProject(projectId) ||
+          !queueItems.some((item) => item.id === queueItemId && item.snapshot.destination === 'gallery')
+        ) {
+          return Promise.reject(new Error('The remote generation is no longer in the active Gallery project.'));
+        }
+        return cancelRemoteGeneration(queueItemId);
+      },
+      progressSessions: expandGalleryRemoteProgressSessions(livePreview.gallerySessions, queueItems),
       pinnedProgressSessionId: livePreview.pinnedSessionId,
       followedProgressSessionId: livePreview.followedSessionId,
       followProgressSession: (sessionId, { revealPreview }) => {
@@ -100,6 +127,7 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
       openWorkbenchWidget,
       projectId,
       projectName,
+      queueItems,
       queries,
       widgets,
     ]

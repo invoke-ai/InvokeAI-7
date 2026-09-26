@@ -1,15 +1,23 @@
-import type {
-  QueueBackendItem,
-  QueueBackendPort,
-  QueueEnqueueGenerateRequest,
-  QueueEnqueueResult,
-  QueueEnqueueWorkflowRequest,
-  QueueResultImage,
-  QueueResultImageOptions,
-  TerminalQueueItemStatus,
-} from '@features/queue/core/types';
 import type { BackendConnectionStatus } from '@platform/transport/types';
 
+import {
+  getRemoteProgressIdentity,
+  getRemoteProgressTarget,
+  getRemoteSyntheticBackendItemId,
+  parseRemoteProgressMessage,
+} from '@features/queue/core/remoteProgress';
+import {
+  getQueueItemProgressTargetId,
+  type QueueBackendItem,
+  type QueueBackendPort,
+  type QueueEnqueueGenerateRequest,
+  type QueueEnqueueResult,
+  type QueueEnqueueWorkflowRequest,
+  type QueueItemProgressTarget,
+  type QueueResultImage,
+  type QueueResultImageOptions,
+  type TerminalQueueItemStatus,
+} from '@features/queue/core/types';
 import {
   activeProgressTargetStore,
   type ActiveProgressTargetSink,
@@ -25,16 +33,27 @@ import {
   type QueueItemStatusChangedEvent,
   type QueueItemsCanceledEvent,
 } from '@features/queue/data/events';
+import { itemProgressStore } from '@features/queue/data/itemProgressStore';
 import {
   progressImageStore,
   type ProgressImageSink,
   type ProgressImageTarget,
 } from '@features/queue/data/progressImageStore';
 import { queueItemProgressStore, type QueueItemProgressSink } from '@features/queue/data/progressStore';
+import {
+  recoverActiveRemoteBridges,
+  subscribeRecoveredRemoteBridges,
+  type RemoteBridgeRecoverySnapshot,
+} from '@features/queue/data/remoteBridgeRecovery';
+import { noteLiveRemoteBridge } from '@features/queue/data/remoteBridgeSessionStore';
+import { remotePreviewActivityStore } from '@features/queue/data/remotePreviewActivityStore';
+import { noteRemoteDispatchProgress } from '@features/queue/data/remoteWorkersDispatch';
 import { mapWithConcurrency } from '@platform/core/concurrency';
 import { createLogger } from '@platform/logging/logger';
 import { captureAccountScope, isAccountScopeCurrent } from '@platform/state/accountLifecycle';
 import { ApiError } from '@platform/transport/http';
+
+import { createRemoteModelTransferToasts, parseRemoteModelTransferProgress } from './remoteModelTransferToasts';
 
 const GALLERY_REFRESH_COALESCE_MS = 400;
 const SAFETY_SWEEP_INTERVAL_MS = 30_000;
@@ -235,6 +254,11 @@ export const createQueueCoordinator = (
       }
     }
   };
+  // The local queue item may finish before its remote bridge. Keep the
+  // synthetic targets separately so an empty reconnect snapshot can retire
+  // stale UI slots without altering the backend queue or Gallery placeholders.
+  const liveRemoteTargets = new Map<string, { target: QueueItemProgressTarget; seenAt: number }>();
+  const terminalRemoteTargets = new Set<string>();
   /**
    * Terminal events that arrived for items nobody tracks yet. Closes the race
    * where a very fast generation finishes between `enqueue_batch` resolving
@@ -258,6 +282,7 @@ export const createQueueCoordinator = (
   /** Enqueue requests awaiting a response; early node events and previews are buffered while one is in flight. */
   let inFlightSubmissions = 0;
   const latestStatusSequences = new Map<number, number>();
+  const remoteModelTransferToasts = createRemoteModelTransferToasts();
   const getTrackedBackendItemId = (event: { item_id: number; root_item_id?: number | null }): number =>
     event.root_item_id ?? event.item_id;
 
@@ -818,6 +843,63 @@ export const createQueueCoordinator = (
       return;
     }
 
+    const transfer = parseRemoteModelTransferProgress(event.message);
+    if (transfer) {
+      if (owner.accountId !== 'single-user' && event.user_id !== owner.accountId) {
+        return;
+      }
+      remoteModelTransferToasts.receive(transfer);
+      return;
+    }
+
+    const remote = parseRemoteProgressMessage(event.message);
+    if (remote) {
+      if (owner.accountId !== 'single-user' && event.user_id !== owner.accountId) {
+        return;
+      }
+      noteLiveRemoteBridge(event);
+      const target = getRemoteProgressTarget(remote.queueItemId, remote.slot, remote.backendItemId);
+      const syntheticBackendItemId = getRemoteSyntheticBackendItemId(
+        remote.queueItemId,
+        remote.slot,
+        remote.backendItemId
+      );
+      const remoteKey = getQueueItemProgressTargetId(target);
+      noteRemoteDispatchProgress(remote.queueItemId, remote.slot, remote.state, remote.backendItemId);
+      if (remote.state !== 'running') {
+        liveRemoteTargets.delete(remoteKey);
+        terminalRemoteTargets.add(remoteKey);
+        if (terminalRemoteTargets.size > TERMINAL_EVENT_BUFFER_LIMIT) {
+          terminalRemoteTargets.delete(terminalRemoteTargets.values().next().value!);
+        }
+        activeProgressTarget.clear(target);
+        remotePreviewActivityStore.clear(target);
+        progressImage.clear(target);
+        itemProgressStore.clear(syntheticBackendItemId);
+        if (remote.state === 'completed') {
+          scheduleGalleryRefresh();
+        }
+        return;
+      }
+      liveRemoteTargets.set(remoteKey, { target, seenAt: Date.now() });
+      activeProgressTarget.set(target);
+      // The bridge announces queued jobs as 'running' so Gallery and Canvas
+      // can reserve their tiles. Preview only follows actual rendering.
+      remotePreviewActivityStore.set(target, remote.message !== `Remote ${remote.slot} queued`);
+      const image = event.image?.dataURL
+        ? { dataUrl: event.image.dataURL, height: event.image.height, width: event.image.width }
+        : undefined;
+      if (image) {
+        progressImage.set(image, target);
+      }
+      itemProgressStore.set(syntheticBackendItemId, {
+        message: remote.message,
+        percentage: event.percentage,
+        ...(image ? { image } : {}),
+        device: null,
+      });
+      return;
+    }
     const backendItemId = getTrackedBackendItemId(event);
     const wait = waits.get(backendItemId);
 
@@ -827,7 +909,6 @@ export const createQueueCoordinator = (
       }
       return;
     }
-
     if (event.image?.dataURL && isStaleFrame(event)) {
       return;
     }
@@ -838,13 +919,11 @@ export const createQueueCoordinator = (
 
     const target = getProgressImageTarget(wait.localQueueItemId, backendItemId);
     activeProgressTarget.set(target);
-
     if (event.image?.dataURL) {
       progressImage.set({ dataUrl: event.image.dataURL, height: event.image.height, width: event.image.width }, target);
     }
 
     const state = runProgress.get(wait.localQueueItemId);
-
     if (state) {
       state.activeBackendItemId = backendItemId;
       state.message = event.message;
@@ -886,6 +965,45 @@ export const createQueueCoordinator = (
     if (status === 'connected') {
       scheduleGalleryRefresh();
       void sweep();
+      void recoverActiveRemoteBridges();
+    }
+  };
+
+  /** Rebuild remote UI after a primary network change or page reload.
+   * Never recreate workers' queue items, and never resurrect a slot whose
+   * terminal socket event arrived while the HTTP snapshot was in flight. */
+  const handleRecoveredRemoteBridges = ({ events, requestedAt }: RemoteBridgeRecoverySnapshot): void => {
+    if (!isActive()) {
+      return;
+    }
+    const present = new Set<string>();
+    for (const event of events) {
+      const remote = parseRemoteProgressMessage(event.message);
+      if (!remote || remote.state !== 'running') {
+        continue;
+      }
+      const target = getRemoteProgressTarget(remote.queueItemId, remote.slot, remote.backendItemId);
+      const key = getQueueItemProgressTargetId(target);
+      present.add(key);
+      if (terminalRemoteTargets.has(key) || (liveRemoteTargets.get(key)?.seenAt ?? 0) > requestedAt) {
+        continue;
+      }
+      handleProgress(event);
+    }
+    for (const [key, { target, seenAt }] of liveRemoteTargets) {
+      if (present.has(key) || seenAt > requestedAt) {
+        continue;
+      }
+      liveRemoteTargets.delete(key);
+      activeProgressTarget.clear(target);
+      remotePreviewActivityStore.clear(target);
+      progressImage.clear(target);
+      const remote = getRemoteProgressIdentity(target);
+      if (remote) {
+        itemProgressStore.clear(
+          getRemoteSyntheticBackendItemId(remote.localQueueItemId, remote.slot, remote.backendItemId)
+        );
+      }
     }
   };
 
@@ -898,6 +1016,7 @@ export const createQueueCoordinator = (
     isAttached = true;
 
     detachers.push(
+      subscribeRecoveredRemoteBridges(handleRecoveredRemoteBridges),
       backend.on('queue_item_status_changed', handleStatusChanged),
       backend.on('queue_items_canceled', handleItemsCanceled),
       backend.on('invocation_progress', handleProgress),
@@ -933,6 +1052,7 @@ export const createQueueCoordinator = (
         if (visibilityDocument.visibilityState === 'visible') {
           void sweep();
           void refreshProgressPreviews();
+          void recoverActiveRemoteBridges();
         }
       };
 
@@ -947,8 +1067,10 @@ export const createQueueCoordinator = (
 
   /** Detach generation listeners; the hub keeps the socket alive. */
   const dispose = (): void => {
+    remoteModelTransferToasts.dispose();
     isDisposed = true;
     activeProgressTarget.clear();
+    remotePreviewActivityStore.clearAll();
     progressImage.clear();
     progress.clearAll?.();
     nodeExecution.clearAll();
@@ -982,6 +1104,8 @@ export const createQueueCoordinator = (
     recentTerminalOutcomes.clear();
     pendingProgressEvents.clear();
     latestStatusSequences.clear();
+    liveRemoteTargets.clear();
+    terminalRemoteTargets.clear();
   };
 
   const reconcile = async (items: ReconcileInput[]): Promise<Map<string, ReconcileOutcome>> => {

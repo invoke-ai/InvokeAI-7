@@ -44,6 +44,19 @@ describe('extractGenerationMeta', () => {
     });
   });
 
+  it('never mistakes a remote-only serialized workflow for a prompt', () => {
+    const meta = extractGenerationMeta(
+      item([
+        {
+          fieldName: 'source_graph_json',
+          nodePath: '__irw_automatic_mirror__',
+          value: '{"edges":[],"nodes":{}}',
+        },
+      ])
+    );
+    expect(meta).toEqual({});
+  });
+
   it('returns an empty meta for an item with no field values', () => {
     expect(extractGenerationMeta({} as QueueItemReadModel)).toEqual({});
   });

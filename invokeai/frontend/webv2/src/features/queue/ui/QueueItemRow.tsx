@@ -39,13 +39,14 @@ const QUEUE_ITEM_BUTTON_SX: SystemStyleObject = {
 export const QueueItemRow = memo(
   ({ item, revealRequest }: { item: QueueItemReadModel; revealRequest?: QueueItemRevealRequest | null }) => {
     const { t } = useTranslation();
-    const { canManageItem, canViewItemDetails, preloadItemActions } = useQueueUi();
+    const { canManageItem, canViewItemDetails, preloadItemActions, getRemoteOnlyDispatchDisplay } = useQueueUi();
     const [expanded, setExpanded] = useState(false);
     const toggle = useCallback(() => setExpanded((open) => !open), []);
     // Warm the actions chunk on intent so the first expand has nothing to wait for.
     const preload = useCallback(() => preloadItemActions?.(), [preloadItemActions]);
     const consumedRevealRequestIdRef = useRef<number | null>(null);
-    const meta = extractGenerationMeta(item);
+    const remoteOnlyDisplay = getRemoteOnlyDispatchDisplay?.(item) ?? null;
+    const meta = remoteOnlyDisplay ?? extractGenerationMeta(item);
     const duration = formatDuration(item.startedAt, item.completedAt);
     const age = formatCompactAge(item.completedAt ?? item.createdAt);
     const ageLabel = [duration, age].filter(Boolean).join(' · ');
@@ -70,9 +71,12 @@ export const QueueItemRow = memo(
     );
 
     const progress = useItemProgress(item.id);
-    const liveImage = progress?.image ?? null;
-    const resultImageName = getResultImageName(item);
-    const statusLabel = t(getStatusMeta(item.status).labelKey);
+    // The local kickoff is not a rendered image; its previews live in the R# rows.
+    const liveImage = remoteOnlyDisplay ? null : (progress?.image ?? null);
+    const resultImageName = remoteOnlyDisplay ? null : getResultImageName(item);
+    const statusLabel = remoteOnlyDisplay
+      ? `Remote dispatch · ${t(getStatusMeta(item.status).labelKey)}`
+      : t(getStatusMeta(item.status).labelKey);
     // A running item's device arrives on the progress event before the row's DTO is
     // refetched, so prefer the live value and fall back to the persisted one.
     const deviceLabel = useDeviceLabel(progress?.device ?? item.device);
@@ -133,7 +137,7 @@ export const QueueItemRow = memo(
           ) : null}
         </HStack>
 
-        {item.status === 'in_progress' ? (
+        {item.status === 'in_progress' && !remoteOnlyDisplay ? (
           <Box px="2.5" pb="2">
             <QueueStepProgress message={progress?.message ?? ''} percentage={progress?.percentage ?? null} />
           </Box>
@@ -141,7 +145,7 @@ export const QueueItemRow = memo(
 
         {expanded ? (
           <Box pb="2.5" pt="1" px="2.5">
-            <QueueItemDetails item={item} />
+            <QueueItemDetails item={item} remoteOnlyDisplay={remoteOnlyDisplay} />
           </Box>
         ) : null}
       </Box>
