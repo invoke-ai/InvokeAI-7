@@ -64,16 +64,11 @@ class TestTheSideChannelIsCounted:
         """Four bytes, counted for the same reason. A reservation that special-cased MXFP8 would be
         answering about one scheme rather than about the mapping it was handed."""
         payload = quantize_scaled_fp8(torch.arange(32, dtype=torch.float32).reshape(4, 8))
-        sd = {"lin.weight": payload.codes, "lin.weight_scale": payload.scale}
-        layers = extract_fp8_scaled_layers(sd)
-        _asked_list, reserve = _asked()
+        layers = extract_fp8_scaled_layers({"lin.weight": payload.codes, "lin.weight_scale": payload.scale})
 
-        needed = reserve_for_load(
-            reserve, sd, torch.bfloat16, keep_fp8=False, model=_linear_model(8, 4), fp8_layers=layers, nvfp4_payloads={}
-        )
-
+        # The magnitude only. What the total does with it is `TestKeepFp8IsCarried`'s subject, on
+        # this same fixture, so asserting it here as well would be the same cell twice.
         assert side_channel_bytes(layers) == payload.scale.nelement() * payload.scale.element_size()
-        assert needed == 4 * 8 * torch.bfloat16.itemsize + side_channel_bytes(layers)
 
     def test_an_activation_scale_is_counted_beside_its_weight_scale(self) -> None:
         """Encoder builds ship both halves, and both are resident from extraction onward."""
@@ -101,7 +96,7 @@ class TestTheSideChannelIsCounted:
         assert layers["lin"].input_scale is None
         assert side_channel_bytes(layers) == payload.scale.nelement() * payload.scale.element_size()
 
-        layers["lin"].__dict__["weight_scale"] = 0.25  # a float, not a tensor
+        layers["lin"].weight_scale = 0.25  # a float, not a tensor
         with pytest.raises(AttributeError):
             side_channel_bytes(layers)
 
@@ -128,17 +123,16 @@ class TestTheDictAndThePayloads:
         sd["other.weight"] = dense
         model = _linear_model(64, 128)
         payloads = pop_nvfp4_layers(sd, {"lin": {"format": "nvfp4"}})
-        packed = sum(t.nelement() * t.element_size() for t in (payloads["lin"].weight, payloads["lin"].weight_scale))
         _asked_list, reserve = _asked()
 
         needed = reserve_for_load(
             reserve, sd, torch.bfloat16, keep_fp8=False, model=model, fp8_layers={}, nvfp4_payloads=payloads
         )
 
-        # The dense remainder is still in the dict and the packed layer is not, so the two terms are
-        # separable: a reservation that dropped either would miss this by a different amount.
-        assert needed > dense.nelement() * torch.bfloat16.itemsize
-        assert needed >= packed
+        # Exact, and both terms non-zero: the dense remainder is still in the dict and the packed
+        # layer is not, so dropping either changes the number. Inequalities would not have said that
+        # -- `needed >= packed` alone is satisfied by the payload term on its own.
+        assert needed == dense.nelement() * torch.bfloat16.itemsize + payloads["lin"].nbytes()
 
     def test_payloads_without_the_model_that_sizes_them_are_refused(self) -> None:
         """`predict_nvfp4_install_size` needs the model to decide which payloads stay packed.
@@ -153,7 +147,9 @@ class TestTheDictAndThePayloads:
         _asked_list, reserve = _asked()
 
         with pytest.raises(ValueError, match="without the model"):
-            reserve_for_load(reserve, sd, torch.bfloat16, keep_fp8=False, fp8_layers={}, nvfp4_payloads=payloads)
+            reserve_for_load(
+                reserve, sd, torch.bfloat16, keep_fp8=False, model=None, fp8_layers={}, nvfp4_payloads=payloads
+            )
 
 
 class TestKeepFp8IsCarried:

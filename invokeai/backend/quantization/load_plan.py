@@ -63,29 +63,39 @@ def reserve_for_load(
     dtype: torch.dtype,
     *,
     keep_fp8: bool,
+    model: torch.nn.Module | None,
     fp8_layers: Mapping[str, Fp8ScaledLayer],
     nvfp4_payloads: Mapping[str, NVFP4Payload],
-    model: torch.nn.Module | None = None,
     skip_patterns: Iterable[str] = (),
 ) -> int:
     """Ask for room for the state dict, the payloads it will install, and the scales it took out.
 
-    Both side-channel mappings are required rather than defaulted. A seam that recovered nothing
-    passes `{}` and says so; a default would let a seam that *did* recover something omit it by
-    silence and under-reserve by exactly the amount this function exists to count. That is weaker than
-    making the ordering unrepresentable -- nothing here can stop a caller reserving before it has
-    recovered -- and it is what a function taking the results can honestly give.
+    Both side-channel mappings are required rather than defaulted, and so is `model`. A seam that
+    recovered nothing passes `{}`, and one with no model yet passes `None`, and both say so; a default
+    would let a seam that *did* have something omit it by silence and under-reserve. That matters for
+    `model` too: with none, `_is_fp8_matmul_weight` answers for the safe subset, so under `keep_fp8`
+    every 2-D weight predicts as staying quantized at 1 B/element and a quantized non-Linear then
+    arrives at `dtype.itemsize`.
+
+    This is weaker than making the ordering unrepresentable -- nothing here can stop a caller
+    reserving before it has recovered -- and it is what a function taking the results can honestly
+    give. `skip_patterns` keeps its default: omitting it is legible beside the `cast_state_dict` that
+    omits it too, which is the only seam that does.
 
     Returns the bytes asked for, so a caller can log or assert on them.
     """
     patterns = tuple(skip_patterns)
-    if nvfp4_payloads and model is None:
-        # `predict_nvfp4_install_size` needs the model to decide which payloads stay packed. Absorbing
-        # that into a zero would drop a GiB-scale term without a word, which is this module's subject.
-        raise ValueError(
-            f"Cannot size {len(nvfp4_payloads)} nvfp4 payload(s) without the model they are installed "
-            "into; reserve after the model is built, or pass no payloads."
-        )
+    nvfp4_bytes = 0
+    if nvfp4_payloads:
+        if model is None:
+            # `predict_nvfp4_install_size` needs the model to decide which payloads stay packed.
+            # Absorbing that into a zero would drop a GiB-scale term without a word, which is this
+            # module's subject.
+            raise ValueError(
+                f"Cannot size {len(nvfp4_payloads)} nvfp4 payload(s) without the model they are "
+                "installed into; reserve after the model is built, or pass no payloads."
+            )
+        nvfp4_bytes = predict_nvfp4_install_size(model, nvfp4_payloads, dtype, patterns)
 
     needed = (
         predict_cast_state_dict_size(
@@ -96,7 +106,7 @@ def reserve_for_load(
             skip_patterns=patterns,
             scaled_layers=fp8_layers,
         )
-        + (predict_nvfp4_install_size(model, nvfp4_payloads, dtype, patterns) if nvfp4_payloads else 0)
+        + nvfp4_bytes
         + side_channel_bytes(fp8_layers)
     )
     reserve(needed)
