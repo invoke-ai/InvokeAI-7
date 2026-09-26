@@ -249,6 +249,9 @@ export interface QueueItemProgressTarget {
   itemIndex: number;
 }
 
+export const getQueueItemProgressTargetId = (target: QueueItemProgressTarget): string =>
+  `${target.queueItemId}:${target.itemIndex}`;
+
 export interface QueueReadModel {
   current: QueueItemReadModel | null;
   items: QueueItemReadModel[];

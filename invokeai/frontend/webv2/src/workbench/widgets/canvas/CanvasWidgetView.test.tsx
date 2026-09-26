@@ -32,7 +32,10 @@ vi.mock('@workbench/WorkbenchContext', () => ({
 vi.mock('@workbench/useCanvasProjectMutationDispatch', () => ({
   useCanvasProjectMutationDispatch: () => () => undefined,
 }));
-vi.mock('@features/queue', () => ({ useQueueItemProgressImage: () => null }));
+vi.mock(import('@features/queue'), async (importOriginal) => ({
+  ...(await importOriginal()),
+  useQueueItemProgressImage: () => null,
+}));
 vi.mock('./engineStoreHooks', () => ({ useCanvasOperation: () => null }));
 vi.mock('./useCanvasEngine', () => ({ useCanvasEngine: () => harness.engine }));
 vi.mock('./useCanvasGallerySave', () => ({

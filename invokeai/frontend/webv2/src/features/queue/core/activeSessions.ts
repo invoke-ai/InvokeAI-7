@@ -1,7 +1,8 @@
 import type { QueueItem } from './historyTypes';
-import type { QueueItemProgressTarget, QueueSourceId } from './types';
 
 import { getQueueItemSnapshotBatchCount, getQueueItemSnapshotDimensions } from './historySnapshot';
+import { getRemoteProgressIdentity, getRemoteSyntheticBackendItemId } from './remoteProgress';
+import { getQueueItemProgressTargetId, type QueueItemProgressTarget, type QueueSourceId } from './types';
 
 /** A running backend session, not a prediction of its output images or boards. */
 export interface QueueActiveSession extends QueueItemProgressTarget {
@@ -14,38 +15,37 @@ export interface QueueActiveSession extends QueueItemProgressTarget {
   itemCount: number;
   state: 'running' | 'settling';
 }
-
 /** Presentation policy shared by Gallery and Preview; discovery remains destination-neutral. */
 export const isGalleryProgressItem = (item: QueueItem): boolean => item.snapshot.destination === 'gallery';
-
 export const getQueueActiveSessions = (
   items: readonly QueueItem[],
   running: readonly QueueItemProgressTarget[],
   followed: readonly QueueItemProgressTarget[]
 ): QueueActiveSession[] => {
   const itemsById = new Map(items.map((item) => [item.id, item]));
-  const runningKeys = new Set(running.map((target) => `${target.queueItemId}:${target.itemIndex}`));
+  const runningKeys = new Set(running.map(getQueueItemProgressTargetId));
   const sessions: QueueActiveSession[] = [];
-
   for (const target of followed) {
-    const item = itemsById.get(target.queueItemId);
-    const backendItemId = item?.backendItemIds?.[target.itemIndex - 1];
+    const remote = getRemoteProgressIdentity(target);
+    const item = itemsById.get(remote?.localQueueItemId ?? target.queueItemId);
+    const backendItemId = remote
+      ? getRemoteSyntheticBackendItemId(remote.localQueueItemId, remote.slot, remote.backendItemId)
+      : item?.backendItemIds?.[target.itemIndex - 1];
     if (!item || backendItemId === undefined) {
       continue;
     }
-    const id = `${target.queueItemId}:${target.itemIndex}`;
+    const id = getQueueItemProgressTargetId(target);
     sessions.push({
       ...target,
       ...getQueueItemSnapshotDimensions(item, { width: 1024, height: 1024 }),
       id,
       backendItemId,
-      label: item.snapshot.graph.label,
+      label: remote ? `Remote ${remote.slot}` : item.snapshot.graph.label,
       sourceId: item.snapshot.sourceId,
-      itemCount: item.backendItemIds!.length,
+      itemCount: remote ? 1 : item.backendItemIds!.length,
       state: runningKeys.has(id) ? 'running' : 'settling',
     });
   }
-
   return sessions.sort((left, right) => left.backendItemId - right.backendItemId);
 };
 
@@ -68,7 +68,6 @@ export type QueueProgressSession = Omit<QueueActiveSession, 'backendItemId' | 's
   backendItemId: number | null;
   state: 'queued' | 'running' | 'settling';
 };
-
 export const getQueueProgressSessions = (
   items: readonly QueueItem[],
   active: readonly QueueActiveSession[]
@@ -101,10 +100,24 @@ export const getQueueProgressSessions = (
     }
   }
   const submittedAt = new Map(items.map((item) => [item.id, item.snapshot.submittedAt]));
-  return sessions.sort(
-    (left, right) =>
-      submittedAt.get(left.queueItemId)!.localeCompare(submittedAt.get(right.queueItemId)!) ||
-      left.queueItemId.localeCompare(right.queueItemId) ||
-      left.itemIndex - right.itemIndex
-  );
+  const itemById = new Map(items.map((item) => [item.id, item]));
+  return sessions.sort((left, right) => {
+    const leftRemote = getRemoteProgressIdentity(left);
+    const rightRemote = getRemoteProgressIdentity(right);
+    const leftLocalId = leftRemote?.localQueueItemId ?? left.queueItemId;
+    const rightLocalId = rightRemote?.localQueueItemId ?? right.queueItemId;
+    const leftParentIndex = leftRemote?.backendItemId
+      ? itemById.get(leftLocalId)?.backendItemIds?.indexOf(leftRemote.backendItemId)
+      : left.itemIndex - 1;
+    const rightParentIndex = rightRemote?.backendItemId
+      ? itemById.get(rightLocalId)?.backendItemIds?.indexOf(rightRemote.backendItemId)
+      : right.itemIndex - 1;
+    return (
+      (submittedAt.get(leftLocalId) ?? '').localeCompare(submittedAt.get(rightLocalId) ?? '') ||
+      leftLocalId.localeCompare(rightLocalId) ||
+      (leftParentIndex !== undefined && leftParentIndex >= 0 ? leftParentIndex : left.itemIndex - 1) -
+        (rightParentIndex !== undefined && rightParentIndex >= 0 ? rightParentIndex : right.itemIndex - 1) ||
+      (leftRemote?.slot ?? 0) - (rightRemote?.slot ?? 0)
+    );
+  });
 };

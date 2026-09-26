@@ -30,8 +30,10 @@ import {
 } from '@features/gallery/contracts';
 import { galleryBoardsOptions } from '@features/gallery/queries';
 import { createGenerateFormValuesSelector } from '@features/generation/react';
+import { expandGalleryRemoteProgressSessions, getRemoteProgressSlot } from '@features/queue';
 import {
   consumeQueueItemSwapProgressImage,
+  useGeneratingRemotePreviewIds,
   useQueueItemBridgeProgressImage,
   useQueueItemProgressImage,
   useQueueItemSwapProgressImage,
@@ -79,7 +81,6 @@ import { previewHeaderStore, previewStageStore, type PreviewZoomCommands } from 
 import { getPreviewComparisonMode, getPreviewFilmstripVisible, type PreviewComparisonMode } from './previewSettings';
 import { usePreviewNavigation } from './usePreviewNavigation';
 
-/** For the live footer's Details slot, which renders disabled and never fires. */
 const VIDEO_FRAME_COPY_FAILURE_KEYS = {
   'clipboard-failed': 'widgets.preview.copyCurrentFrameWriteFailed',
   'draw-failed': 'widgets.preview.copyCurrentFrameDrawFailed',
@@ -140,6 +141,12 @@ const getBoardName = (
 
 const selectGenerateRecallValues = createGenerateFormValuesSelector();
 
+export const filterPreviewRemoteSessions = (
+  sessions: readonly QueueActiveSession[],
+  generatingRemoteIds: ReadonlySet<string>
+): QueueActiveSession[] =>
+  sessions.filter((session) => getRemoteProgressSlot(session) === null || generatingRemoteIds.has(session.id));
+
 /** Pinned to the floating window body's top edge, under the title bar's divider. */
 const FLOATING_RAIL_SX: SystemStyleObject = {
   display: 'flex',
@@ -176,9 +183,27 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     [galleryValues.semanticImageQuery]
   );
   const selectedItemKey = selectedItem ? toGalleryItemKey(selectedItem) : null;
+  // Keep queued remote placeholders in Gallery/Canvas, but not Preview or its filmstrip.
+  const generatingRemoteIds = useGeneratingRemotePreviewIds();
+  const previewSessions = useMemo(
+    () => filterPreviewRemoteSessions(livePreview.sessions, generatingRemoteIds),
+    [generatingRemoteIds, livePreview.sessions]
+  );
+  const previewGallerySessions = useMemo(
+    () => filterPreviewRemoteSessions(livePreview.gallerySessions, generatingRemoteIds),
+    [generatingRemoteIds, livePreview.gallerySessions]
+  );
+  const filmstripSessions = useMemo(
+    () => expandGalleryRemoteProgressSessions(previewGallerySessions, queueItems),
+    [previewGallerySessions, queueItems]
+  );
   const activeGalleryPlaceholder =
-    livePreview.sessions.find((session) => session.id === livePreview.followedSessionId) ?? null;
-  const shouldFollowLive = activeGalleryPlaceholder !== null;
+    previewSessions.find((session) => session.id === livePreview.followedSessionId) ??
+    previewSessions.find((session) => session.state === 'running') ??
+    previewSessions[0] ??
+    null;
+  const shouldFollowLive =
+    activeGalleryPlaceholder !== null && livePreview.followedSessionId !== null && !livePreview.viewingSaved;
   const isComparing =
     !shouldFollowLive &&
     selectedItem?.kind === 'image' &&
@@ -213,11 +238,12 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
 
   const selectGalleryItemAtPage = useCallback(
     (item: GalleryItem, selectionPage: number) => {
+      livePreview.showSaved();
       gallery.selectItem(item, undefined, selectionPage, true);
       // Deliberate navigation: the grid follows it, unlike auto-selection.
       requestGalleryItemReveal(toGalleryItemKey(item));
     },
-    [gallery]
+    [gallery, livePreview]
   );
   const {
     boardItems,
@@ -230,11 +256,11 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     neighbors,
     selectPreviewItem,
   } = usePreviewNavigation({
-    followedSessionId: activeGalleryPlaceholder?.id ?? null,
+    followedSessionId: shouldFollowLive ? (activeGalleryPlaceholder?.id ?? null) : null,
     followSession: livePreview.follow,
     isComparing,
     localItems,
-    progressSessions: livePreview.gallerySessions,
+    progressSessions: previewGallerySessions,
     queueItems,
     selectGalleryItem: selectGalleryItemAtPage,
     selectedImageQuery,
@@ -456,7 +482,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
             onFollowSession: livePreview.follow,
             onSelect: selectPreviewItem,
             onUnpinSession: livePreview.showAll,
-            sessions: livePreview.gallerySessions,
+            sessions: filmstripSessions,
             shouldAntialiasLiveImage: antialiasProgressImages,
           }
         : null,
@@ -468,7 +494,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
       isFilmstripVisible,
       livePreview.follow,
       livePreview.followedSessionId,
-      livePreview.gallerySessions,
+      filmstripSessions,
       livePreview.pinnedSessionId,
       livePreview.showAll,
       openFilmstripItemContextMenu,

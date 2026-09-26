@@ -42,7 +42,12 @@ export const extractGenerationMeta = (item: QueueItemReadModel): QueueGeneration
   // Fill unresolved metadata by type/order only for graphs with unfamiliar node names.
   const prompts: string[] = [];
 
-  for (const { value } of fieldValues) {
+  for (const { value, nodePath, fieldName } of fieldValues) {
+    // The launcher carries a serialized graph, not a positive prompt. This
+    // guard also covers older queue rows where no project snapshot is found.
+    if (nodePath === '__irw_automatic_mirror__' && fieldName === 'source_graph_json') {
+      continue;
+    }
     if (typeof value === 'number' && meta.seed === undefined) {
       meta.seed = value;
     } else if (typeof value === 'string' && value.trim().length > 0) {

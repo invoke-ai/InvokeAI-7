@@ -302,7 +302,6 @@ const PreviewImageFrame = ({
   ) : null;
   if (variant === 'inset') {
     return (
-      // Reserve chrome inset consistently across live tiles; their dot grids still fill each cell.
       <PreviewStage fill="parent">
         {source ? (
           <FittedFrame frameHeight={frameHeight} frameWidth={frameWidth}>

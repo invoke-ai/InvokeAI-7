@@ -22,6 +22,7 @@ import { absolutizeApiUrl, ApiError, apiFetch, apiFetchJson } from '@platform/tr
 import type { QueueImageDTO, QueueServerItemDTO } from './serverTypes';
 
 import { buildQueueItemOrigin } from './events';
+import { prepareRemoteOnlyBatch } from './remoteWorkersBatch';
 import { getQueueItem } from './serverApi';
 
 const getQueueIdempotencyKey = (projectId: string, sourceQueueItemId: string): string =>
@@ -91,12 +92,13 @@ export const enqueueGenerate = async (request: QueueEnqueueGenerateRequest): Pro
     ...planInput,
     seedStep: request.seedStep,
   });
+  const prepared = prepareRemoteOnlyBatch(request.graph, plan.data);
   const result = await apiFetchJson<unknown>('/api/v1/queue/default/enqueue_batch', {
     body: JSON.stringify({
       batch: {
-        data: plan.data,
+        data: prepared.data,
         destination: request.destination,
-        graph: request.graph,
+        graph: prepared.graph,
         idempotency_key: getQueueIdempotencyKey(request.projectId, request.sourceQueueItemId),
         project_id: request.projectId,
         origin: buildQueueItemOrigin(request.sourceQueueItemId, request.projectId),
@@ -116,12 +118,13 @@ export const enqueueWorkflow = async (request: QueueEnqueueWorkflowRequest): Pro
     batchData: request.batchData,
     seeds: request.seeds,
   });
+  const prepared = prepareRemoteOnlyBatch(request.graph, plan.data);
   const result = await apiFetchJson<unknown>('/api/v1/queue/default/enqueue_batch', {
     body: JSON.stringify({
       batch: {
-        ...(plan.data ? { data: plan.data } : {}),
+        ...(prepared.data ? { data: prepared.data } : {}),
         destination: request.destination,
-        graph: request.graph,
+        graph: prepared.graph,
         idempotency_key: getQueueIdempotencyKey(request.projectId, request.sourceQueueItemId),
         project_id: request.projectId,
         origin: buildQueueItemOrigin(request.sourceQueueItemId, request.projectId),

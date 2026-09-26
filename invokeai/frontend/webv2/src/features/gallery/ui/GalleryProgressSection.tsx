@@ -2,17 +2,20 @@ import type { GalleryThumbnailFit } from '@features/gallery/core/settings';
 import type { QueueProgressSession } from '@features/queue/contracts';
 
 import { Box, chakra, Icon, ProgressCircle, Skeleton, Text } from '@chakra-ui/react';
-import { getDeterminateProgressPercent } from '@features/queue/contracts';
+import { getQueuedRemoteWorkerSlot } from '@features/queue';
+import { getDeterminateProgressPercent, getRemoteProgressIdentity } from '@features/queue/contracts';
 import { useItemProgress, useQueueItemProgressImage } from '@features/queue/react';
+import { getApiErrorMessage } from '@platform/transport/http';
 import { StreamingImageFrame } from '@platform/ui/streaming-image/StreamingImageFrame';
 import { progressImageToStreamingSource } from '@platform/ui/streaming-image/streamingImageSource';
-import { CheckIcon, ChevronRightIcon, HourglassIcon } from 'lucide-react';
-import { useCallback, useEffectEvent, useId, useLayoutEffect, useRef } from 'react';
+import { CheckIcon, ChevronRightIcon, HourglassIcon, XIcon } from 'lucide-react';
+import { useCallback, useEffectEvent, useId, useLayoutEffect, useRef, useState } from 'react';
 import { useVirtualizer } from 'react-hook-tanstack-virtual';
 import { useTranslation } from 'react-i18next';
 
 import type { GalleryProgressLayout } from './galleryGridLayout';
 
+import { getGalleryWorkerLabels } from './galleryProgressWorkerLabels';
 import { useGalleryUi } from './GalleryUiContext';
 import { useGalleryWidget } from './GalleryWidgetContext';
 
@@ -130,6 +133,7 @@ const GalleryProgressGrid = ({
   restoreFocus(): void;
 }) => {
   const { columns, tileSize, headerHeight, paddingBottom, rowCount, rowHeight } = layout;
+  const workerLabels = getGalleryWorkerLabels(sessions, getQueuedRemoteWorkerSlot);
   const estimateSize = useCallback(() => rowHeight, [rowHeight]);
   const virtualizer = useVirtualizer({
     count: rowCount,
@@ -155,6 +159,7 @@ const GalleryProgressGrid = ({
             >
               <GalleryProgressTile
                 session={session}
+                workerLabel={workerLabels.get(session.id) ?? null}
                 size={tileSize}
                 fit={fit}
                 selected={liveFollowEnabled && (pinnedSessionId === null || pinnedSessionId === session.id)}
@@ -171,6 +176,7 @@ const GalleryProgressGrid = ({
 
 const GalleryProgressTile = ({
   session,
+  workerLabel,
   size,
   fit,
   selected,
@@ -178,6 +184,7 @@ const GalleryProgressTile = ({
   restoreFocus,
 }: {
   session: QueueProgressSession;
+  workerLabel: string | null;
   size: number;
   fit: GalleryThumbnailFit;
   selected: boolean;
@@ -185,10 +192,32 @@ const GalleryProgressTile = ({
   restoreFocus(): void;
 }) => {
   const { t } = useTranslation();
-  const { antialiasProgressImages } = useGalleryUi();
+  const { antialiasProgressImages, cancelRemoteGeneration, notifications } = useGalleryUi();
+  const [canceling, setCanceling] = useState(false);
   const image = useQueueItemProgressImage(session.queueItemId, session.itemIndex);
   const progress = useItemProgress(session.backendItemId);
   const percentage = getDeterminateProgressPercent(progress?.percentage);
+  const remote = getRemoteProgressIdentity(session);
+  const isRemoteQueued = remote !== null && progress?.message === `Remote ${remote.slot} queued` && !image;
+  const remoteQueueItemId = remote?.localQueueItemId;
+  const cancelRemote = useCallback(async () => {
+    if (!remoteQueueItemId || !cancelRemoteGeneration || canceling) {
+      return;
+    }
+    setCanceling(true);
+    try {
+      await cancelRemoteGeneration(remoteQueueItemId);
+    } catch (error: unknown) {
+      notifications.reportError({
+        area: 'remote-workers',
+        message: getApiErrorMessage(error, 'Could not cancel remote generation'),
+        namespace: 'gallery',
+      });
+    } finally {
+      setCanceling(false);
+    }
+  }, [cancelRemoteGeneration, canceling, notifications, remoteQueueItemId]);
+  const isQueued = session.state === 'queued' || isRemoteQueued;
   const label =
     session.itemCount > 1
       ? t('widgets.gallery.progressSession', {
@@ -197,19 +226,18 @@ const GalleryProgressTile = ({
           total: session.itemCount,
         })
       : session.label;
-  const status =
-    session.state === 'queued'
-      ? t('widgets.gallery.progressQueued')
-      : session.state === 'settling'
-        ? t('widgets.gallery.progressSettling')
-        : percentage !== null
-          ? `${percentage}%`
-          : progress?.message || t('widgets.gallery.progressPreparing');
+  const status = isQueued
+    ? t('widgets.gallery.progressQueued')
+    : session.state === 'settling'
+      ? t('widgets.gallery.progressSettling')
+      : percentage !== null
+        ? `${percentage}%`
+        : progress?.message || t('widgets.gallery.progressPreparing');
   const follow = useCallback(() => {
-    if (session.state === 'running') {
+    if (session.state === 'running' && !isRemoteQueued) {
       onFollow(session.id, { revealPreview: true });
     }
-  }, [onFollow, session.id, session.state]);
+  }, [isRemoteQueued, onFollow, session.id, session.state]);
   const buttonRef = useCallback(
     (element: HTMLButtonElement | null) => {
       if (!element) {
@@ -225,56 +253,101 @@ const GalleryProgressTile = ({
   );
 
   return (
-    <chakra.button
-      ref={buttonRef}
-      type="button"
-      focusVisibleRing="inside"
-      aria-label={`${label} · ${status}`}
-      aria-pressed={selected && session.state !== 'queued'}
-      aria-disabled={session.state !== 'running'}
-      tabIndex={session.state === 'running' ? 0 : -1}
-      borderColor={selected && session.state !== 'queued' ? 'accent.solid' : 'border.subtle'}
-      borderWidth="1px"
-      flexShrink={0}
-      minW="0"
-      overflow="hidden"
-      rounded="md"
-      textAlign="start"
-      title={`${label} · ${status}`}
-      position="relative"
-      w={`${size}px`}
-      onClick={follow}
-    >
-      <StreamingImageFrame
-        aspectRatio={1}
-        fit={fit === 'aspect' ? 'contain' : 'cover'}
-        liveImage={progressImageToStreamingSource(image)}
-        shouldAntialiasLiveImage={antialiasProgressImages}
+    <Box position="relative" w={`${size}px`}>
+      <chakra.button
+        ref={buttonRef}
+        type="button"
+        focusVisibleRing="inside"
+        aria-label={`${workerLabel ? `${workerLabel} · ` : ''}${label} · ${status}`}
+        aria-pressed={selected && !isQueued}
+        aria-disabled={session.state !== 'running' || isRemoteQueued}
+        tabIndex={session.state === 'running' && !isRemoteQueued ? 0 : -1}
+        borderColor={selected && !isQueued ? 'accent.solid' : 'border.subtle'}
+        borderWidth="1px"
+        flexShrink={0}
+        minW="0"
+        overflow="hidden"
+        rounded="md"
+        textAlign="start"
+        title={`${workerLabel ? `${workerLabel} · ` : ''}${label} · ${status}`}
+        position="relative"
         w="full"
+        onClick={follow}
       >
-        {session.state === 'queued' ? <Box bg="bg.subtle" h="full" w="full" /> : <Skeleton h="full" w="full" />}
-      </StreamingImageFrame>
-      <Box
-        position="absolute"
-        bottom="1"
-        right="1"
-        pointerEvents="none"
-        bg="bg/85"
-        rounded="full"
-        p="0.5"
-        display="flex"
-      >
-        {session.state === 'running' ? (
-          <ProgressCircle.Root aria-label={status} size="xs" value={percentage}>
-            <ProgressCircle.Circle>
-              <ProgressCircle.Track />
-              <ProgressCircle.Range />
-            </ProgressCircle.Circle>
-          </ProgressCircle.Root>
-        ) : (
-          <Icon as={session.state === 'queued' ? HourglassIcon : CheckIcon} boxSize="4" aria-label={status} />
-        )}
-      </Box>
-    </chakra.button>
+        <StreamingImageFrame
+          aspectRatio={1}
+          fit={fit === 'aspect' ? 'contain' : 'cover'}
+          liveImage={progressImageToStreamingSource(image)}
+          shouldAntialiasLiveImage={antialiasProgressImages}
+          w="full"
+        >
+          {isQueued ? <Box bg="bg.subtle" h="full" w="full" /> : <Skeleton h="full" w="full" />}
+        </StreamingImageFrame>
+        {workerLabel ? (
+          <Box
+            position="absolute"
+            top="1"
+            insetInlineEnd="1"
+            pointerEvents="none"
+            bg="#1b1d24"
+            color="#ffffff"
+            fontSize="10px"
+            fontWeight="bold"
+            lineHeight="1"
+            px="1"
+            py="0.5"
+            rounded="sm"
+            whiteSpace="nowrap"
+            zIndex="1"
+          >
+            {workerLabel}
+          </Box>
+        ) : null}
+        <Box
+          position="absolute"
+          bottom="1"
+          right="1"
+          pointerEvents="none"
+          bg="bg/85"
+          rounded="full"
+          p="0.5"
+          display="flex"
+        >
+          {session.state === 'running' && !isRemoteQueued ? (
+            <ProgressCircle.Root aria-label={status} size="xs" value={percentage}>
+              <ProgressCircle.Circle>
+                <ProgressCircle.Track />
+                <ProgressCircle.Range />
+              </ProgressCircle.Circle>
+            </ProgressCircle.Root>
+          ) : (
+            <Icon as={isQueued ? HourglassIcon : CheckIcon} boxSize="4" aria-label={status} />
+          )}
+        </Box>
+      </chakra.button>
+      {remote && session.state !== 'settling' && cancelRemoteGeneration ? (
+        <chakra.button
+          type="button"
+          aria-label="Cancel remote generation (all workers)"
+          title="Cancel all remote workers for this generation"
+          disabled={canceling}
+          position="absolute"
+          top="1"
+          insetInlineStart="1"
+          zIndex="2"
+          bg="bg/90"
+          borderRadius="sm"
+          color="fg"
+          h="5"
+          minW="5"
+          display="flex"
+          alignItems="center"
+          justifyContent="center"
+          onClick={cancelRemote}
+        >
+          {canceling ? '…' : <Icon as={XIcon} boxSize="3" />}
+        </chakra.button>
+      ) : null}
+    </Box>
   );
 };

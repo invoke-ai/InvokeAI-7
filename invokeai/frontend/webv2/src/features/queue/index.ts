@@ -67,3 +67,38 @@ export {
 } from './publicApi';
 export type { QueueRunLockPort } from './runtime';
 export { hasPendingWorkflowQueueItem } from './ui/queueViewModel';
+export {
+  getRemoteParentBackendItemId,
+  getRemoteProgressIdentity,
+  getRemoteProgressSlot,
+  getRemoteProgressTarget,
+  parseRemoteProgressMessage,
+  getRemoteSyntheticBackendItemId,
+  type RemoteProgressEnvelope,
+} from './core/remoteProgress';
+export {
+  getRemoteWorkerUrls,
+  isRemoteWorkerEnabled,
+  remoteWorkersStore,
+  setRemoteWorkerEnabled,
+  setRemoteWorkersSettings,
+} from './data/remoteWorkersStore';
+export {
+  invalidateRemoteWorkerHealth,
+  refreshRemoteWorkerHealth,
+  remoteWorkersHealthStore,
+} from './data/remoteWorkersHealth';
+export {
+  expandGalleryRemoteProgressSessions,
+  getRemoteQueueProgressItems,
+  getQueuedRemoteWorkerSlot,
+  getRemoteDispatchPlan,
+  isRemoteDispatchItemSettled,
+  noteRemoteDispatchProgress,
+  type RemoteQueueProgressItem,
+} from './data/remoteWorkersDispatch';
+export { recoverActiveRemoteBridges, subscribeRecoveredRemoteBridges } from './data/remoteBridgeRecovery';
+export { getRecoveredRemoteSessions } from './data/remoteBridgeSessionStore';
+export { cancelRemoteGeneration } from './data/remoteQueueCancellation';
+export type { RemoteDispatchMode } from './data/remoteWorkersStore';
+export { getRemoteOnlyDispatchDisplay, type RemoteOnlyDispatchDisplay } from './data/remoteOnlyDispatchDisplay';

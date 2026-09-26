@@ -16,7 +16,8 @@ import {
 } from '@chakra-ui/react';
 import { galleryDurability } from '@features/gallery';
 import { galleryImageUrls } from '@features/gallery/utility';
-import { useQueueItemProgress, useQueueItemProgressImage } from '@features/queue/react';
+import { getRemoteProgressIdentity, getRemoteSyntheticBackendItemId } from '@features/queue';
+import { useItemProgress, useQueueItemProgress, useQueueItemProgressImage } from '@features/queue/react';
 import { Button, Group, IconButton, MenuContent, toaster, Tooltip } from '@platform/ui';
 import { StreamingImageFrame } from '@platform/ui/streaming-image/StreamingImageFrame';
 import { progressImageToStreamingSource } from '@platform/ui/streaming-image/streamingImageSource';
@@ -411,7 +412,8 @@ const StagingThumbnail = ({
   onSelect: () => void;
 }) => {
   const { t } = useTranslation();
-  // Selection-sensitive ref callbacks scroll the active thumbnail into view without an effect.
+  const remoteIdentity = slot.kind === 'placeholder' ? getRemoteProgressIdentity(slot) : null;
+  // Scroll the selected thumbnail into view without an effect.
   const scrollIntoView = useCallback(
     (node: HTMLElement | null) => {
       if (node && isSelected) {
@@ -459,6 +461,21 @@ const StagingThumbnail = ({
       ) : (
         <StagingPlaceholderThumbnail antialiasProgressImages={antialiasProgressImages} slot={slot} />
       )}
+      {slot.kind === 'placeholder' && remoteIdentity ? (
+        <Text
+          bg="blackAlpha.700"
+          color="white"
+          fontSize="2xs"
+          fontWeight="700"
+          px="1.5"
+          position="absolute"
+          right="1"
+          rounded="sm"
+          top="1"
+        >
+          {`R${remoteIdentity.slot}`}
+        </Text>
+      ) : null}
       <Text
         bg="blackAlpha.700"
         bottom="1"
@@ -485,8 +502,15 @@ const StagingPlaceholderThumbnail = ({
 }) => {
   const progressImage = useQueueItemProgressImage(slot.queueItemId, slot.itemIndex);
   const progress = useQueueItemProgress(slot.queueItemId);
-  const isActive = progress?.activeItemIndex === slot.itemIndex;
-  const percentage = typeof progress?.percentage === 'number' ? Math.round(progress.percentage * 100) : null;
+  const remote = getRemoteProgressIdentity(slot);
+  const remoteProgress = useItemProgress(
+    remote ? getRemoteSyntheticBackendItemId(remote.localQueueItemId, remote.slot, remote.backendItemId) : 0
+  );
+  const isActive = remote
+    ? remoteProgress !== null && remoteProgress !== undefined
+    : progress?.activeItemIndex === slot.itemIndex;
+  const percentValue = remote ? remoteProgress?.percentage : progress?.percentage;
+  const percentage = typeof percentValue === 'number' ? Math.round(percentValue * 100) : null;
 
   return (
     <>

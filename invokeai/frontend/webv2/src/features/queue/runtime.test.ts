@@ -11,6 +11,7 @@ import { buildQueueItemOrigin } from '@features/queue/data/events';
 import { ApiError } from '@platform/transport/http';
 import { describe, expect, it, vi } from 'vitest';
 
+import { getRemoteDispatchPlan, selectRemoteDispatch } from './data/remoteWorkersDispatch';
 import {
   createQueueItemBackendSubmission,
   createQueueRuntime,
@@ -116,6 +117,111 @@ const runtimeServices = {
 };
 
 describe('queue runtime', () => {
+  it('releases a reserved remote plan when local submission validation fails before enqueue', async () => {
+    const queueItem = createPendingQueueItem();
+    const submission = queueItem.snapshot.backendSubmission;
+    if (!submission || submission.kind !== 'generate') {
+      throw new Error('Expected generate submission');
+    }
+    submission.positivePromptNodeId = 123 as unknown as string;
+
+    const project = { id: 'project-invalid-remote-plan', queue: { items: [queueItem] } };
+    const commands = createTestCommands();
+    const enqueueGenerate = vi.fn();
+
+    selectRemoteDispatch('mirror_all', ['http://worker-1:9090'], queueItem.id, ['http://worker-1:9090']);
+    expect(getRemoteDispatchPlan(queueItem.id)).not.toBeNull();
+
+    const runtime = createQueueRuntime({
+      ...runtimeServices,
+      backend: createTestBackend({ enqueueGenerate }),
+      history: {
+        commands,
+        getSnapshot: () => ({ connectionStatus: 'connected', isHydrated: true, projects: [project] }),
+        subscribe: vi.fn(() => vi.fn()),
+      },
+      journal: createTestJournal(),
+    });
+
+    runtime.start();
+
+    await vi.waitFor(() =>
+      expect(commands.setStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ queueItemId: queueItem.id, status: 'failed' })
+      )
+    );
+    expect(enqueueGenerate).not.toHaveBeenCalled();
+    expect(getRemoteDispatchPlan(queueItem.id)).toBeNull();
+
+    await runtime.dispose();
+  });
+
+  it('releases a reserved remote plan after a definite non-retryable enqueue rejection', async () => {
+    const queueItem = createPendingQueueItem();
+    const project = { id: 'project-rejected-remote-plan', queue: { items: [queueItem] } };
+    const commands = createTestCommands();
+    const enqueueGenerate = vi.fn().mockRejectedValue(new ApiError('bad request', 400));
+
+    selectRemoteDispatch('mirror_all', ['http://worker-2:9090'], queueItem.id, ['http://worker-2:9090']);
+    expect(getRemoteDispatchPlan(queueItem.id)).not.toBeNull();
+
+    const runtime = createQueueRuntime({
+      ...runtimeServices,
+      backend: createTestBackend({ enqueueGenerate }),
+      history: {
+        commands,
+        getSnapshot: () => ({ connectionStatus: 'connected', isHydrated: true, projects: [project] }),
+        subscribe: vi.fn(() => vi.fn()),
+      },
+      journal: createTestJournal(),
+    });
+
+    runtime.start();
+
+    await vi.waitFor(() =>
+      expect(commands.setStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ queueItemId: queueItem.id, status: 'failed' })
+      )
+    );
+    expect(enqueueGenerate).toHaveBeenCalledTimes(1);
+    expect(getRemoteDispatchPlan(queueItem.id)).toBeNull();
+
+    await runtime.dispose();
+  });
+
+  it('releases a reserved remote plan when Remote Workers are disabled before submission', async () => {
+    const queueItem = createPendingQueueItem();
+    const project = { id: 'project-disabled-remote-plan', queue: { items: [queueItem] } };
+    const commands = createTestCommands();
+    const enqueueGenerate = vi.fn().mockResolvedValue({
+      batchId: 'local-batch',
+      enqueued: 1,
+      itemIds: [88],
+      requested: 1,
+    });
+
+    selectRemoteDispatch('mirror_all', ['http://worker-3:9090'], queueItem.id, ['http://worker-3:9090']);
+    expect(getRemoteDispatchPlan(queueItem.id)).not.toBeNull();
+
+    const runtime = createQueueRuntime({
+      ...runtimeServices,
+      backend: createTestBackend({ enqueueGenerate }),
+      history: {
+        commands,
+        getSnapshot: () => ({ connectionStatus: 'connected', isHydrated: true, projects: [project] }),
+        subscribe: vi.fn(() => vi.fn()),
+      },
+      journal: createTestJournal(),
+    });
+
+    runtime.start();
+
+    await vi.waitFor(() => expect(enqueueGenerate).toHaveBeenCalledTimes(1));
+    expect(getRemoteDispatchPlan(queueItem.id)).toBeNull();
+
+    await runtime.dispose();
+  });
+
   it('turns a malformed legacy submission into a failed request instead of throwing', () => {
     const queueItem = createPendingQueueItem();
     delete (queueItem.snapshot as Partial<QueueItem['snapshot']>).backendSubmission;

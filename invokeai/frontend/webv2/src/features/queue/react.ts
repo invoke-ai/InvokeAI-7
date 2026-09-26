@@ -7,6 +7,8 @@ export {
   useFollowedProgressTargets,
 } from './data/activeProgressTargetStore';
 export { type ItemProgress, useActiveProgressItemIds, useItemProgress } from './data/itemProgressStore';
+export { useGeneratingRemotePreviewIds } from './data/remotePreviewActivityStore';
+export { useRemoteBridgeSessions } from './data/remoteBridgeSessionStore';
 export {
   consumeQueueItemSwapProgressImage,
   type LatestProgressImageSnapshot,

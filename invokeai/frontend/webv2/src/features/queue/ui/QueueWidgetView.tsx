@@ -10,6 +10,7 @@ import type { QueueFilterId } from './queueFilters';
 import { CurrentBatchSection } from './NowNextSection';
 import { useQueueCounts } from './queueDataStore';
 import { QueueFilterTabs } from './QueueFilterTabs';
+import { QueueRemoteProgressSection } from './QueueRemoteProgressSection';
 import { QueueStats } from './QueueStats';
 import { usePendingQueueItemReveal } from './queueUiStore';
 import { RecentSection } from './RecentSection';
@@ -56,6 +57,7 @@ const QueueContent = () => {
       <QueueStats />
       <QueueFilterTabs value={filter} onChange={setFilter} />
       <CurrentBatchSection revealRequest={revealRequest} />
+      <QueueRemoteProgressSection />
       <RecentSection filter={filter} revealRequest={revealRequest} />
     </Stack>
   );

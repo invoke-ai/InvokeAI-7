@@ -3,33 +3,47 @@ import type { CSSProperties } from 'react';
 
 import { Box } from '@chakra-ui/react';
 import { useModelLoads } from '@features/models';
+import { getRemoteDispatchPlan, isOpenQueueItem } from '@features/queue';
 import {
   getProgressRailModel,
   getProgressRailSegmentValue,
-  getQueueSummary,
-  selectProjectProgressItemIds,
+  getQueueActiveSessions,
+  getRemoteProgressIdentity,
 } from '@features/queue/contracts';
-import { useActiveProgressItemIds, useItemProgress } from '@features/queue/react';
+import { useActiveProgressTargets, useGeneratingRemotePreviewIds, useItemProgress } from '@features/queue/react';
 import { useActiveProjectSelector, useWorkbenchSelector } from '@workbench/WorkbenchContext';
 import { useMemo } from 'react';
 
 /**
- * Share progress fills across hosts; callers own placement. Divide width among sessions, hide offline/idle, and
- * leave announcements to the queue's throttled live region.
+ * One segment per rendering session, shared by the top bar and Preview.
+ * The queue's live region owns progress announcements; this rail is visual only.
  */
 export const QueueProgressRail = ({ css }: { css: SystemStyleObject }) => {
   const queueItems = useActiveProjectSelector((project) => project.queue.items);
   const isConnected = useWorkbenchSelector((snapshot) => snapshot.backendConnection.status === 'connected');
   const isLoadingModels = useModelLoads().length > 0;
-  const activeItemIds = useActiveProgressItemIds();
+  const activeProgressTargets = useActiveProgressTargets();
+  const generatingRemoteIds = useGeneratingRemotePreviewIds();
 
+  // Queued remote jobs are active targets so Gallery/Canvas can reserve tiles,
+  // but must not take a segment of the running-only rail. Preview already
+  // tracks the actual queued -> rendering transition with this same store.
   const sessionItemIds = useMemo(
-    () => selectProjectProgressItemIds(queueItems, activeItemIds),
-    [activeItemIds, queueItems]
+    () =>
+      getQueueActiveSessions(queueItems, activeProgressTargets, activeProgressTargets)
+        .filter((session) => !getRemoteProgressIdentity(session) || generatingRemoteIds.has(session.id))
+        .map((session) => session.backendItemId),
+    [activeProgressTargets, generatingRemoteIds, queueItems]
+  );
+  const hasLocalOpenWork = useMemo(
+    () => queueItems.some((item) => isOpenQueueItem(item) && getRemoteDispatchPlan(item.id)?.local !== false),
+    [queueItems]
   );
 
   const model = getProgressRailModel({
-    hasOpenWork: getQueueSummary(queueItems).total > 0,
+    // Preserve main's pending local sweep. A remote-only reservation is not a
+    // local render, while a live remote session still keeps the rail visible.
+    hasOpenWork: hasLocalOpenWork || sessionItemIds.length > 0,
     isConnected,
     sessionItemIds,
   });

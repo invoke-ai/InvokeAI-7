@@ -1,12 +1,12 @@
 import type { GalleryUiAdapter } from '@features/gallery/react';
 import type { Project } from '@workbench/projectContracts';
-import type { ReactNode } from 'react';
 
+import { useGalleryUi } from '@features/gallery/ui/GalleryUiContext';
 import { accountLifecycle } from '@platform/state/accountLifecycle';
 import { shallowEqual, useExternalStoreSelector } from '@platform/state/selectors';
 import { createInitialWorkbenchState } from '@workbench/workbenchState';
 import { createWorkbenchStore } from '@workbench/workbenchStore';
-import { act } from 'react';
+import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -20,13 +20,7 @@ let root: Root;
 const noop = () => undefined;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('@features/gallery/react', () => ({
-  GalleryUiProvider: ({ adapter: next, children }: { adapter: GalleryUiAdapter; children: ReactNode }) => {
-    adapter = next;
-    renderCount += 1;
-    return children;
-  },
-}));
+vi.mock('@platform/react/useMountEffect', () => ({ useMountEffect: () => undefined }));
 vi.mock('@workbench/widgets/preview/livePreviewFollow', () => ({
   useLivePreviewFollow: () => ({
     sessions: [],
@@ -56,6 +50,15 @@ vi.mock('@workbench/WorkbenchContext', () => ({
   useWorkbenchQueries: () => store.queries,
 }));
 
+const GalleryAdapterProbe = () => {
+  const currentAdapter = useGalleryUi();
+  useEffect(() => {
+    adapter = currentAdapter;
+    renderCount += 1;
+  });
+  return null;
+};
+
 const renderAdapter = async (absent: string[] = []) => {
   const state = createInitialWorkbenchState();
   const project = state.projects[0]!;
@@ -63,7 +66,13 @@ const renderAdapter = async (absent: string[] = []) => {
     Object.entries(project.widgetInstances).filter(([, instance]) => !absent.includes(instance.typeId))
   );
   store = createWorkbenchStore(state);
-  await act(() => root.render(<GalleryUiAdapterProvider>{null}</GalleryUiAdapterProvider>));
+  await act(() =>
+    root.render(
+      <GalleryUiAdapterProvider>
+        <GalleryAdapterProbe />
+      </GalleryUiAdapterProvider>
+    )
+  );
 };
 
 beforeEach(() => {
