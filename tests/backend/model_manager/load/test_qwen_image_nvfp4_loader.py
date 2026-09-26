@@ -308,3 +308,35 @@ def test_an_int8_convrot_checkpoint_is_refused_before_the_cache_is_evicted(monke
         run.load(QwenVLEncoder_Checkpoint_Config.model_construct(path=str(checkpoint)))
 
     assert run.reserved == []
+
+
+def test_an_nvfp4_layer_missing_its_global_scale_is_refused_before_the_cache_is_evicted(monkeypatch, tmp_path) -> None:
+    """The degraded half-state, at the seam rather than at the detector.
+
+    A packed uint8 weight with a block-scale grid and no `weight_scale_2` is the shape a guard keyed
+    on `weight_scale_2` -- what the decode keys on -- lets straight through. `_find_nvfp4_layers`
+    refuses it, and `test_nvfp4.py` pins that; what only a seam can answer is whether this loader
+    still reaches the detector *before* it asks the cache for room. The pop happens 26 lines above
+    the reservation today, and nothing but call order keeps it there.
+    """
+    state_dict = {
+        "model.layers.0.self_attn.q_proj.weight": torch.zeros(64, 128, dtype=torch.uint8),
+        "model.layers.0.self_attn.q_proj.weight_scale": torch.zeros(64, 16).to(torch.float8_e4m3fn),
+    }
+    checkpoint = tmp_path / "qwen_2.5_vl_7b_nvfp4_half.safetensors"
+    checkpoint.touch()
+    seam = Seam(
+        loader=QwenVLEncoderCheckpointLoader,
+        module=qwen_image,
+        entry="_load_text_encoder_from_singlefile",
+        load_file_host=safetensors.torch,
+        patches_device=True,
+        sets_torch_dtype=False,
+        casts_fp8_storage=False,
+    )
+    run = prepare(seam, monkeypatch, state_dict=state_dict, metadata=None)
+
+    with pytest.raises(ValueError, match="no weight_scale_2"):
+        run.load(QwenVLEncoder_Checkpoint_Config.model_construct(path=str(checkpoint)))
+
+    assert run.reserved == []
