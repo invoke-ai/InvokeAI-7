@@ -34,6 +34,14 @@ import { mapWithConcurrency } from '@platform/core/concurrency';
 import { captureAccountScope, isAccountScopeCurrent } from '@platform/state/accountLifecycle';
 import { ApiError, getApiErrorMessage } from '@platform/transport/http';
 
+import { applyRemoteWorkersToGraph } from './data/remoteWorkersGraph';
+import {
+  getOnlineRemoteWorkerUrls,
+  refreshRemoteWorkerHealth,
+  remoteWorkersHealthStore,
+} from './data/remoteWorkersHealth';
+import { getRemoteWorkerUrls, getRemoteWorkersSettings, remoteWorkersStore } from './data/remoteWorkersStore';
+
 export interface QueueResultDestinationPort {
   addImagesToGalleryBoard(boardId: string, imageNames: string[]): Promise<void>;
   addVideosToGalleryBoard(boardId: string, videoNames: string[]): Promise<void>;
@@ -233,6 +241,26 @@ export const createQueueItemBackendSubmission = (
     return { error: 'Queue item backend submission has an invalid batch count.', kind: 'invalid' };
   }
 
+  const workerSettings = getRemoteWorkersSettings();
+  if (
+    workerSettings.enabled &&
+    workerSettings.dispatchMode === 'remote_only' &&
+    getOnlineRemoteWorkerUrls(getRemoteWorkerUrls(workerSettings.workerUrls)).length === 0
+  ) {
+    return {
+      error: 'Remote Only requires at least one enabled, online worker. No local image was rendered.',
+      kind: 'invalid',
+    };
+  }
+
+  // Only the submitted graph is modified: never write automatic nodes into
+  // the user's saved workflow document or change a recovered queue snapshot.
+  const graph = applyRemoteWorkersToGraph(
+    submission.graph,
+    queueItem.snapshot.galleryBoardId,
+    queueItem.snapshot.destination
+  );
+
   if (submission.kind === 'generate') {
     const seedStep = readSubmissionSeedStep(submission);
 
@@ -261,6 +289,7 @@ export const createQueueItemBackendSubmission = (
       kind: 'generate',
       request: {
         ...compiled,
+        graph,
         destination: queueItem.snapshot.destination,
         ...(isQueueSeedStep(submission.seedStep) ? {} : { legacySeedPlan: true as const }),
         projectId: project.id,
@@ -295,6 +324,7 @@ export const createQueueItemBackendSubmission = (
     kind: 'workflow',
     request: {
       ...compiled,
+      graph,
       destination: queueItem.snapshot.destination,
       projectId: project.id,
       sourceQueueItemId: queueItem.id,
@@ -397,6 +427,7 @@ export const createQueueRuntime = ({
   const cancelRequestedRunKeys = new Set<string>();
   let reconcileRetryDelayMs = 100;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let workerHealthTimer: ReturnType<typeof setInterval> | undefined;
   let hasInitialized = false;
   let isInitializing = false;
   let isReconciling = false;
@@ -1212,6 +1243,15 @@ export const createQueueRuntime = ({
       });
       return;
     }
+    // Refresh authenticated worker health immediately before compiling the submission.
+    // Offline workers are excluded from this queue item's eligible worker set.
+    const workerSettings = getRemoteWorkersSettings();
+    if (workerSettings.enabled) {
+      await refreshRemoteWorkerHealth(getRemoteWorkerUrls(workerSettings.workerUrls));
+      if (!isAttemptCurrent(attempt)) {
+        return;
+      }
+    }
     const submission = createQueueItemBackendSubmission(project, currentQueueItem);
 
     if (submission.kind === 'invalid') {
@@ -1836,10 +1876,28 @@ export const createQueueRuntime = ({
     }
 
     isStarted = true;
+    const refreshConfiguredWorkers = (): void => {
+      if (!isActive()) {
+        return;
+      }
+      const settings = getRemoteWorkersSettings();
+      if (!settings.enabled) {
+        // Forget the previous online state when the toggle is switched off.
+        // Only update once: the paused 15-second timer must not cause rerenders.
+        if (Object.keys(remoteWorkersHealthStore.getSnapshot().byUrl).length > 0) {
+          remoteWorkersHealthStore.setSnapshot({ byUrl: {} });
+        }
+        return;
+      }
+      void refreshRemoteWorkerHealth(getRemoteWorkerUrls(settings.workerUrls));
+    };
+    refreshConfiguredWorkers();
+    workerHealthTimer = setInterval(refreshConfiguredWorkers, 15_000);
     coordinator.connect();
     ensureTemplatesLoaded();
     detachers.push(
       history.subscribe(synchronize),
+      remoteWorkersStore.subscribe(refreshConfiguredWorkers),
       backend.onConnectionChange((status, error) => {
         if (!isActive()) {
           return;
@@ -1864,6 +1922,10 @@ export const createQueueRuntime = ({
 
   const dispose = async (): Promise<void> => {
     isDisposed = true;
+    if (workerHealthTimer !== undefined) {
+      clearInterval(workerHealthTimer);
+      workerHealthTimer = undefined;
+    }
     if (retryTimer !== undefined) {
       clearTimeout(retryTimer);
       retryTimer = undefined;

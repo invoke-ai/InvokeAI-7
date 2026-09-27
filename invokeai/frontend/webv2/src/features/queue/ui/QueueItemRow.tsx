@@ -75,7 +75,9 @@ export const QueueItemRow = memo(
     const statusLabel = t(getStatusMeta(item.status).labelKey);
     // A running item's device arrives on the progress event before the row's DTO is
     // refetched, so prefer the live value and fall back to the persisted one.
-    const deviceLabel = useDeviceLabel(progress?.device ?? item.device);
+    const rawDevice = progress?.device ?? item.device;
+    const remoteWorkerName = rawDevice?.startsWith('remote:') ? rawDevice.slice('remote:'.length) : null;
+    const deviceLabel = useDeviceLabel(remoteWorkerName ? null : rawDevice);
 
     const showBorder = expanded || isFailed;
     const borderColor = showBorder ? (isFailed ? 'fg.error' : 'border') : 'transparent';
@@ -102,13 +104,17 @@ export const QueueItemRow = memo(
                   color="fg.muted"
                   fontSize="2xs"
                   fontVariantNumeric="tabular-nums"
-                  title={deviceLabel ? t('widgets.queue.device.tooltip', { name: deviceLabel.name }) : undefined}
+                  title={
+                    remoteWorkerName ??
+                    (deviceLabel ? t('widgets.queue.device.tooltip', { name: deviceLabel.name }) : undefined)
+                  }
                   truncate
                 >
                   {[
                     statusLabel,
                     ageLabel,
-                    deviceLabel ? t('widgets.queue.device.shortLabel', { index: deviceLabel.index }) : null,
+                    remoteWorkerName ??
+                      (deviceLabel ? t('widgets.queue.device.shortLabel', { index: deviceLabel.index }) : null),
                   ]
                     .filter(Boolean)
                     .join(' · ')}
