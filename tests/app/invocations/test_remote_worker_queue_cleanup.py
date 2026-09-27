@@ -22,10 +22,13 @@ def pool_environment(monkeypatch):
     client.get_item.return_value = {"status": "completed"}
     client.delete_queue_item = Mock()
 
-    queue_item = SimpleNamespace(item_id=321)
+    queue_item = SimpleNamespace(
+        item_id=321,
+        session=SimpleNamespace(prepared_source_mapping={}, results={}),
+    )
     invocation = SimpleNamespace(id="dispatch")
     services = SimpleNamespace(
-        session_queue=SimpleNamespace(complete_queue_item=Mock()),
+        session_queue=SimpleNamespace(complete_queue_item=Mock(), save_queue_item_session=Mock()),
         logger=SimpleNamespace(info=Mock(), warning=Mock(), error=Mock(), debug=Mock()),
     )
     settings = worker_pool.PoolSettings(
@@ -78,6 +81,39 @@ def test_success_imports_then_deletes_exact_remote_queue_item(pool_environment):
     env.importer.assert_called_once()
     env.client.delete_queue_item.assert_called_once_with(42, "default")
     env.services.session_queue.complete_queue_item.assert_called_once_with(321)
+    env.services.session_queue.save_queue_item_session.assert_called_once_with(321, env.queue_item.session)
+
+
+def test_result_history_persistence_failure_does_not_uncomplete_remote_item(pool_environment):
+    env = pool_environment
+    env.services.session_queue.save_queue_item_session.side_effect = RuntimeError("history write failed")
+
+    assert env.run() == "completed"
+
+    env.services.session_queue.complete_queue_item.assert_called_once_with(321)
+    env.services.logger.warning.assert_called_once()
+    assert "history write failed" in env.services.logger.warning.call_args.args[0]
+
+
+def test_emit_result_records_history_output_without_polluting_real_source_mapping():
+    queue_session = SimpleNamespace(prepared_source_mapping={}, results={})
+    event_session = SimpleNamespace(prepared_source_mapping={}, results={})
+    queue_item = SimpleNamespace(session=queue_session)
+    event_item = SimpleNamespace(session=event_session)
+    synthetic_invocation = SimpleNamespace(id="synthetic")
+    invocation = Mock()
+    invocation.id = "dispatch"
+    invocation.model_copy.return_value = synthetic_invocation
+    output = object()
+    services = SimpleNamespace(events=SimpleNamespace(emit_invocation_started=Mock(), emit_invocation_complete=Mock()))
+
+    worker_pool._emit_result(services, queue_item, event_item, invocation, output)
+
+    synthetic_id = next(iter(queue_session.results))
+    assert queue_session.results[synthetic_id] is output
+    assert synthetic_id not in queue_session.prepared_source_mapping
+    assert event_session.results[synthetic_id] is output
+    assert event_session.prepared_source_mapping[synthetic_id] == "dispatch"
 
 
 def test_failed_import_keeps_remote_queue_record(pool_environment):

@@ -389,12 +389,32 @@ def _emit_progress(
     )
 
 
-def _emit_result(services: Any, queue_item: Any, invocation: Any, output: Any) -> None:
+def _emit_result(
+    services: Any,
+    queue_item: Any,
+    event_item: Any,
+    invocation: Any,
+    output: Any,
+) -> None:
     synthetic_id = str(uuid.uuid4())
     synthetic = invocation.model_copy(update={"id": synthetic_id})
-    queue_item.session.prepared_source_mapping[synthetic_id] = str(invocation.id)
-    services.events.emit_invocation_started(queue_item=queue_item, invocation=synthetic)
-    services.events.emit_invocation_complete(queue_item=queue_item, invocation=synthetic, output=output)
+
+    queue_item.session.results[synthetic_id] = output
+    event_item.session.prepared_source_mapping[synthetic_id] = str(invocation.id)
+    event_item.session.results[synthetic_id] = output
+
+    services.events.emit_invocation_started(queue_item=event_item, invocation=synthetic)
+    services.events.emit_invocation_complete(queue_item=event_item, invocation=synthetic, output=output)
+
+
+def _persist_remote_results_after_completion(services: Any, queue_item: Any, worker: WorkerSpec) -> None:
+    try:
+        services.session_queue.save_queue_item_session(int(queue_item.item_id), queue_item.session)
+    except Exception as exc:
+        services.logger.warning(
+            f"Remote Workers [{worker.name}]: completed item {queue_item.item_id}, "
+            f"but could not persist imported result history: {exc}"
+        )
 
 
 def _capture_local_output_board(graph: dict[str, Any]) -> str | None:
@@ -720,9 +740,9 @@ def _run_remote_job(
             )
 
             for dto in image_dtos:
-                _emit_result(services, event_item, invocation, ImageOutput.build(dto))
+                _emit_result(services, queue_item, event_item, invocation, ImageOutput.build(dto))
             for dto in video_dtos:
-                _emit_result(services, event_item, invocation, VideoOutput.build(dto))
+                _emit_result(services, queue_item, event_item, invocation, VideoOutput.build(dto))
 
             _emit_progress(
                 services,
@@ -743,6 +763,7 @@ def _run_remote_job(
 
             if complete_local and _status(services, int(queue_item.item_id)) == "in_progress":
                 services.session_queue.complete_queue_item(int(queue_item.item_id))
+                _persist_remote_results_after_completion(services, queue_item, worker)
 
             return "completed"
 
