@@ -347,6 +347,33 @@ def _requeue(services: Any, item_id: int, settings: PoolSettings, reason: str) -
     services.logger.warning(f"Remote Workers: returned local item {item_id} to {target}: {reason}")
 
 
+def _is_remote_oom_error(errors: Any) -> bool:
+    """Return True only for clear remote device-memory exhaustion failures."""
+    try:
+        detail = json.dumps(errors, ensure_ascii=False).casefold()
+    except Exception:
+        detail = str(errors).casefold()
+    return "outofmemoryerror" in detail or "cuda out of memory" in detail or "would exceed allowed memory" in detail
+
+
+def _fail_remote_oom(services: Any, queue_item: Any, worker: WorkerSpec, errors: Any) -> None:
+    item_id = int(queue_item.item_id)
+    if _status(services, item_id) not in {"in_progress", "waiting", "pending"}:
+        return
+
+    detail = json.dumps(errors, ensure_ascii=False)[:4000]
+    services.session_queue.fail_queue_item(
+        item_id=item_id,
+        error_type="OutOfMemoryError",
+        error_message=f"{worker.name} ran out of memory: {detail}",
+        error_traceback="",
+    )
+    services.logger.warning(
+        f"Remote Workers [{worker.name}]: remote item failed with an out-of-memory error; "
+        f"marked local item {item_id} failed instead of requeueing it"
+    )
+
+
 def _event_item(queue_item: Any, invocation: Any) -> Any:
     item = queue_item.model_copy(deep=True)
     invocation_id = str(invocation.id)
@@ -851,6 +878,8 @@ def _run_remote_job(
                 reason=f"remote job ended with status {remote_status}",
             )
             errors = item.get("session", {}).get("errors", {}) if isinstance(item.get("session"), dict) else {}
+            if remote_status == "failed" and _is_remote_oom_error(errors):
+                _fail_remote_oom(services, queue_item, worker, errors)
             raise RemoteInvokeError(
                 f"{worker.name} remote item {remote_item_id} ended with status "
                 f"'{remote_status}': {json.dumps(errors)[:2000]}"

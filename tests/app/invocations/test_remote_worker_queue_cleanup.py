@@ -28,7 +28,11 @@ def pool_environment(monkeypatch):
     )
     invocation = SimpleNamespace(id="dispatch")
     services = SimpleNamespace(
-        session_queue=SimpleNamespace(complete_queue_item=Mock(), save_queue_item_session=Mock()),
+        session_queue=SimpleNamespace(
+            complete_queue_item=Mock(),
+            fail_queue_item=Mock(),
+            save_queue_item_session=Mock(),
+        ),
         logger=SimpleNamespace(info=Mock(), warning=Mock(), error=Mock(), debug=Mock()),
     )
     settings = worker_pool.PoolSettings(
@@ -198,6 +202,46 @@ def test_failed_worker_item_keeps_remote_queue_record(pool_environment):
         env.run()
     env.importer.assert_not_called()
     env.client.delete_queue_item.assert_not_called()
+    env.services.session_queue.fail_queue_item.assert_not_called()
+
+
+def test_remote_oom_marks_local_item_failed_instead_of_requeueing(pool_environment):
+    env = pool_environment
+    env.client.get_item.return_value = {
+        "status": "failed",
+        "session": {
+            "errors": {
+                "node": (
+                    "OutOfMemoryError: Allocation on device 0 would exceed allowed memory. "
+                    "Free (according to CUDA): 32.50 MiB"
+                )
+            }
+        },
+    }
+
+    with pytest.raises(RemoteInvokeError, match="OutOfMemoryError"):
+        env.run()
+
+    env.services.session_queue.fail_queue_item.assert_called_once()
+    call = env.services.session_queue.fail_queue_item.call_args.kwargs
+    assert call["item_id"] == 321
+    assert call["error_type"] == "OutOfMemoryError"
+    assert "Remote 2 ran out of memory" in call["error_message"]
+    env.importer.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("errors", "expected"),
+    [
+        ({"node": "torch.OutOfMemoryError: device allocation failed"}, True),
+        ({"node": "CUDA out of memory. Tried to allocate 1.00 GiB"}, True),
+        ({"node": "Allocation on device 0 would exceed allowed memory."}, True),
+        ({"node": "worker disconnected"}, False),
+        ({"node": "model not found"}, False),
+    ],
+)
+def test_remote_oom_detection_is_narrow(errors, expected):
+    assert worker_pool._is_remote_oom_error(errors) is expected
 
 
 def test_queue_delete_error_does_not_change_completed_result(pool_environment):
