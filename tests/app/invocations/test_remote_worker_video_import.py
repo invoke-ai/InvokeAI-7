@@ -161,16 +161,19 @@ def test_transfer_source_videos_uploads_once_and_remaps_all_references(tmp_path)
         }
     }
 
+    uploaded_names: list[str] = []
     remote_nodes._transfer_source_videos_to_remote(
         context=context,
         remote_client=client,
         graph=graph,
         video_names=["local.mp4"],
         remote_index=1,
+        uploaded_names=uploaded_names,
     )
 
     context.videos.get_path.assert_called_once_with("local.mp4")
     client.upload_input_video.assert_called_once_with(source)
+    assert uploaded_names == ["remote.mp4"]
     assert graph["nodes"]["source"]["video"]["video_name"] == "remote.mp4"
     assert graph["nodes"]["nested"]["clips"][0]["video_name"] == "remote.mp4"
 

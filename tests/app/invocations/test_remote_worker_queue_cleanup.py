@@ -47,7 +47,11 @@ def pool_environment(monkeypatch):
     local_status = ["in_progress"]
 
     monkeypatch.setattr(worker_pool, "_helper_for_queue_item", lambda _item: invocation)
-    monkeypatch.setattr(worker_pool, "_dispatch_remote", lambda *_args, **_kwargs: (client, 42, "my-board"))
+    monkeypatch.setattr(
+        worker_pool,
+        "_dispatch_remote",
+        lambda *_args, **_kwargs: (client, 42, "my-board", ["input.png"], ["input.mp4"]),
+    )
     monkeypatch.setattr(worker_pool, "_emit_started", lambda *_args, **_kwargs: queue_item)
     monkeypatch.setattr(worker_pool, "_emit_progress", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(worker_pool, "_emit_result", lambda *_args, **_kwargs: None)
@@ -71,6 +75,7 @@ def pool_environment(monkeypatch):
         local_status=local_status,
         queue_item=queue_item,
         services=services,
+        settings=settings,
         worker=worker,
     )
 
@@ -114,6 +119,67 @@ def test_emit_result_records_history_output_without_polluting_real_source_mappin
     assert synthetic_id not in queue_session.prepared_source_mapping
     assert event_session.results[synthetic_id] is output
     assert event_session.prepared_source_mapping[synthetic_id] == "dispatch"
+
+
+def test_completed_remote_job_cleans_transferred_inputs(pool_environment, monkeypatch):
+    env = pool_environment
+    cleanup = Mock()
+    monkeypatch.setattr(worker_pool, "_cleanup_remote_inputs", cleanup)
+
+    assert env.run() == "completed"
+
+    cleanup.assert_called_once_with(
+        env.client,
+        env.services,
+        env.settings,
+        ["input.png"],
+        ["input.mp4"],
+        reason="remote job completed",
+    )
+
+
+def test_cleanup_remote_inputs_deletes_each_transferred_input_once(pool_environment):
+    env = pool_environment
+
+    worker_pool._cleanup_remote_inputs(
+        env.client,
+        env.services,
+        env.settings,
+        ["input.png", "input.png"],
+        ["input.mp4", "input.mp4"],
+        reason="test cleanup",
+    )
+
+    env.client.delete_image.assert_called_once_with("input.png")
+    env.client.delete_video.assert_called_once_with("input.mp4")
+
+
+def test_cleanup_remote_inputs_preserves_inputs_when_keep_copies_enabled(pool_environment):
+    env = pool_environment
+    env.settings = worker_pool.PoolSettings(
+        mode=env.settings.mode,
+        workers=env.settings.workers,
+        result_destination=env.settings.result_destination,
+        local_gallery_board_id=env.settings.local_gallery_board_id,
+        keep_remote_copies=True,
+        auto_transfer_missing_models=env.settings.auto_transfer_missing_models,
+        model_transfer_host=env.settings.model_transfer_host,
+        model_transfer_timeout_seconds=env.settings.model_transfer_timeout_seconds,
+        poll_interval_seconds=env.settings.poll_interval_seconds,
+        timeout_seconds=env.settings.timeout_seconds,
+    )
+
+    worker_pool._cleanup_remote_inputs(
+        env.client,
+        env.services,
+        env.settings,
+        ["input.png"],
+        ["input.mp4"],
+        reason="test preserve",
+    )
+
+    env.client.delete_image.assert_not_called()
+    env.client.delete_video.assert_not_called()
 
 
 def test_failed_import_keeps_remote_queue_record(pool_environment):

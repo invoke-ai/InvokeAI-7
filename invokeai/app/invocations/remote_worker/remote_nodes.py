@@ -483,6 +483,7 @@ def _transfer_source_videos_to_remote(
     graph: dict[str, Any],
     video_names: list[str],
     remote_index: int,
+    uploaded_names: list[str],
 ) -> None:
     """Copy every distinct local video once per worker before enqueueing the graph."""
     mapped: dict[str, str] = {}
@@ -496,6 +497,7 @@ def _transfer_source_videos_to_remote(
             ) from exc
         try:
             mapped[local_name] = remote_client.upload_input_video(local_path)
+            uploaded_names.append(mapped[local_name])
         except Exception as exc:
             raise RemoteInvokeError(
                 f"Remote #{remote_index}: could not transfer source video '{local_name}': {exc}"
@@ -517,6 +519,7 @@ def _transfer_source_images_to_remote(
     graph: dict[str, Any],
     image_names: list[str],
     remote_index: int,
+    uploaded_names: list[str],
 ) -> None:
     """Copy every distinct local image once per worker before enqueueing the graph."""
     mapped: dict[str, str] = {}
@@ -530,6 +533,7 @@ def _transfer_source_images_to_remote(
             ) from exc
         try:
             mapped[local_name] = remote_client.upload_input_image(local_image)
+            uploaded_names.append(mapped[local_name])
         except Exception as exc:
             raise RemoteInvokeError(
                 f"Remote #{remote_index}: could not transfer source image '{local_name}': {exc}"

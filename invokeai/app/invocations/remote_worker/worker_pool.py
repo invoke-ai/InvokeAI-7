@@ -494,13 +494,36 @@ def _build_context(services: Any, queue_item: Any, invocation: Any):
     )
 
 
+def _cleanup_remote_inputs(
+    client: Any,
+    services: Any,
+    settings: PoolSettings,
+    image_names: list[str],
+    video_names: list[str],
+    *,
+    reason: str,
+) -> None:
+    if settings.keep_remote_copies or (not image_names and not video_names):
+        return
+
+    from invokeai.app.invocations.remote_worker.remote_media import cleanup_remote_media
+
+    cleanup_remote_media(
+        client=client,
+        image_names=list(dict.fromkeys(image_names)),
+        video_names=list(dict.fromkeys(video_names)),
+        services=services,
+        reason=reason,
+    )
+
+
 def _dispatch_remote(
     services: Any,
     queue_item: Any,
     invocation: Any,
     settings: PoolSettings,
     worker: WorkerSpec,
-) -> tuple[Any, int, str]:
+) -> tuple[Any, int, str, list[str], list[str]]:
     from invokeai.app.invocations.remote_worker.remote_nodes import (
         RemoteModelTransferCancelled,
         _graph_media_references,
@@ -539,32 +562,48 @@ def _dispatch_remote(
     media_refs = _graph_media_references(graph)
     image_names = [ref[6:] for ref in media_refs if ref.startswith("image:")]
     video_names = [ref[6:] for ref in media_refs if ref.startswith("video:")]
+    uploaded_image_names: list[str] = []
+    uploaded_video_names: list[str] = []
 
-    if image_names:
-        _transfer_source_images_to_remote(
-            context=context,
-            remote_client=client,
+    try:
+        if image_names:
+            _transfer_source_images_to_remote(
+                context=context,
+                remote_client=client,
+                graph=graph,
+                image_names=image_names,
+                remote_index=worker.slot,
+                uploaded_names=uploaded_image_names,
+            )
+
+        if video_names:
+            _transfer_source_videos_to_remote(
+                context=context,
+                remote_client=client,
+                graph=graph,
+                video_names=video_names,
+                remote_index=worker.slot,
+                uploaded_names=uploaded_video_names,
+            )
+
+        origin = str(getattr(queue_item, "origin", "") or "invokeai")
+        remote_item_id = client.enqueue_graph(
             graph=graph,
-            image_names=image_names,
-            remote_index=worker.slot,
+            queue_id="default",
+            origin=f"{origin}:remote-worker:{worker.slot}",
         )
-
-    if video_names:
-        _transfer_source_videos_to_remote(
-            context=context,
-            remote_client=client,
-            graph=graph,
-            video_names=video_names,
-            remote_index=worker.slot,
+    except Exception:
+        _cleanup_remote_inputs(
+            client,
+            services,
+            settings,
+            uploaded_image_names,
+            uploaded_video_names,
+            reason="remote dispatch failed before queueing",
         )
+        raise
 
-    origin = str(getattr(queue_item, "origin", "") or "invokeai")
-    remote_item_id = client.enqueue_graph(
-        graph=graph,
-        queue_id="default",
-        origin=f"{origin}:remote-worker:{worker.slot}",
-    )
-    return client, int(remote_item_id), board_id
+    return client, int(remote_item_id), board_id, uploaded_image_names, uploaded_video_names
 
 
 def _import_completed(
@@ -650,7 +689,7 @@ def _cancel_remote(
     remote_item_id: int,
     services: Any,
     worker: WorkerSpec,
-) -> None:
+) -> bool:
     try:
         client.cancel_queue_item(remote_item_id, "default")
     except Exception as exc:
@@ -660,7 +699,7 @@ def _cancel_remote(
         try:
             item = client.get_item(remote_item_id, "default")
         except Exception:
-            return
+            return False
 
         status = str(item.get("status") or "").lower()
         if status in {"completed", "canceled", "cancelled", "failed"}:
@@ -672,9 +711,11 @@ def _cancel_remote(
                         f"Remote Workers [{worker.name}]: could not delete canceled remote queue item "
                         f"{remote_item_id}: {exc}"
                     )
-            return
+            return True
 
         time.sleep(0.5)
+
+    return False
 
 
 def _run_remote_job(
@@ -689,7 +730,7 @@ def _run_remote_job(
     if invocation is None:
         raise RemoteInvokeError("Remote worker helper node was not found")
 
-    client, remote_item_id, board_id = _dispatch_remote(
+    client, remote_item_id, board_id, input_image_names, input_video_names = _dispatch_remote(
         services,
         queue_item,
         invocation,
@@ -709,11 +750,29 @@ def _run_remote_job(
     while True:
         local_status = _status(services, int(queue_item.item_id))
         if local_status in {"canceled", "cancelled"}:
-            _cancel_remote(client, remote_item_id, services, worker)
+            remote_stopped = _cancel_remote(client, remote_item_id, services, worker)
+            if remote_stopped:
+                _cleanup_remote_inputs(
+                    client,
+                    services,
+                    settings,
+                    input_image_names,
+                    input_video_names,
+                    reason="remote job canceled",
+                )
             return "canceled"
 
         if time.monotonic() - started > settings.timeout_seconds:
-            _cancel_remote(client, remote_item_id, services, worker)
+            remote_stopped = _cancel_remote(client, remote_item_id, services, worker)
+            if remote_stopped:
+                _cleanup_remote_inputs(
+                    client,
+                    services,
+                    settings,
+                    input_image_names,
+                    input_video_names,
+                    reason="remote job timed out",
+                )
             raise RemoteInvokeError(
                 f"{worker.name} remote item {remote_item_id} timed out after {settings.timeout_seconds:g}s"
             )
@@ -734,15 +793,25 @@ def _run_remote_job(
         remote_status = str(item.get("status") or "").lower()
 
         if remote_status == "completed":
-            image_dtos, video_dtos = _import_completed(
-                services,
-                queue_item,
-                invocation,
-                settings,
-                client,
-                item,
-                board_id,
-            )
+            try:
+                image_dtos, video_dtos = _import_completed(
+                    services,
+                    queue_item,
+                    invocation,
+                    settings,
+                    client,
+                    item,
+                    board_id,
+                )
+            finally:
+                _cleanup_remote_inputs(
+                    client,
+                    services,
+                    settings,
+                    input_image_names,
+                    input_video_names,
+                    reason="remote job completed",
+                )
 
             for dto in image_dtos:
                 _emit_result(services, queue_item, event_item, invocation, ImageOutput.build(dto))
@@ -773,6 +842,14 @@ def _run_remote_job(
             return "completed"
 
         if remote_status in {"failed", "canceled", "cancelled"}:
+            _cleanup_remote_inputs(
+                client,
+                services,
+                settings,
+                input_image_names,
+                input_video_names,
+                reason=f"remote job ended with status {remote_status}",
+            )
             errors = item.get("session", {}).get("errors", {}) if isinstance(item.get("session"), dict) else {}
             raise RemoteInvokeError(
                 f"{worker.name} remote item {remote_item_id} ended with status "
