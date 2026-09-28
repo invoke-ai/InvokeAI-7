@@ -6,7 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from invokeai.app.invocations.remote_worker import remote_media, worker_pool
+from invokeai.app.invocations.remote_worker import remote_media, remote_nodes, worker_pool
 from invokeai.app.invocations.remote_worker.remote_client import RemoteInvokeClient
 
 
@@ -124,6 +124,55 @@ def test_mixed_image_video_import_retains_image_behavior(environment):
     services.images.create.assert_called_once()
     client.delete_image.assert_called_once_with("remote.png")
     client.delete_video.assert_called_once_with("remote.mp4")
+
+
+def test_upload_input_video_streams_multipart_and_returns_remote_name(tmp_path):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video-bytes")
+
+    client = object.__new__(RemoteInvokeClient)
+    client._request = Mock(return_value=b'{"video_name":"remote-input.mp4"}')
+
+    assert client.upload_input_video(source) == "remote-input.mp4"
+
+    call = client._request.call_args
+    assert call.args[0] == "POST"
+    assert call.args[1] == "/api/v1/videos/upload?video_category=user&is_intermediate=true"
+    assert call.kwargs["content_type"].startswith("multipart/form-data; boundary=irw-")
+    assert call.kwargs["content_length"] > source.stat().st_size
+    body = b"".join(call.kwargs["body"])
+    assert b'filename="remote-input.mp4"' in body
+    assert b"video-bytes" in body
+
+
+def test_transfer_source_videos_uploads_once_and_remaps_all_references(tmp_path):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+
+    context = SimpleNamespace(
+        videos=SimpleNamespace(get_path=Mock(return_value=source)),
+        logger=SimpleNamespace(debug=Mock(), info=Mock()),
+    )
+    client = SimpleNamespace(upload_input_video=Mock(return_value="remote.mp4"))
+    graph = {
+        "nodes": {
+            "source": {"video": {"video_name": "local.mp4"}},
+            "nested": {"clips": [{"video_name": "local.mp4"}]},
+        }
+    }
+
+    remote_nodes._transfer_source_videos_to_remote(
+        context=context,
+        remote_client=client,
+        graph=graph,
+        video_names=["local.mp4"],
+        remote_index=1,
+    )
+
+    context.videos.get_path.assert_called_once_with("local.mp4")
+    client.upload_input_video.assert_called_once_with(source)
+    assert graph["nodes"]["source"]["video"]["video_name"] == "remote.mp4"
+    assert graph["nodes"]["nested"]["clips"][0]["video_name"] == "remote.mp4"
 
 
 def test_video_client_uses_existing_authenticated_transport():

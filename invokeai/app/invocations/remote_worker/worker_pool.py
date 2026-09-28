@@ -507,6 +507,7 @@ def _dispatch_remote(
         _remote_client,
         _transfer_missing_model_to_remote,
         _transfer_source_images_to_remote,
+        _transfer_source_videos_to_remote,
     )
 
     context = _build_context(services, queue_item, invocation)
@@ -537,12 +538,7 @@ def _dispatch_remote(
 
     media_refs = _graph_media_references(graph)
     image_names = [ref[6:] for ref in media_refs if ref.startswith("image:")]
-    video_refs = [ref for ref in media_refs if ref.startswith("video:")]
-    if video_refs:
-        services.logger.warning(
-            f"Remote Workers [{worker.name}]: remote video input transfer is not implemented "
-            f"({', '.join(video_refs[:6])})"
-        )
+    video_names = [ref[6:] for ref in media_refs if ref.startswith("video:")]
 
     if image_names:
         _transfer_source_images_to_remote(
@@ -550,6 +546,15 @@ def _dispatch_remote(
             remote_client=client,
             graph=graph,
             image_names=image_names,
+            remote_index=worker.slot,
+        )
+
+    if video_names:
+        _transfer_source_videos_to_remote(
+            context=context,
+            remote_client=client,
+            graph=graph,
+            video_names=video_names,
             remote_index=worker.slot,
         )
 

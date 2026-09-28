@@ -155,15 +155,18 @@ class RemoteInvokeClient:
         self,
         method: str,
         path: str,
-        body: bytes | None = None,
+        body: Any = None,
         json_body: bool = False,
         include_auth: bool = True,
         content_type: str | None = None,
+        content_length: int | None = None,
     ) -> bytes:
         url = f"{self.config.base_url}{path}"
         headers = self._headers(json_body=json_body, include_auth=include_auth)
         if content_type is not None:
             headers["Content-Type"] = content_type
+        if content_length is not None:
+            headers["Content-Length"] = str(content_length)
         request = urllib.request.Request(
             url=url,
             data=body,
@@ -266,14 +269,21 @@ class RemoteInvokeClient:
         self,
         method: str,
         path: str,
-        body: bytes | None = None,
+        body: Any = None,
         json_body: bool = False,
         content_type: str | None = None,
+        content_length: int | None = None,
     ) -> bytes:
         self._ensure_auth_mode()
         try:
             return self._request_raw(
-                method, path, body=body, json_body=json_body, include_auth=True, content_type=content_type
+                method,
+                path,
+                body=body,
+                json_body=json_body,
+                include_auth=True,
+                content_type=content_type,
+                content_length=content_length,
             )
         except urllib.error.HTTPError as exc:
             # In multi-user mode, a 401 usually means the cached JWT expired. Re-login
@@ -283,7 +293,13 @@ class RemoteInvokeClient:
                 self._login()
                 try:
                     return self._request_raw(
-                        method, path, body=body, json_body=json_body, include_auth=True, content_type=content_type
+                        method,
+                        path,
+                        body=body,
+                        json_body=json_body,
+                        include_auth=True,
+                        content_type=content_type,
+                        content_length=content_length,
                     )
                 except urllib.error.HTTPError as retry_exc:
                     exc = retry_exc
@@ -758,6 +774,50 @@ class RemoteInvokeClient:
         remote_name = record.get("image_name") if isinstance(record, dict) else None
         if not isinstance(remote_name, str) or not remote_name:
             raise RemoteInvokeError("Remote image upload did not return image_name")
+        return remote_name
+
+    def upload_input_video(self, video_path: Path) -> str:
+        """Stream a local source video to the remote as an intermediate input."""
+        path = Path(video_path)
+        try:
+            file_size = path.stat().st_size
+        except OSError as exc:
+            raise RemoteInvokeError(f"Could not read source video '{path}': {exc}") from exc
+
+        boundary = f"irw-{secrets.token_hex(16)}"
+        prefix = (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="file"; filename="remote-input.mp4"\r\n'
+            "Content-Type: video/mp4\r\n\r\n"
+        ).encode("utf-8")
+        suffix = f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+        class MultipartVideoBody:
+            def __iter__(self):
+                yield prefix
+                try:
+                    with path.open("rb") as source:
+                        while chunk := source.read(1024 * 1024):
+                            yield chunk
+                except OSError as exc:
+                    raise RemoteInvokeError(f"Could not read source video '{path}': {exc}") from exc
+                yield suffix
+
+        query = urllib.parse.urlencode({"video_category": "user", "is_intermediate": "true"})
+        raw = self._request(
+            "POST",
+            f"/api/v1/videos/upload?{query}",
+            body=MultipartVideoBody(),
+            content_type=f"multipart/form-data; boundary={boundary}",
+            content_length=len(prefix) + file_size + len(suffix),
+        )
+        try:
+            record = json.loads(raw.decode("utf-8"))
+        except (UnicodeError, ValueError) as exc:
+            raise RemoteInvokeError("Remote video upload did not return valid JSON") from exc
+        remote_name = record.get("video_name") if isinstance(record, dict) else None
+        if not isinstance(remote_name, str) or not remote_name:
+            raise RemoteInvokeError("Remote video upload did not return video_name")
         return remote_name
 
     def get_image_metadata(self, image_name: str) -> str | None:

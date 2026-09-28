@@ -374,7 +374,6 @@ def _transfer_missing_model_to_remote(
         unregister_model_transfer(transfer_id)
 
 
-
 def _strip_helper_nodes(graph: dict[str, Any]) -> list[str]:
     nodes = graph.get("nodes")
     if not isinstance(nodes, dict):
@@ -403,9 +402,7 @@ def _strip_helper_nodes(graph: dict[str, Any]) -> list[str]:
         graph["edges"] = kept_edges
 
     if not nodes:
-        raise RemoteInvokeError(
-            "Nothing remains after removing the internal Remote Worker dispatch helper."
-        )
+        raise RemoteInvokeError("Nothing remains after removing the internal Remote Worker dispatch helper.")
     return sorted(removed)
 
 
@@ -419,7 +416,6 @@ def _disable_graph_cache(graph: dict[str, Any]) -> int:
             node["use_cache"] = False
             count += 1
     return count
-
 
 
 def _find_media_references(value: Any, found: set[str]) -> None:
@@ -464,6 +460,56 @@ def _remap_graph_image_names(value: Any, mapped: dict[str, str]) -> int:
     return changed
 
 
+def _remap_graph_video_names(value: Any, mapped: dict[str, str]) -> int:
+    """Rewrite video references (including nested VideoField/list inputs), not other strings."""
+    changed = 0
+    if isinstance(value, list):
+        for entry in value:
+            changed += _remap_graph_video_names(entry, mapped)
+    elif isinstance(value, dict):
+        original = value.get("video_name")
+        if isinstance(original, str) and original in mapped:
+            value["video_name"] = mapped[original]
+            changed += 1
+        for entry in value.values():
+            changed += _remap_graph_video_names(entry, mapped)
+    return changed
+
+
+def _transfer_source_videos_to_remote(
+    *,
+    context: InvocationContext,
+    remote_client: RemoteInvokeClient,
+    graph: dict[str, Any],
+    video_names: list[str],
+    remote_index: int,
+) -> None:
+    """Copy every distinct local video once per worker before enqueueing the graph."""
+    mapped: dict[str, str] = {}
+    for local_name in video_names:
+        try:
+            # InvocationContext performs the authenticated queue owner's read-access check.
+            local_path = context.videos.get_path(local_name)
+        except Exception as exc:
+            raise RemoteInvokeError(
+                f"Remote #{remote_index}: cannot read primary source video '{local_name}': {exc}"
+            ) from exc
+        try:
+            mapped[local_name] = remote_client.upload_input_video(local_path)
+        except Exception as exc:
+            raise RemoteInvokeError(
+                f"Remote #{remote_index}: could not transfer source video '{local_name}': {exc}"
+            ) from exc
+        context.logger.debug(
+            f"Remote #{remote_index}: transferred input video '{local_name}' -> '{mapped[local_name]}'"
+        )
+
+    changed = _remap_graph_video_names(graph.get("nodes", {}), mapped)
+    context.logger.info(
+        f"Remote #{remote_index}: remapped {changed} video field(s) from {len(mapped)} transferred source video(s)"
+    )
+
+
 def _transfer_source_images_to_remote(
     *,
     context: InvocationContext,
@@ -496,7 +542,6 @@ def _transfer_source_images_to_remote(
     context.logger.info(
         f"Remote #{remote_index}: remapped {changed} image field(s) from {len(mapped)} transferred source image(s)"
     )
-
 
 
 def _strip_remote_board_assignments(graph: dict[str, Any]) -> list[str]:
@@ -619,4 +664,3 @@ class AAARemoteWorkerDispatchInvocation(BaseInvocation):
             ensure_remote_worker_pool(context._services, item_id)
 
         return RemoteWorkerDispatchOutput(started=True)
-
