@@ -3,17 +3,17 @@ import type { QueueBackendGraph } from '@features/queue/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  getOnlineRemoteWorkerUrls: vi.fn(),
   getRemoteWorkerName: vi.fn(),
   getRemoteWorkerUrls: vi.fn(),
   getRemoteWorkersSettings: vi.fn(),
+  isRemoteWorkerEnabled: vi.fn(),
 }));
 
-vi.mock('./remoteWorkersHealth', () => ({ getOnlineRemoteWorkerUrls: mocks.getOnlineRemoteWorkerUrls }));
 vi.mock('./remoteWorkersStore', () => ({
   getRemoteWorkerName: mocks.getRemoteWorkerName,
   getRemoteWorkerUrls: mocks.getRemoteWorkerUrls,
   getRemoteWorkersSettings: mocks.getRemoteWorkersSettings,
+  isRemoteWorkerEnabled: mocks.isRemoteWorkerEnabled,
 }));
 
 import { applyRemoteWorkersToGraph } from './remoteWorkersGraph';
@@ -49,7 +49,7 @@ describe('applyRemoteWorkersToGraph', () => {
       keepRemoteCopies: false,
     });
     mocks.getRemoteWorkerUrls.mockReturnValue([worker1, worker2]);
-    mocks.getOnlineRemoteWorkerUrls.mockReturnValue([worker1, worker2]);
+    mocks.isRemoteWorkerEnabled.mockReturnValue(true);
     mocks.getRemoteWorkerName.mockImplementation((_url: string, index: number) =>
       index === 0 ? 'RTX5080' : 'Server GPU'
     );
@@ -131,10 +131,50 @@ describe('applyRemoteWorkersToGraph', () => {
     expect(result.nodes[AUTOMATIC_REMOTE_WORKER_NODE_ID]?.result_destination).toBe('canvas');
   });
 
-  it('leaves the graph untouched when no enabled online worker is available', () => {
+  it('excludes workers disabled with the power toggle without consulting browser health', () => {
     const graph = makeGraph();
-    mocks.getOnlineRemoteWorkerUrls.mockReturnValue([]);
+    mocks.isRemoteWorkerEnabled.mockImplementation((url: string) => url === worker2);
+
+    const result = applyRemoteWorkersToGraph(graph, null, 'gallery');
+    const helper = result.nodes[AUTOMATIC_REMOTE_WORKER_NODE_ID];
+
+    expect(helper).toMatchObject({
+      remote_url: worker2,
+      additional_remote_urls: '',
+      remote_worker_names: JSON.stringify(['Server GPU']),
+    });
+  });
+
+  it('leaves Distributed local-only when every configured worker is disabled', () => {
+    const graph = makeGraph();
+    mocks.isRemoteWorkerEnabled.mockReturnValue(false);
 
     expect(applyRemoteWorkersToGraph(graph, null, 'gallery')).toBe(graph);
+  });
+
+  it('keeps a Remote Only helper when every configured worker is disabled', () => {
+    const graph = makeGraph();
+    mocks.getRemoteWorkersSettings.mockReturnValue({
+      enabled: true,
+      workerUrls: `${worker1}\n${worker2}`,
+      workerNames: {},
+      disabledWorkerUrls: [worker1, worker2],
+      dispatchMode: 'remote_only',
+      autoTransferMissingModels: false,
+      modelTransferHost: '',
+      keepRemoteCopies: false,
+    });
+    mocks.isRemoteWorkerEnabled.mockReturnValue(false);
+
+    const result = applyRemoteWorkersToGraph(graph, null, 'gallery');
+    const helper = result.nodes[AUTOMATIC_REMOTE_WORKER_NODE_ID];
+
+    expect(result).not.toBe(graph);
+    expect(helper).toMatchObject({
+      dispatch_mode: 'Remote Only',
+      additional_remote_urls: '',
+      remote_worker_names: '[]',
+    });
+    expect(helper?.remote_url).toBeUndefined();
   });
 });

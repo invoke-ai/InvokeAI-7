@@ -18,7 +18,7 @@ import {
 import { captureAccountScope } from '@platform/state/accountLifecycle';
 import { apiFetchJson, getApiErrorMessage } from '@platform/transport/http';
 import { ChevronDownIcon, ChevronUpIcon, PencilIcon, PowerIcon } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 const handleEnabledChange = (details: { checked: boolean }): void => {
   setRemoteWorkersSettings({ enabled: details.checked });
@@ -279,13 +279,30 @@ const WorkerAuthRow = ({ enabled, name, slot, url }: { enabled: boolean; name: s
   );
 };
 
-/** Worker configuration only; do not imply connectivity from a configured URL or saved login. */
+/** Availability polling is display-only; backend workers decide job eligibility. */
 export const RemoteWorkersWidgetView = (_props: WidgetViewProps) => {
   const settings = remoteWorkersStore.useSnapshot();
-  const urls = getRemoteWorkerUrls(settings.workerUrls);
+  const urls = useMemo(() => getRemoteWorkerUrls(settings.workerUrls), [settings.workerUrls]);
   const accountId = captureAccountScope().accountId;
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showWorkerEditor, setShowWorkerEditor] = useState(false);
+
+  useEffect(() => {
+    if (!settings.enabled) {
+      if (Object.keys(remoteWorkersHealthStore.getSnapshot().byUrl).length > 0) {
+        remoteWorkersHealthStore.setSnapshot({ byUrl: {} });
+      }
+      return;
+    }
+
+    const refresh = (): void => {
+      void refreshRemoteWorkerHealth(urls);
+    };
+
+    refresh();
+    const timer = globalThis.setInterval(refresh, 15_000);
+    return () => globalThis.clearInterval(timer);
+  }, [settings.enabled, urls]);
   const handleAdvancedChange = useCallback((details: { checked: boolean }) => {
     setShowAdvanced(details.checked);
   }, []);
@@ -380,9 +397,10 @@ export const RemoteWorkersWidgetView = (_props: WidgetViewProps) => {
           ) : null}
           <Text color="fg.muted" fontSize="xs">
             Paused means no availability checks while distributed rendering is off. When enabled: green = online, red =
-            offline, orange = login required. The power icon excludes a worker from new jobs without stopping running
-            ones. Offline workers remain configured and return to dispatch automatically when enabled. Passwords are
-            encrypted on the primary instance; protect its runtime directory and use HTTPS across untrusted networks.
+            offline, orange = login required. These badges are display-only; the backend verifies reachability before a
+            worker claims a job. The power icon excludes a worker from new jobs without stopping running ones. Offline
+            workers remain configured and can rejoin pending work when they recover. Passwords are encrypted on the
+            primary instance; protect its runtime directory and use HTTPS across untrusted networks.
           </Text>
         </Stack>
       </Box>

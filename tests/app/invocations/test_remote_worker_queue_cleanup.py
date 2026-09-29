@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from invokeai.app.invocations.remote_worker import worker_pool
+from invokeai.app.invocations.remote_worker import remote_nodes, worker_pool
 from invokeai.app.invocations.remote_worker.remote_client import RemoteInvokeClient, RemoteInvokeError
 
 
@@ -84,6 +84,36 @@ def pool_environment(monkeypatch):
         settings=settings,
         worker=worker,
     )
+
+
+def test_worker_lane_retries_unavailable_worker_while_eligible_work_remains(monkeypatch):
+    eligibility = iter([True, False, False, False, False])
+    services = SimpleNamespace(logger=SimpleNamespace(warning=Mock()))
+    pool = worker_pool._RemoteWorkerPool(services, "default", "user-1")
+    worker = worker_pool.WorkerSpec(url="http://worker.test", name="Remote 1", slot=1)
+    client = Mock()
+    client.get_current_item.side_effect = RuntimeError("offline")
+    lock = Mock()
+    lock.acquire.return_value = True
+    claim = Mock()
+
+    monkeypatch.setattr(worker_pool, "_park_remote_only_items", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        worker_pool,
+        "_has_eligible_item",
+        lambda *_args, **_kwargs: next(eligibility),
+    )
+    monkeypatch.setattr(worker_pool, "_slot_lock", lambda _worker: lock)
+    monkeypatch.setattr(remote_nodes, "_remote_client", lambda *_args, **_kwargs: client)
+    monkeypatch.setattr(worker_pool, "_claim_for_worker", claim)
+    monkeypatch.setattr(worker_pool.time, "sleep", lambda _seconds: None)
+
+    pool._run_lane(worker)
+
+    client.get_current_item.assert_called_once()
+    claim.assert_not_called()
+    lock.release.assert_called_once()
+    assert "will retry while eligible work remains" in services.logger.warning.call_args.args[0]
 
 
 def test_success_imports_then_deletes_exact_remote_queue_item(pool_environment):

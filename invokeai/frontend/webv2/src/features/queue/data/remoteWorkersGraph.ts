@@ -5,8 +5,12 @@ import {
   AUTOMATIC_REMOTE_WORKER_NODE_TYPE,
   hasRemoteWorkerDispatchNode,
 } from './remoteWorkersGraphContract';
-import { getOnlineRemoteWorkerUrls } from './remoteWorkersHealth';
-import { getRemoteWorkerName, getRemoteWorkerUrls, getRemoteWorkersSettings } from './remoteWorkersStore';
+import {
+  getRemoteWorkerName,
+  getRemoteWorkerUrls,
+  getRemoteWorkersSettings,
+  isRemoteWorkerEnabled,
+} from './remoteWorkersStore';
 
 /** Only the submitted graph is modified. The saved Canvas/workflow stays untouched. */
 export const applyRemoteWorkersToGraph = (
@@ -20,8 +24,9 @@ export const applyRemoteWorkersToGraph = (
   }
 
   const configuredUrls = getRemoteWorkerUrls(settings.workerUrls);
-  const urls = getOnlineRemoteWorkerUrls(configuredUrls);
-  if (urls.length === 0 || hasRemoteWorkerDispatchNode(graph)) {
+  // Availability is backend-owned; browser health is display-only.
+  const urls = configuredUrls.filter(isRemoteWorkerEnabled);
+  if ((urls.length === 0 && settings.dispatchMode !== 'remote_only') || hasRemoteWorkerDispatchNode(graph)) {
     return graph;
   }
   if (Object.hasOwn(graph.nodes, AUTOMATIC_REMOTE_WORKER_NODE_ID)) {

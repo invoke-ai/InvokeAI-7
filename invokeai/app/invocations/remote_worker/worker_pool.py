@@ -1103,6 +1103,7 @@ class _RemoteWorkerPool:
     def _run_lane(self, worker: WorkerSpec) -> None:
         excluded: set[int] = set()
         idle_checks = 0
+        last_unavailable_log = 0.0
 
         while True:
             _park_remote_only_items(self.services, self.queue_id, self.user_id)
@@ -1132,10 +1133,15 @@ class _RemoteWorkerPool:
 
                     _remote_client(worker.url, self.user_id).get_current_item()
                 except Exception as exc:
-                    self.services.logger.warning(
-                        f"Remote Workers [{worker.name}]: unavailable; ignoring worker for now: {exc}"
-                    )
-                    return
+                    now = time.monotonic()
+                    if last_unavailable_log == 0.0 or now - last_unavailable_log >= 30.0:
+                        self.services.logger.warning(
+                            f"Remote Workers [{worker.name}]: unavailable; "
+                            f"will retry while eligible work remains: {exc}"
+                        )
+                        last_unavailable_log = now
+                    time.sleep(2.0)
+                    continue
 
                 claimed = _claim_for_worker(
                     self.services,
