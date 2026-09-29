@@ -6,6 +6,11 @@ installer can fetch without a Hugging Face login. The official ``Lightricks/LTX-
 license-gated and packs the connectors and text projection differently; only the mirror's split is
 a complete component source in this version.
 
+The duration head is the one exception: it exists only in the gated ``Lightricks/LTX-2.5-Diffusers``
+repo, so that entry -- alone among these -- needs a Hugging Face login and an accepted licence. It
+is optional and 3.6 MB, so the cost of the exception falls only on users who want automatic
+duration.
+
 The mirror's nvfp4 transformer is deliberately not listed: its file names no quantized layer in a
 marker or header, which the nvfp4 reader requires to know the block-scale layout, so it is refused
 at load time.
@@ -39,6 +44,17 @@ ltx2_5_components = StarterModel(
     f"x2 latent upsamplers (~9.5 GB). Used together with an LTX-2.5 transformer and the Gemma-4 text encoder. {_LICENSE_NOTE}",
     type=ModelType.Main,
     format=ModelFormat.Diffusers,
+)
+
+ltx2_5_prompt_enhancer = StarterModel(
+    name="LTX-2.5 Prompt Enhancer (Gemma-4 E2B)",
+    base=BaseModelType.Any,
+    source="google/gemma-4-E2B-it",
+    description=(
+        "The prompt enhancer LTX-2.5 was released with, for Expand Prompt. Pair it with the seeded LTX-2.5 "
+        "system prompts; the Image-to-Video one also reads the first frame. Optional. (~10 GB)"
+    ),
+    type=ModelType.TextLLM,
 )
 
 ltx2_5_text_encoder_int8 = StarterModel(
@@ -116,4 +132,20 @@ ltx2_5_dev_transformer_bf16 = StarterModel(
     format=ModelFormat.Checkpoint,
     variant=LTX2VariantType.Dev,
     dependencies=[ltx2_5_components, ltx2_5_text_encoder_int8],
+)
+
+
+# The only starter model here that is NOT from the ungated mirror: the head ships solely in
+# Lightricks' gated repo. Installing it therefore requires `huggingface-cli login` with an account
+# that has accepted the LTX-2.5 licence, which is why the description says so outright rather than
+# letting the install fail with a 403.
+ltx2_5_duration_head = StarterModel(
+    name="LTX-2.5 Duration Head",
+    base=BaseModelType.LTX2,
+    source="Lightricks/LTX-2.5-Diffusers::duration_head/diffusion_pytorch_model.safetensors",
+    description="Predicts how long the shot a prompt describes should run, so a generation can choose its own "
+    "length (~3.6 MB). Optional. Unlike the other LTX-2.5 starter models this one is fetched from Lightricks' "
+    f"gated repo, so it needs a Hugging Face login whose account has accepted the licence. {_LICENSE_NOTE}",
+    type=ModelType.LTX2DurationHead,
+    format=ModelFormat.Checkpoint,
 )
