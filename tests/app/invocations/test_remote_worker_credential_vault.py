@@ -128,3 +128,28 @@ def test_url_and_required_field_validation(vault_path):
     with pytest.raises(ValueError, match="required"):
         vault.save_credentials("alice", "http://worker", "a@example.com", "")
     assert not vault_path.exists()
+
+
+def test_settings_share_encrypted_vault_without_disturbing_credentials(vault_path):
+    vault.save_credentials("alice", "http://worker:9090", "a@example.com", "secret")
+    settings = {
+        "enabled": True,
+        "dispatchMode": "remote_only",
+        "workerUrls": "http://worker:9090",
+        "workerNames": {"http://worker:9090": "RTX5080"},
+        "disabledWorkerUrls": [],
+        "autoTransferMissingModels": True,
+        "keepRemoteCopies": False,
+        "modelTransferHost": "",
+    }
+
+    vault.save_settings("alice", settings)
+
+    assert vault.get_saved_settings("alice") == settings
+    assert vault.get_saved_credentials("alice", "http://worker:9090")["password"] == "secret"
+    assert b"RTX5080" not in vault_path.read_bytes()
+    assert b"http://worker:9090" not in vault_path.read_bytes()
+
+    vault.delete_credentials("alice", "http://worker:9090")
+    assert vault.get_saved_credentials("alice", "http://worker:9090") is None
+    assert vault.get_saved_settings("alice") == settings

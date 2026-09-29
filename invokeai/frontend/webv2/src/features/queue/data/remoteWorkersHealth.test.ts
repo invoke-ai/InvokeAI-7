@@ -11,6 +11,7 @@ import {
   remoteWorkersHealthStore,
 } from './remoteWorkersHealth';
 import {
+  DEFAULT_REMOTE_WORKERS_SETTINGS,
   getRemoteWorkerUrls,
   getRemoteWorkersSettings,
   isRemoteWorkerEnabled,
@@ -126,12 +127,18 @@ describe('Remote worker availability', () => {
 
   it('discards results from a previous account', async () => {
     let finish!: (value: { status: string }) => void;
-    transport.apiFetchJson.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve;
-        })
-    );
+    transport.apiFetchJson.mockImplementation((path: string) => {
+      if (path === '/api/v1/remote_workers/settings') {
+        return Promise.resolve({
+          ...DEFAULT_REMOTE_WORKERS_SETTINGS,
+          disabledWorkerUrls: [],
+          workerNames: {},
+        });
+      }
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    });
 
     const pending = refreshRemoteWorkerHealth([worker1]);
     accountLifecycle.activate('another-user');

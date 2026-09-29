@@ -9,15 +9,17 @@ from typing import Any, Literal
 
 from fastapi import HTTPException, Query
 from fastapi.routing import APIRouter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from invokeai.app.api.auth_dependencies import AdminUserOrDefault, CurrentUserOrDefault
 from invokeai.app.api.dependencies import ApiDependencies
 from invokeai.app.invocations.remote_worker.credential_vault import (
     delete_credentials,
     get_saved_credentials,
+    get_saved_settings,
     normalize_url,
     save_credentials,
+    save_settings,
 )
 from invokeai.app.invocations.remote_worker.diffusers_transfer import (
     cancel_directory_install_job,
@@ -36,7 +38,6 @@ class RemoteWorkerCredentialRequest(BaseModel):
     remember_me: bool = True
 
 
-
 class RemoteWorkerCredentialStatus(BaseModel):
     saved: bool
     email: str | None = None
@@ -53,6 +54,33 @@ def _status(user_id: str, url: str) -> RemoteWorkerCredentialStatus:
 class RemoteWorkerAvailability(BaseModel):
     status: Literal["online", "offline", "login_required"]
 
+
+class RemoteWorkersSettings(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    enabled: bool = False
+    dispatch_mode: Literal["distributed", "remote_only"] = Field(default="distributed", alias="dispatchMode")
+    worker_urls: str = Field(default="", alias="workerUrls", max_length=32768)
+    worker_names: dict[str, str] = Field(default_factory=dict, alias="workerNames")
+    disabled_worker_urls: list[str] = Field(default_factory=list, alias="disabledWorkerUrls")
+    auto_transfer_missing_models: bool = Field(default=True, alias="autoTransferMissingModels")
+    keep_remote_copies: bool = Field(default=False, alias="keepRemoteCopies")
+    model_transfer_host: str = Field(default="", alias="modelTransferHost", max_length=2048)
+
+
+@remote_workers_router.get("/settings", response_model=RemoteWorkersSettings)
+def get_remote_worker_settings(current_user: CurrentUserOrDefault) -> RemoteWorkersSettings:
+    saved = get_saved_settings(current_user.user_id)
+    return RemoteWorkersSettings.model_validate(saved) if saved is not None else RemoteWorkersSettings()
+
+
+@remote_workers_router.put("/settings", response_model=RemoteWorkersSettings)
+def put_remote_worker_settings(
+    current_user: CurrentUserOrDefault,
+    body: RemoteWorkersSettings,
+) -> RemoteWorkersSettings:
+    save_settings(current_user.user_id, body.model_dump(by_alias=True))
+    return body
 
 
 @remote_workers_router.get("/status", response_model=RemoteWorkerAvailability)

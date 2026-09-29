@@ -1,7 +1,12 @@
-import { captureAccountScope, registerAccountOwnedResource } from '@platform/state/accountLifecycle';
+import {
+  captureAccountScope,
+  isAccountScopeCurrent,
+  registerAccountOwnedResource,
+  type AccountScope,
+} from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
+import { apiFetchJson } from '@platform/transport/http';
 
-/** Account-owned browser settings. URLs only: never put credentials or tokens here. */
 export type RemoteDispatchMode = 'distributed' | 'remote_only';
 
 export interface RemoteWorkersSettings {
@@ -17,8 +22,22 @@ export interface RemoteWorkersSettings {
   modelTransferHost: string;
 }
 
-const LEGACY_SINGLE_USER_KEY = 'invokeai-v7:remote-workers:test-v1';
-const ACCOUNT_STORAGE_KEY = 'invokeai-v7:remote-workers:v2';
+export const DEFAULT_REMOTE_WORKERS_SETTINGS: RemoteWorkersSettings = {
+  enabled: false,
+  dispatchMode: 'distributed',
+  workerUrls: '',
+  workerNames: {},
+  disabledWorkerUrls: [],
+  autoTransferMissingModels: true,
+  keepRemoteCopies: false,
+  modelTransferHost: '',
+};
+
+const makeDefaultSettings = (): RemoteWorkersSettings => ({
+  ...DEFAULT_REMOTE_WORKERS_SETTINGS,
+  workerNames: {},
+  disabledWorkerUrls: [],
+});
 
 const stripEmbeddedUrlCredentials = (raw: string): string =>
   raw.replace(/[^;,\r\n\s]+/g, (candidate) => {
@@ -40,102 +59,159 @@ const stripEmbeddedUrlCredentials = (raw: string): string =>
       : sanitized;
   });
 
-const getStorageKey = (): string | null => {
+const normalizeSettings = (value: unknown): RemoteWorkersSettings => {
+  if (typeof value !== 'object' || value === null) {
+    return makeDefaultSettings();
+  }
+  const entry = value as Record<string, unknown>;
+  return {
+    enabled: entry.enabled === true,
+    dispatchMode: entry.dispatchMode === 'remote_only' ? 'remote_only' : 'distributed',
+    workerUrls: stripEmbeddedUrlCredentials(typeof entry.workerUrls === 'string' ? entry.workerUrls : ''),
+    workerNames:
+      typeof entry.workerNames === 'object' && entry.workerNames !== null
+        ? Object.fromEntries(
+            Object.entries(entry.workerNames as Record<string, unknown>)
+              .filter((item): item is [string, string] => typeof item[1] === 'string')
+              .map(([url, name]) => [url.toLowerCase(), name])
+          )
+        : {},
+    disabledWorkerUrls: Array.isArray(entry.disabledWorkerUrls)
+      ? entry.disabledWorkerUrls.filter((url): url is string => typeof url === 'string').map((url) => url.toLowerCase())
+      : [],
+    autoTransferMissingModels: entry.autoTransferMissingModels !== false,
+    keepRemoteCopies: entry.keepRemoteCopies === true,
+    modelTransferHost: typeof entry.modelTransferHost === 'string' ? entry.modelTransferHost : '',
+  };
+};
+
+export const remoteWorkersStore = createExternalStore<RemoteWorkersSettings>(makeDefaultSettings());
+
+let loadedEpoch: number | null = null;
+let pendingBeforeLoad: Partial<RemoteWorkersSettings> = {};
+let pendingSave: { owner: AccountScope; revision: number; settings: RemoteWorkersSettings } | undefined;
+let saveTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+let settingsRevision = 0;
+
+const cancelPendingSave = (): void => {
+  if (saveTimer !== undefined) {
+    globalThis.clearTimeout(saveTimer);
+  }
+  saveTimer = undefined;
+  pendingSave = undefined;
+};
+
+const scheduleSave = (settings: RemoteWorkersSettings): void => {
   const owner = captureAccountScope();
   if (!owner.accountId) {
-    return null;
+    return;
   }
-  return owner.accountId === 'single-user' ? LEGACY_SINGLE_USER_KEY : `${ACCOUNT_STORAGE_KEY}${owner.storageSuffix}`;
-};
 
-export const DEFAULT_REMOTE_WORKERS_SETTINGS: RemoteWorkersSettings = {
-  enabled: false,
-  dispatchMode: 'distributed',
-  workerUrls: '',
-  workerNames: {},
-  disabledWorkerUrls: [],
-  autoTransferMissingModels: true,
-  keepRemoteCopies: false,
-  modelTransferHost: '',
-};
-
-const readSavedSettings = (): RemoteWorkersSettings => {
-  try {
-    const key = getStorageKey();
-    const saved = key ? localStorage.getItem(key) : null;
-    if (!saved) {
-      return { ...DEFAULT_REMOTE_WORKERS_SETTINGS };
+  settingsRevision += 1;
+  const revision = settingsRevision;
+  pendingSave = { owner, revision, settings };
+  if (saveTimer !== undefined) {
+    globalThis.clearTimeout(saveTimer);
+  }
+  saveTimer = globalThis.setTimeout(() => {
+    saveTimer = undefined;
+    const pending = pendingSave;
+    pendingSave = undefined;
+    if (!pending || !isAccountScopeCurrent(pending.owner)) {
+      return;
     }
-    const value: unknown = JSON.parse(saved);
-    if (typeof value !== 'object' || value === null) {
-      return { ...DEFAULT_REMOTE_WORKERS_SETTINGS };
-    }
-    const entry = value as Record<string, unknown>;
-    const mode = entry.dispatchMode;
-    const savedWorkerUrls = typeof entry.workerUrls === 'string' ? entry.workerUrls : '';
-    const workerUrls = stripEmbeddedUrlCredentials(savedWorkerUrls);
-    if (workerUrls !== savedWorkerUrls) {
-      try {
-        localStorage.setItem(key!, JSON.stringify({ ...entry, workerUrls }));
-      } catch {
-        // Best-effort migration: returning the scrubbed value is sufficient for runtime safety.
+    void apiFetchJson<RemoteWorkersSettings>('/api/v1/remote_workers/settings', {
+      method: 'PUT',
+      body: JSON.stringify(pending.settings),
+      signal: pending.owner.signal,
+    }).catch(() => {
+      if (isAccountScopeCurrent(pending.owner) && settingsRevision === pending.revision) {
+        void loadRemoteWorkersSettings();
       }
+    });
+  }, 250);
+};
+
+export const loadRemoteWorkersSettings = async (): Promise<void> => {
+  const owner = captureAccountScope();
+  if (!owner.accountId) {
+    remoteWorkersStore.setSnapshot(makeDefaultSettings());
+    loadedEpoch = null;
+    return;
+  }
+
+  const loadRevision = settingsRevision;
+  try {
+    const saved = await apiFetchJson<RemoteWorkersSettings>('/api/v1/remote_workers/settings', {
+      signal: owner.signal,
+    });
+    if (!isAccountScopeCurrent(owner) || loadRevision !== settingsRevision) {
+      return;
     }
-    return {
-      enabled: entry.enabled === true,
-      dispatchMode: mode === 'remote_only' ? 'remote_only' : 'distributed',
-      workerUrls,
-      workerNames:
-        typeof entry.workerNames === 'object' && entry.workerNames !== null
-          ? Object.fromEntries(
-              Object.entries(entry.workerNames as Record<string, unknown>)
-                .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
-                .map(([url, name]) => [url.toLowerCase(), name])
-            )
-          : {},
-      disabledWorkerUrls: Array.isArray(entry.disabledWorkerUrls)
-        ? entry.disabledWorkerUrls
-            .filter((url): url is string => typeof url === 'string')
-            .map((url) => url.toLowerCase())
-        : [],
-      autoTransferMissingModels: entry.autoTransferMissingModels !== false,
-      keepRemoteCopies: entry.keepRemoteCopies === true,
-      modelTransferHost: typeof entry.modelTransferHost === 'string' ? entry.modelTransferHost : '',
-    };
+    const pending = pendingBeforeLoad;
+    pendingBeforeLoad = {};
+    loadedEpoch = owner.epoch;
+    const next = { ...normalizeSettings(saved), ...pending };
+    remoteWorkersStore.setSnapshot(next);
+    if (Object.keys(pending).length > 0) {
+      scheduleSave(next);
+    }
   } catch {
-    // The panel works even when storage is blocked or the saved JSON is corrupt.
-    return { ...DEFAULT_REMOTE_WORKERS_SETTINGS };
+    if (!isAccountScopeCurrent(owner) || loadRevision !== settingsRevision) {
+      return;
+    }
+    const pending = pendingBeforeLoad;
+    pendingBeforeLoad = {};
+    loadedEpoch = owner.epoch;
+    const next = { ...makeDefaultSettings(), ...pending };
+    remoteWorkersStore.setSnapshot(next);
+    if (Object.keys(pending).length > 0) {
+      scheduleSave(next);
+    }
   }
 };
 
-export const remoteWorkersStore = createExternalStore<RemoteWorkersSettings>(readSavedSettings());
+const resetForAccountChange = (): void => {
+  settingsRevision += 1;
+  loadedEpoch = null;
+  pendingBeforeLoad = {};
+  cancelPendingSave();
+  remoteWorkersStore.setSnapshot(makeDefaultSettings());
+  if (captureAccountScope().accountId) {
+    void loadRemoteWorkersSettings();
+  }
+};
 
-// Invalidate the previous account's URLs and enabled state synchronously on logout/login.
 registerAccountOwnedResource({
-  name: 'remote-workers-browser-settings',
-  clear: () => remoteWorkersStore.setSnapshot(readSavedSettings()),
+  name: 'remote-workers-server-settings',
+  clear: resetForAccountChange,
 });
 
+if (captureAccountScope().accountId) {
+  void loadRemoteWorkersSettings();
+}
+
 export const getRemoteWorkersSettings = (): RemoteWorkersSettings =>
-  captureAccountScope().accountId ? remoteWorkersStore.getSnapshot() : { ...DEFAULT_REMOTE_WORKERS_SETTINGS };
+  captureAccountScope().accountId ? remoteWorkersStore.getSnapshot() : makeDefaultSettings();
 
 export const setRemoteWorkersSettings = (patch: Partial<RemoteWorkersSettings>): void => {
-  const key = getStorageKey();
-  if (!key) {
+  const owner = captureAccountScope();
+  if (!owner.accountId) {
     return;
   }
   const safePatch =
     patch.workerUrls === undefined ? patch : { ...patch, workerUrls: stripEmbeddedUrlCredentials(patch.workerUrls) };
   const next = { ...remoteWorkersStore.getSnapshot(), ...safePatch };
   remoteWorkersStore.setSnapshot(next);
-  try {
-    localStorage.setItem(key, JSON.stringify(next));
-  } catch {
-    // Rendering must not depend on browser storage availability.
+
+  if (loadedEpoch !== owner.epoch) {
+    pendingBeforeLoad = { ...pendingBeforeLoad, ...safePatch };
+    return;
   }
+  scheduleSave(next);
 };
 
-/** Worker selection is per account; changing a slot or worker address never changes another worker. */
+/** Worker selection is per account; changing a slot or worker address never changes which worker is paused. */
 export const isRemoteWorkerEnabled = (url: string): boolean =>
   !getRemoteWorkersSettings().disabledWorkerUrls.includes(url.toLowerCase());
 

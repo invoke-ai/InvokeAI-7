@@ -1,33 +1,23 @@
 import { accountLifecycle } from '@platform/state/accountLifecycle';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  apiFetchJson: vi.fn(),
+}));
+
+vi.mock('@platform/transport/http', () => ({
+  apiFetchJson: mocks.apiFetchJson,
+}));
 
 import {
+  DEFAULT_REMOTE_WORKERS_SETTINGS,
   getRemoteWorkerName,
   getRemoteWorkerUrls,
   getRemoteWorkersSettings,
+  loadRemoteWorkersSettings,
   setRemoteWorkerName,
   setRemoteWorkersSettings,
 } from './remoteWorkersStore';
-
-const STORAGE_KEY = 'invokeai-v7:remote-workers:test-v1';
-
-const createMemoryStorage = (): Storage => {
-  const values = new Map<string, string>();
-  return {
-    clear: () => values.clear(),
-    getItem: (key) => values.get(key) ?? null,
-    key: (index) => [...values.keys()][index] ?? null,
-    get length() {
-      return values.size;
-    },
-    removeItem: (key) => {
-      values.delete(key);
-    },
-    setItem: (key, value) => {
-      values.set(key, String(value));
-    },
-  };
-};
 
 let resetCounter = 0;
 
@@ -36,27 +26,50 @@ const activateSingleUser = (): void => {
   accountLifecycle.activate('single-user');
 };
 
-describe('remote worker browser settings', () => {
-  beforeEach(() => {
-    Object.defineProperty(globalThis, 'localStorage', {
-      configurable: true,
-      value: createMemoryStorage(),
+describe('remote worker server settings', () => {
+  beforeEach(async () => {
+    mocks.apiFetchJson.mockReset();
+    mocks.apiFetchJson.mockImplementation((_path: string, init?: RequestInit) => {
+      if (init?.method === 'PUT') {
+        return Promise.resolve(JSON.parse(String(init.body)));
+      }
+      return Promise.resolve({ ...DEFAULT_REMOTE_WORKERS_SETTINGS, disabledWorkerUrls: [], workerNames: {} });
     });
     activateSingleUser();
-    setRemoteWorkersSettings({
-      disabledWorkerUrls: [],
-      dispatchMode: 'distributed',
-      enabled: false,
-      workerNames: {},
-      workerUrls: '',
-    });
+    await loadRemoteWorkersSettings();
   });
 
   afterEach(() => {
-    Reflect.deleteProperty(globalThis, 'localStorage');
+    accountLifecycle.invalidate();
   });
 
-  it('strips embedded URL credentials before settings enter the store or localStorage', () => {
+  it('loads settings from the authenticated primary server', async () => {
+    mocks.apiFetchJson.mockImplementation((_path: string, init?: RequestInit) => {
+      if (init?.method === 'PUT') {
+        return Promise.resolve(JSON.parse(String(init.body)));
+      }
+      return Promise.resolve({
+        ...DEFAULT_REMOTE_WORKERS_SETTINGS,
+        enabled: true,
+        dispatchMode: 'remote_only',
+        workerUrls: 'https://example.test/invoke',
+      });
+    });
+
+    await loadRemoteWorkersSettings();
+
+    expect(getRemoteWorkersSettings().dispatchMode).toBe('remote_only');
+    expect(getRemoteWorkersSettings().workerUrls).toBe('https://example.test/invoke');
+  });
+
+  it('does not depend on browser localStorage and strips embedded URL credentials', () => {
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      get: () => {
+        throw new Error('remote worker settings must not read browser storage');
+      },
+    });
+
     setRemoteWorkersSettings({
       workerUrls: 'http://alice:secret@192.168.1.101:9090\nhttp://192.168.1.102:9090',
     });
@@ -67,31 +80,7 @@ describe('remote worker browser settings', () => {
       'http://192.168.1.102:9090',
     ]);
 
-    const saved = localStorage.getItem(STORAGE_KEY);
-    expect(saved).not.toBeNull();
-    expect(saved).not.toContain('alice');
-    expect(saved).not.toContain('secret');
-  });
-
-  it('loads the two supported dispatch modes from storage', () => {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        enabled: true,
-        dispatchMode: 'remote_only',
-        workerUrls: 'https://example.test/invoke',
-        workerNames: {},
-        disabledWorkerUrls: [],
-        autoTransferMissingModels: true,
-        keepRemoteCopies: false,
-        modelTransferHost: '',
-      })
-    );
-
-    activateSingleUser();
-
-    expect(getRemoteWorkersSettings().dispatchMode).toBe('remote_only');
-    expect(getRemoteWorkersSettings().workerUrls).toBe('https://example.test/invoke');
+    Reflect.deleteProperty(globalThis, 'localStorage');
   });
 
   it('stores a user-defined worker name by normalized URL', () => {
