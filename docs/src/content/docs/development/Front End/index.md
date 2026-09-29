@@ -7,6 +7,10 @@ Invoke's UI is made possible by many contributors and open-source libraries. Tha
 
 ## Dev environment
 
+The default frontend is `invokeai/frontend/web` (formerly `webv2`). See its `ARCHITECTURE.md` for the current module boundaries and `AGENTS.md` for package checks. Build with `pnpm -C invokeai/frontend/web build`; a normal `invokeai-web` launch serves it. `--webv2` remains a compatibility alias.
+
+The previous frontend is retained in `invokeai/frontend/web-legacy` and served with `--web-legacy`. Build that package before selecting it. The legacy architecture and generated API types described below belong to that package. Wheels and containers include both frontends during the transition. Finish editing and close other editor tabs before switching; frontend selection does not migrate browser state or make new projects readable by legacy.
+
 Follow the [dev environment](/development/setup/dev-environment/) guide to get set up. Run the UI using `pnpm dev`.
 
 ## Package scripts
@@ -29,7 +33,7 @@ We use [openapi-typescript] to generate types from the app's OpenAPI schema. The
 If you make backend changes, it's important to regenerate the frontend types:
 
 ```sh
-cd invokeai/frontend/web && python ../../../scripts/generate_openapi_schema.py | pnpm typegen
+cd invokeai/frontend/web-legacy && python ../../../scripts/generate_openapi_schema.py | pnpm typegen
 ```
 
 On macOS and Linux, you can run `make frontend-typegen` as a shortcut for the above snippet.
@@ -53,7 +57,7 @@ Only the English source strings (i.e. `en.json`) should be changed on this repo.
       "request": "launch",
       "name": "Invoke UI",
       "url": "http://localhost:5173",
-      "webRoot": "${workspaceFolder}/invokeai/frontend/web"
+      "webRoot": "${workspaceFolder}/invokeai/frontend/web-legacy"
     }
   ]
 }
@@ -125,7 +129,7 @@ In some situations, we may want to test types. For example, if you use `zod` to 
 [i18next]: https://github.com/i18next/react-i18next
 [Weblate]: https://hosted.weblate.org/engage/invokeai/
 [openapi-typescript]: https://github.com/openapi-ts/openapi-typescript
-[schema.ts]: https://github.com/invoke-ai/InvokeAI/blob/main/invokeai/frontend/web/src/services/api/schema.ts
+[schema.ts]: https://github.com/invoke-ai/InvokeAI-7/blob/main/invokeai/frontend/web-legacy/src/services/api/schema.ts
 [conventional commits]: https://www.conventionalcommits.org/en/v1.0.0/
 [Workflows - Design and Implementation]: ./workflows/
 [State Management]: ./state-management/

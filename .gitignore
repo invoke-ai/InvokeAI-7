@@ -181,6 +181,7 @@ cython_debug/
 
 # Let the frontend manage its own gitignore
 !invokeai/frontend/web/*
+!invokeai/frontend/web-legacy/*
 
 # Scratch folder
 .scratch/

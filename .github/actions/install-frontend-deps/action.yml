@@ -11,7 +11,7 @@ runs:
     - name: setup node 22
       uses: actions/setup-node@v6
       with:
-        node-version: '22'
+        node-version-file: '.nvmrc'
 
     - name: setup pnpm
       uses: pnpm/action-setup@v6

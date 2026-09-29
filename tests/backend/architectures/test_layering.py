@@ -8,7 +8,7 @@ the defs modules into being — reaching back for an attribute would find a half
 And everything outside must go through the facade, so that importing the registry always means the
 registry has been filled.
 
-Modelled on invokeai/frontend/webv2/src/architecture/dependencyPolicy.test.ts: named rules, a single
+Modelled on invokeai/frontend/web/src/architecture/dependencyPolicy.test.ts: named rules, a single
 assertion listing every violation at once, and self-tests proving the checker actually catches
 things. The self-tests are the important half — an AST walker with a bug reports no violations and
 stays green forever, which is indistinguishable from a codebase that obeys the rules.

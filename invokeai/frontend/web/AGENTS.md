@@ -1,4 +1,4 @@
-# Webv2
+# Frontend
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md) for ownership/interface changes and affected owner-local READMEs for lifecycle/persistence. Stack: React 19, Vite, Chakra UI 3, TanStack Query/Router, @dnd-kit; legacy web differs.
 
@@ -28,7 +28,7 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) for ownership/interface changes and affe
 
 - Inspect rendering/subscriptions, galleries/lists, pointer handlers, Canvas resources, lazy loading, and request scheduling. Use existing virtualization/lazy boundaries; memoize only identified costs.
 - Preserve disposal, bounded memory, account transitions, and responsive input. Never update goldens/baselines to hide regressions.
-- Run commands here or via `pnpm -C invokeai/frontend/webv2`. Install with `pnpm install --frozen-lockfile`.
+- Run commands here or via `pnpm -C invokeai/frontend/web`. Install with `pnpm install --frozen-lockfile`.
 
 | Change/check                          | Command                                                            |
 | ------------------------------------- | ------------------------------------------------------------------ |

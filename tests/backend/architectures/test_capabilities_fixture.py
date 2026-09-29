@@ -21,7 +21,7 @@ FIXTURE_PATH = (
     Path(__file__).parents[3]
     / "invokeai"
     / "frontend"
-    / "webv2"
+    / "web"
     / "src"
     / "features"
     / "generation"

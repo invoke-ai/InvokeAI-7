@@ -23,7 +23,7 @@ The examples use a hypothetical architecture, `NewModel`, with the base value `n
 :::
 
 :::caution[Frontend scope]
-Frontend work targets **webv2** (`invokeai/frontend/webv2`) only. The legacy UI in `invokeai/frontend/web` gets no graph builders or UI for new architectures. It still owns the generated OpenAPI artifacts, which CI checks; see [Tests and CI gates](#13-tests-and-ci-gates).
+Frontend work targets the default UI in `invokeai/frontend/web` (formerly **webv2**) only. The legacy UI in `invokeai/frontend/web-legacy` gets no graph builders or UI for new architectures. It still owns the generated OpenAPI artifacts, which CI checks; see [Tests and CI gates](#13-tests-and-ci-gates).
 :::
 
 :::tip[Start with the scaffolder]
@@ -678,7 +678,7 @@ Put license restrictions in the description; the Ideogram 4 and MiniMax H3 descr
 
 webv2 does not keep per-architecture tables of its own. Grid, default settings, negative-prompt behavior, guidance label and range, scheduler set, VAE acceptance, control kinds and reference-image limits all come from the backend's `FeaturesFacet`, `DefaultSettingsFacet` and `VaeFacet`, served at `GET /api/v2/models/capabilities`. What webv2 owns is the graph topology and the per-family UI.
 
-Paths below are relative to `invokeai/frontend/webv2/src/features/generation/core/` unless stated otherwise.
+Paths below are relative to `invokeai/frontend/web/src/features/generation/core/` unless stated otherwise.
 
 <Steps>
 1. **Regenerate the capabilities fixture**
@@ -699,7 +699,7 @@ Paths below are relative to `invokeai/frontend/webv2/src/features/generation/cor
 
    Add `buildNewModelGraph` and register it in `GRAPH_BUILDERS`, which `satisfies Record<SupportedGenerateBase, …>`, so the compiler reports a missing entry. `buildZImageGraph` and `buildKrea2Graph` are good templates:
 
-   ```ts title="invokeai/frontend/webv2/src/features/generation/core/graph.ts"
+   ```ts title="invokeai/frontend/web/src/features/generation/core/graph.ts"
    const buildNewModelGraph = (
      settings: GenerateSettings,
      model: MainModelConfig,
@@ -785,7 +785,7 @@ Paths below are relative to `invokeai/frontend/webv2/src/features/generation/cor
    - `src/features/models/core/taxonomy.ts`: variant values
    - `src/features/models/core/relationships.ts`: which encoder and VAE types may link to the base
    - `src/features/workflow/core/modelRequirements.ts`: `BASE_LABELS`
-   - New user-facing strings go in `invokeai/frontend/webv2/public/locales/en.json`.
+   - New user-facing strings go in `invokeai/frontend/web/public/locales/en.json`.
 
 8. **Per-family UI (only for controls unique to the architecture)**
 
@@ -794,7 +794,7 @@ Paths below are relative to `invokeai/frontend/webv2/src/features/generation/cor
 9. **Regenerate the graph contract**
 
    ```sh
-   pnpm -C invokeai/frontend/webv2 test src/features/generation/core/graphCoverage.test.ts -u
+   pnpm -C invokeai/frontend/web test src/features/generation/core/graphCoverage.test.ts -u
    ```
 
    This rewrites `__snapshots__/generateGraphNodeTypes.json`. Then raise `SUPPORTED_BASE_COUNTS["generate"]` in `tests/app/invocations/test_frontend_graph_node_types.py`, and `LITERAL_FLOORS` if needed. That Python test checks every node type, edge field and literal value the builders emit against the backend's invocation registry.
@@ -809,7 +809,7 @@ Paths below are relative to `invokeai/frontend/webv2/src/features/generation/cor
 - [ ] Recall
 - [ ] Model registry, labels, `en.json`
 - [ ] Graph snapshot regenerated, `SUPPORTED_BASE_COUNTS` raised
-- [ ] Changed interactions verified in the browser (`--webv2`)
+- [ ] Changed interactions verified in the browser (default frontend)
 :::
 
 ---
@@ -864,7 +864,7 @@ Beyond those tables, test what can silently go wrong:
 
 Use real lightweight modules with small configs rather than mocks.
 
-**CI gates for generated artifacts.** New or changed invocations change the OpenAPI schema. As long as `invokeai/frontend/web` exists, CI (`openapi-checks.yml`, `typegen-checks.yml`) requires its generated `openapi.json` and `src/services/api/schema.ts` to be current. Regenerate both from `invokeai/frontend/web` in the repository's Python environment. This is a generated-file gate, not legacy UI work:
+**CI gates for generated artifacts.** New or changed invocations change the OpenAPI schema. While `invokeai/frontend/web-legacy` remains supported, CI (`openapi-checks.yml`, `typegen-checks.yml`) requires its generated `openapi.json` and `src/services/api/schema.ts` to be current. Regenerate both from `invokeai/frontend/web-legacy` in the repository's Python environment. This is a generated-file gate, not legacy UI work:
 
 ```sh
 python ../../../scripts/generate_openapi_schema.py > openapi.json && pnpm exec prettier --write openapi.json
@@ -914,7 +914,7 @@ A minimal txt2img integration with a Diffusers main model, reusing an existing V
         - \_\_init\_\_.py
     - stable_diffusion/diffusion/conditioning_data.py
   - invocation_api/\_\_init\_\_.py
-  - frontend/webv2/src/features
+  - frontend/web/src/features
     - generation/core
       - contracts.ts
       - supportedBases.ts
@@ -937,7 +937,7 @@ For **img2img, inpaint and outpaint**, add:
 - invokeai
   - app/invocations/vae
     - new_model_image_to_latents.py
-  - frontend/webv2/src/features/generation/core/canvas
+  - frontend/web/src/features/generation/core/canvas
     - compileCanvasGraph.ts `CANVAS_I2L_NODE_TYPES`
     - compileCanvasGraph.test.ts `BASE_CASES`
 </FileTree>

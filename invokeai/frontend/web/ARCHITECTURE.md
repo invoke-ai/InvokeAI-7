@@ -1,6 +1,6 @@
-# Webv2 module architecture
+# Frontend module architecture
 
-Webv2 uses four top-level module groups:
+The default frontend uses four top-level module groups:
 
 - `app/` owns providers, routing, boot, and composition roots.
 - `platform/` owns application infrastructure with no workbench or feature dependency.

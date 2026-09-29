@@ -41,4 +41,4 @@ Import verifies declared entries and checksums, then validates all embedded font
 
 ## Verification
 
-Run `pnpm lint`, `pnpm test`, `pnpm test:browser`, and `pnpm run test:performance:build` from webv2. Queue receipt tests also cover backend admission, account isolation, project deletion, partial acceptance, and idempotent retries. Browser tests exercise actual IndexedDB transactions and Web Locks.
+Run `pnpm lint`, `pnpm test`, `pnpm test:browser`, and `pnpm run test:performance:build` from the frontend package. Queue receipt tests also cover backend admission, account isolation, project deletion, partial acceptance, and idempotent retries. Browser tests exercise actual IndexedDB transactions and Web Locks.

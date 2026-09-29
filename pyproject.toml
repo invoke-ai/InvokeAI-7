@@ -74,7 +74,7 @@ dependencies = [
   # is fixed as of 0.124.0 — no change to AnyInvocation was needed.
   #
   # Two later changes did need adapting to, both handled: 0.130 emits `contentMediaType` instead of
-  # `format: binary` for file uploads (see the Blob mapping in frontend/web/scripts/typegen.js), and 0.141 keeps
+  # `format: binary` for file uploads (see the Blob mapping in frontend/web-legacy/scripts/typegen.js), and 0.141 keeps
   # included routers as a single node in `app.routes` rather than copying their routes into it (see
   # `_iter_route_contexts` in tests/app/routers/test_model_manager_authorization.py). Keep the minor-version bound:
   # both of those were silent breakages that only surfaced because something happened to assert on them.
@@ -303,6 +303,7 @@ version = { attr = "invokeai.version.__version__" }
   "invokeai.frontend*",
   "invokeai.frontend.web.dist*",
   "invokeai.frontend.web.static*",
+  "invokeai.frontend.web-legacy.dist*",
   "invokeai.configs*",
   "invokeai.app*",
   "invokeai.invocation_api*",
@@ -329,6 +330,7 @@ version = { attr = "invokeai.version.__version__" }
 "invokeai.configs" = ["*.example", "**/*.yaml", "*.txt"]
 "invokeai.frontend.web.dist" = ["**"]
 "invokeai.frontend.web.static" = ["**"]
+"invokeai.frontend.web-legacy.dist" = ["**"]
 "invokeai.app.invocations" = ["**"]
 
 #=== Begin: PyTest and Coverage
@@ -370,6 +372,7 @@ exclude = [
   "build",
   "dist",
   "invokeai/frontend/web/node_modules/",
+  "invokeai/frontend/web-legacy/node_modules/",
   ".venv*",
   "*.ipynb",
   "invokeai/backend/image_util/mediapipe_face/", # External code

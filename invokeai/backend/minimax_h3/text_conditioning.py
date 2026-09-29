@@ -151,7 +151,7 @@ def build_ref2va_presentation(
 
     These labels are how a user's prompt addresses a reference, so the webv2 Video panel badges each reference
     card with the ones it earns here; `referencePromptLabels` in
-    `invokeai/frontend/webv2/src/features/video/core/settings.ts` mirrors this numbering and must change with it.
+    `invokeai/frontend/web/src/features/video/core/settings.ts` mirrors this numbering and must change with it.
     A badge that names a label the prompt cannot resolve fails silently -- the model simply ignores the mention.
 
     Returns:

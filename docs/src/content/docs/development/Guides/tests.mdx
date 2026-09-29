@@ -7,7 +7,9 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 ## Frontend Tests
 
-We use `vitest` to run the frontend tests. (See [vite.config.ts](https://github.com/invoke-ai/InvokeAI/blob/main/invokeai/frontend/web/vite.config.mts) for the default `vitest` options.)
+For the default frontend in `invokeai/frontend/web`, run `pnpm -C invokeai/frontend/web check:release`. It includes unit and Chromium suites, architecture and performance gates, project-file journeys, and accessibility checks. The legacy Vitest commands below apply to `web-legacy`.
+
+We use `vitest` to run the frontend tests. (See [vite.config.ts](https://github.com/invoke-ai/InvokeAI-7/blob/main/invokeai/frontend/web-legacy/vite.config.mts) for the default `vitest` options.)
 
 Below are some common frontend test commands:
 
@@ -21,21 +23,21 @@ Below are some common frontend test commands:
   <TabItem label="pnpm">
     ```bash
     # From the repository root, run the full frontend test suite in watch mode.
-    pnpm --dir invokeai/frontend/web test
+    pnpm -C invokeai/frontend/web-legacy test
 
     # Run the frontend test suite once without watch mode.
-    pnpm --dir invokeai/frontend/web test:no-watch
+    pnpm -C invokeai/frontend/web-legacy test:no-watch
 
     # Equivalent one-shot command using the underlying Vitest subcommand.
-    pnpm --dir invokeai/frontend/web test:run
+    pnpm -C invokeai/frontend/web-legacy test:run
 
     # Open the Vitest UI and collect coverage data while running tests.
-    pnpm --dir invokeai/frontend/web test:ui
+    pnpm -C invokeai/frontend/web-legacy test:ui
     ```
   </TabItem>
 </Tabs>
 
-If you are already working from `invokeai/frontend/web`, you can omit the `--dir` flag and run the same `pnpm` scripts directly from that directory.
+If you are already working from `invokeai/frontend/web-legacy`, you can omit the `--dir` flag and run the same `pnpm` scripts directly from that directory.
 
 ## Backend Tests
 

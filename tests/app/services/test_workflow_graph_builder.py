@@ -108,15 +108,7 @@ def _build_named_return_edges(source: str, source_handle: str):
 
 
 FOR_LOOP_FIXTURE_DIR = (
-    Path(__file__).parents[3]
-    / "invokeai"
-    / "frontend"
-    / "webv2"
-    / "src"
-    / "features"
-    / "workflow"
-    / "core"
-    / "fixtures"
+    Path(__file__).parents[3] / "invokeai" / "frontend" / "web" / "src" / "features" / "workflow" / "core" / "fixtures"
 )
 
 FOR_LOOP_FIXTURES = sorted(FOR_LOOP_FIXTURE_DIR.glob("for-loop-*.json"))

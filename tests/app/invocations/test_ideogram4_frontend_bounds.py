@@ -16,7 +16,7 @@ import pytest
 from invokeai.app.invocations.ideogram4.ideogram4_denoise import Ideogram4DenoiseInvocation
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-SETTINGS_TS = REPO_ROOT / "invokeai/frontend/webv2/src/features/generation/core/settings.ts"
+SETTINGS_TS = REPO_ROOT / "invokeai/frontend/web/src/features/generation/core/settings.ts"
 
 
 def _frontend_constant(name: str) -> float:

@@ -45,7 +45,7 @@ jobs:
     timeout-minutes: 10 # expected run time: <2 min
     defaults:
       run:
-        working-directory: invokeai/frontend/web
+        working-directory: invokeai/frontend/web-legacy
     steps:
       - uses: actions/checkout@v6
 
@@ -62,12 +62,15 @@ jobs:
           files_yaml: |
             frontend:
               - '.github/workflows/frontend-tests.yml'
+              - '.nvmrc'
               - '.github/actions/install-frontend-deps/**'
-              - 'invokeai/frontend/web/**'
+              - 'invokeai/frontend/web-legacy/**'
 
       - name: install dependencies
         if: ${{ steps.changed-files.outputs.frontend_any_changed == 'true' || inputs.always_run == true }}
         uses: ./.github/actions/install-frontend-deps
+        with:
+          working-directory: invokeai/frontend/web-legacy
 
       - name: vitest
         if: ${{ steps.changed-files.outputs.frontend_any_changed == 'true' || inputs.always_run == true }}
@@ -79,11 +82,11 @@ jobs:
     timeout-minutes: 20 # Includes browser suites, performance sampling, project files, and accessibility.
     defaults:
       run:
-        working-directory: invokeai/frontend/webv2
+        working-directory: invokeai/frontend/web
     steps:
       - uses: actions/checkout@v6
 
-      - name: check for changed webv2 files
+      - name: check for changed frontend files
         if: ${{ inputs.always_run != true }}
         id: changed-files
         uses: tj-actions/changed-files@9426d40962ed5378910ee2e21d5f8c6fcbf2dd96
@@ -91,14 +94,15 @@ jobs:
           files_yaml: |
             webv2:
               - '.github/workflows/frontend-tests.yml'
+              - '.nvmrc'
               - '.github/actions/install-frontend-deps/**'
-              - 'invokeai/frontend/webv2/**'
+              - 'invokeai/frontend/web/**'
 
       - name: install dependencies
         if: ${{ steps.changed-files.outputs.webv2_any_changed == 'true' || inputs.always_run == true }}
         uses: ./.github/actions/install-frontend-deps
         with:
-          working-directory: invokeai/frontend/webv2
+          working-directory: invokeai/frontend/web
 
       - name: install Chromium
         if: ${{ steps.changed-files.outputs.webv2_any_changed == 'true' || inputs.always_run == true }}
@@ -116,7 +120,7 @@ jobs:
         if: ${{ (steps.changed-files.outputs.webv2_any_changed == 'true' || inputs.always_run == true) && ((github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'merge_group' && github.event.merge_group.base_ref == 'refs/heads/main')) }}
         uses: actions/cache/restore@v5
         with:
-          path: invokeai/frontend/webv2/artifacts/perf-reference
+          path: invokeai/frontend/web/artifacts/perf-reference
           key: webv2-perf-reference-${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           restore-keys: webv2-perf-reference-
 
@@ -156,7 +160,7 @@ jobs:
         if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.perf-ref-stage.outputs.ready == 'true' }}
         uses: actions/cache/save@v5
         with:
-          path: invokeai/frontend/webv2/artifacts/perf-reference
+          path: invokeai/frontend/web/artifacts/perf-reference
           key: webv2-perf-reference-${{ github.sha }}
 
       - name: upload architecture review artifacts
@@ -165,7 +169,7 @@ jobs:
         with:
           name: webv2-architecture-review
           path: |
-            invokeai/frontend/webv2/artifacts/architecture
-            invokeai/frontend/webv2/artifacts/architecture-performance
-            invokeai/frontend/webv2/artifacts/accessibility
+            invokeai/frontend/web/artifacts/architecture
+            invokeai/frontend/web/artifacts/architecture-performance
+            invokeai/frontend/web/artifacts/accessibility
           if-no-files-found: ignore

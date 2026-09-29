@@ -11,15 +11,15 @@ Before editing, read `AGENTS.md` along each target path; scoped rules supplement
 
 | Area | Guidance and source of truth |
 | --- | --- |
-| Active frontend | [webv2/AGENTS.md](invokeai/frontend/webv2/AGENTS.md), its `ARCHITECTURE.md` and executable architecture policy |
+| Active frontend | [web/AGENTS.md](invokeai/frontend/web/AGENTS.md), its `ARCHITECTURE.md` and executable architecture policy |
 | API, services, invocations | [app/AGENTS.md](invokeai/app/AGENTS.md) |
 | Inference and model management | [backend/AGENTS.md](invokeai/backend/AGENTS.md) |
 | Python tests | [tests/AGENTS.md](tests/AGENTS.md); also read guidance for the production code under test |
-| Legacy frontend and generated API artifacts | [web/AGENTS.md](invokeai/frontend/web/AGENTS.md) |
+| Legacy frontend and generated API artifacts | [web-legacy/AGENTS.md](invokeai/frontend/web-legacy/AGENTS.md) |
 | CI and contribution tooling | [.github/AGENTS.md](.github/AGENTS.md) |
 | Documentation | `docs/README.md` and `docs/package.json`; keep documentation about the implemented product current |
 
-Ordinary frontend work targets **webv2**, served with `--webv2`; default launches select legacy web. Verify build/launch targets for UI investigations. Legacy web owns generated OpenAPI/type artifacts.
+Ordinary frontend work targets **web**, served by default. `--webv2` remains a compatibility alias; `--web-legacy` selects `web-legacy`. Verify build/launch targets for UI investigations. Legacy web owns generated OpenAPI/type artifacts.
 
 ## Engineering standard
 
@@ -63,7 +63,7 @@ If required independent review is unavailable, self-review the corresponding foc
 
 ## Commands and environments
 
-- Use **pnpm 10**, never npm/yarn, with package-owned lockfiles and `pnpm -C <package> ...`. Use `.nvmrc`'s Node version; consult package scripts, not root Makefile assumptions about webv2.
+- Use **pnpm 10**, never npm/yarn, with package-owned lockfiles and `pnpm -C <package> ...`. Use `.nvmrc`'s Node version; consult package scripts, not root Makefile assumptions about the frontend.
 - Preserve the existing Python/accelerator environment and `uv.lock`. Fresh test setup: `uv sync --locked --extra test`; do not routinely replace accelerator backends.
 - Root Python checks: `uv tool run ruff@0.11.2 check <paths>` and `uv tool run ruff@0.11.2 format --check <paths>`. Use 120-column formatting, absolute imports, and configured vendored-code exclusions.
 - Focused tests: `uv run --no-sync pytest <test-paths>`; full CI: `uv run --no-sync pytest -n logical`. Hardware/quiet-machine timing tests use `-m slow` on development machines; excluded by default and CI. See `tests/AGENTS.md` for isolation rules.

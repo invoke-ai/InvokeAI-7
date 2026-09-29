@@ -1,6 +1,8 @@
 # Legacy frontend
 
-Change legacy UI only when explicitly requested or required for shared compatibility. Ordinary frontend work belongs in `../webv2/`; read its guidance.
+Change legacy UI only when explicitly requested or required for shared compatibility. Ordinary frontend work belongs in `../web/`; read its guidance.
+
+Serve this frontend with `--web-legacy`. The default frontend lives in `../web/`.
 
 This package owns `openapi.json`, generated `src/services/api/schema.ts`, and generation tooling, including for backend contracts consumed by webv2.
 

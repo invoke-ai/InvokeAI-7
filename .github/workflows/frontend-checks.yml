@@ -45,7 +45,7 @@ jobs:
     timeout-minutes: 10 # expected run time: <2 min
     defaults:
       run:
-        working-directory: invokeai/frontend/web
+        working-directory: invokeai/frontend/web-legacy
     steps:
       - uses: actions/checkout@v6
 
@@ -62,12 +62,15 @@ jobs:
           files_yaml: |
             frontend:
               - '.github/workflows/frontend-checks.yml'
+              - '.nvmrc'
               - '.github/actions/install-frontend-deps/**'
-              - 'invokeai/frontend/web/**'
+              - 'invokeai/frontend/web-legacy/**'
 
       - name: install dependencies
         if: ${{ steps.changed-files.outputs.frontend_any_changed == 'true' || inputs.always_run == true }}
         uses: ./.github/actions/install-frontend-deps
+        with:
+          working-directory: invokeai/frontend/web-legacy
 
       - name: tsc
         if: ${{ steps.changed-files.outputs.frontend_any_changed == 'true' || inputs.always_run == true }}
@@ -99,11 +102,11 @@ jobs:
     timeout-minutes: 10 # expected run time: <2 min
     defaults:
       run:
-        working-directory: invokeai/frontend/webv2
+        working-directory: invokeai/frontend/web
     steps:
       - uses: actions/checkout@v6
 
-      - name: check for changed webv2 files
+      - name: check for changed frontend files
         if: ${{ inputs.always_run != true }}
         id: changed-files
         uses: tj-actions/changed-files@9426d40962ed5378910ee2e21d5f8c6fcbf2dd96
@@ -111,14 +114,15 @@ jobs:
           files_yaml: |
             webv2:
               - '.github/workflows/frontend-checks.yml'
+              - '.nvmrc'
               - '.github/actions/install-frontend-deps/**'
-              - 'invokeai/frontend/webv2/**'
+              - 'invokeai/frontend/web/**'
 
       - name: install dependencies
         if: ${{ steps.changed-files.outputs.webv2_any_changed == 'true' || inputs.always_run == true }}
         uses: ./.github/actions/install-frontend-deps
         with:
-          working-directory: invokeai/frontend/webv2
+          working-directory: invokeai/frontend/web
 
       - name: lint
         if: ${{ steps.changed-files.outputs.webv2_any_changed == 'true' || inputs.always_run == true }}

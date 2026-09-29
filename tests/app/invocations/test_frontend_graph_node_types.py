@@ -29,7 +29,7 @@ from invokeai.app.invocations.baseinvocation import BaseInvocation, InvocationRe
 from invokeai.app.services.shared.graph import *  # noqa: F401 F403 -- imports all invocations, populating the registry
 from invokeai.app.services.shared.graph import are_connection_types_compatible
 
-_WEBV2 = Path(__file__).parents[3] / "invokeai" / "frontend" / "webv2" / "src" / "features"
+_WEBV2 = Path(__file__).parents[3] / "invokeai" / "frontend" / "web" / "src" / "features"
 
 CONTRACT_PATHS = {
     "generate": _WEBV2 / "generation" / "core" / "__snapshots__" / "generateGraphNodeTypes.json",

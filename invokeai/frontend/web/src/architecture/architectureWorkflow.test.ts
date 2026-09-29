@@ -29,9 +29,9 @@ describe('architecture workflow', () => {
     const workflow = Object.values(workflows)[0] ?? '';
 
     expect(workflow).toContain('name: webv2-architecture-review');
-    expect(workflow).toContain('invokeai/frontend/webv2/artifacts/architecture');
-    expect(workflow).toContain('invokeai/frontend/webv2/artifacts/architecture-performance');
-    expect(workflow).toContain('invokeai/frontend/webv2/artifacts/accessibility');
+    expect(workflow).toContain('invokeai/frontend/web/artifacts/architecture');
+    expect(workflow).toContain('invokeai/frontend/web/artifacts/architecture-performance');
+    expect(workflow).toContain('invokeai/frontend/web/artifacts/accessibility');
     expect(workflow).toContain('if: ${{ always()');
 
     const jobs = parse(workflow).jobs;
@@ -40,5 +40,32 @@ describe('architecture workflow', () => {
     );
     expect(completion.run).toBe('pnpm check:release');
     expect(completion.env.WEBV2_PERF_REFERENCE_DIR).toContain('steps.perf-ref.outputs.cache-matched-key');
+  });
+
+  it('runs every frontend-dependent gate when the shared Node version changes', () => {
+    const sources = import.meta.glob(
+      [
+        '../../../../../.github/workflows/{frontend-checks,frontend-tests,openapi-checks,typegen-checks}.yml',
+        '../../../../../.github/actions/install-frontend-deps/action.yml',
+      ],
+      { eager: true, import: 'default', query: '?raw' }
+    ) as Record<string, string>;
+    const action = parse(Object.entries(sources).find(([path]) => path.endsWith('/action.yml'))![1]);
+    const nodeVersionFile = action.runs.steps.find((step: { uses?: string }) =>
+      step.uses?.startsWith('actions/setup-node@')
+    ).with['node-version-file'];
+    const workflows = Object.entries(sources).filter(([path]) => path.includes('/workflows/'));
+    expect(workflows).toHaveLength(4);
+    for (const [path, source] of workflows) {
+      const jobs = parse(source).jobs as Record<string, { steps: { uses?: string; with?: { files_yaml?: string } }[] }>;
+      for (const job of Object.values(jobs)) {
+        if (!job.steps.some((step) => step.uses === './.github/actions/install-frontend-deps')) {
+          continue;
+        }
+        const filter = job.steps.find((step) => step.with?.files_yaml)?.with?.files_yaml ?? '';
+        const patterns = Object.values(parse(filter) as Record<string, string[]>).flat();
+        expect(patterns, path).toContain(nodeVersionFile);
+      }
+    }
   });
 });

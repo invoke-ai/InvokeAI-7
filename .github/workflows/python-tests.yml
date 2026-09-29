@@ -110,25 +110,25 @@ jobs:
               - 'uv.lock'
               - '.github/workflows/python-tests.yml'
               - 'invokeai/**'
+              - '!invokeai/frontend/web-legacy/**'
               - '!invokeai/frontend/web/**'
-              - '!invokeai/frontend/webv2/**'
               # Re-includes must follow the exclusions above.
               # test_imports.py walks every package, including the frontend ones.
+              - 'invokeai/frontend/web-legacy/**/*.py'
               - 'invokeai/frontend/web/**/*.py'
-              - 'invokeai/frontend/webv2/**/*.py'
               # test_workflow_graph_builder.py validates these editor fixtures against the backend.
-              - 'invokeai/frontend/webv2/src/features/workflow/core/fixtures/**'
+              - 'invokeai/frontend/web/src/features/workflow/core/fixtures/**'
               # Cross-stack generation contracts: the frontend writes these, Python validates them
               # against the invocation and architecture registries. A frontend-only change that
               # regenerates one would otherwise pass vitest while skipping the backend half.
               # `__fixtures__/` does not exist yet -- it arrives with the graph-builder fixtures.
               # A pattern matching nothing costs nothing here, and listing it now means the branch
               # that adds the directory does not also have to remember to add this line.
-              - 'invokeai/frontend/webv2/src/features/generation/core/__snapshots__/**'
-              - 'invokeai/frontend/webv2/src/features/generation/core/__fixtures__/**'
-              - 'invokeai/frontend/webv2/src/features/video/core/__snapshots__/**'
+              - 'invokeai/frontend/web/src/features/generation/core/__snapshots__/**'
+              - 'invokeai/frontend/web/src/features/generation/core/__fixtures__/**'
+              - 'invokeai/frontend/web/src/features/video/core/__snapshots__/**'
               # test_ideogram4_frontend_bounds.py reads the Ideogram 4 control bounds from here.
-              - 'invokeai/frontend/webv2/src/features/generation/core/settings.ts'
+              - 'invokeai/frontend/web/src/features/generation/core/settings.ts'
               - 'tests/**'
               # tests/ covers a few of these (e.g. test_check_pins.py, test_docs_json_export.py)
               - 'scripts/**'

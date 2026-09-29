@@ -10,6 +10,7 @@ python:
 - changed-files:
   - all-globs-to-any-file: 
     - 'invokeai/**'
+    - '!invokeai/frontend/web-legacy/**'
     - '!invokeai/frontend/web/**'
 
 python-tests:
@@ -56,4 +57,6 @@ frontend-deps:
 
 frontend:
 - changed-files:
-  - any-glob-to-any-file: 'invokeai/frontend/web/**'
+  - any-glob-to-any-file:
+    - 'invokeai/frontend/web/**'
+    - 'invokeai/frontend/web-legacy/**'
