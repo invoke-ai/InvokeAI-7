@@ -27,11 +27,12 @@ def pool_environment(monkeypatch):
         session=SimpleNamespace(prepared_source_mapping={}, results={}),
     )
     invocation = SimpleNamespace(id="dispatch")
+    persistence_order: list[str] = []
     services = SimpleNamespace(
         session_queue=SimpleNamespace(
-            complete_queue_item=Mock(),
+            complete_queue_item=Mock(side_effect=lambda *_args, **_kwargs: persistence_order.append("complete")),
             fail_queue_item=Mock(),
-            save_queue_item_session=Mock(),
+            save_queue_item_session=Mock(side_effect=lambda *_args, **_kwargs: persistence_order.append("persist")),
         ),
         logger=SimpleNamespace(info=Mock(), warning=Mock(), error=Mock(), debug=Mock()),
     )
@@ -77,6 +78,7 @@ def pool_environment(monkeypatch):
         client=client,
         importer=importer,
         local_status=local_status,
+        persistence_order=persistence_order,
         queue_item=queue_item,
         services=services,
         settings=settings,
@@ -90,7 +92,10 @@ def test_success_imports_then_deletes_exact_remote_queue_item(pool_environment):
     env.importer.assert_called_once()
     env.client.delete_queue_item.assert_called_once_with(42, "default")
     env.services.session_queue.complete_queue_item.assert_called_once_with(321)
-    env.services.session_queue.save_queue_item_session.assert_called_once_with(321, env.queue_item.session)
+    assert env.services.session_queue.save_queue_item_session.call_count == 2
+    assert env.services.session_queue.save_queue_item_session.call_args_list[0].args == (321, env.queue_item.session)
+    assert env.services.session_queue.save_queue_item_session.call_args_list[1].args == (321, env.queue_item.session)
+    assert env.persistence_order == ["persist", "complete", "persist"]
 
 
 def test_result_history_persistence_failure_does_not_uncomplete_remote_item(pool_environment):
@@ -100,11 +105,12 @@ def test_result_history_persistence_failure_does_not_uncomplete_remote_item(pool
     assert env.run() == "completed"
 
     env.services.session_queue.complete_queue_item.assert_called_once_with(321)
-    env.services.logger.warning.assert_called_once()
-    assert "history write failed" in env.services.logger.warning.call_args.args[0]
+    assert env.services.session_queue.save_queue_item_session.call_count == 2
+    assert env.services.logger.warning.call_count == 2
+    assert all("history write failed" in call.args[0] for call in env.services.logger.warning.call_args_list)
 
 
-def test_emit_result_records_history_output_without_polluting_real_source_mapping():
+def test_emit_result_persists_remote_output_under_real_source_id():
     queue_session = SimpleNamespace(prepared_source_mapping={}, results={})
     event_session = SimpleNamespace(prepared_source_mapping={}, results={})
     queue_item = SimpleNamespace(session=queue_session)
@@ -116,13 +122,75 @@ def test_emit_result_records_history_output_without_polluting_real_source_mappin
     output = object()
     services = SimpleNamespace(events=SimpleNamespace(emit_invocation_started=Mock(), emit_invocation_complete=Mock()))
 
-    worker_pool._emit_result(services, queue_item, event_item, invocation, output)
+    worker_pool._emit_result(
+        services,
+        queue_item,
+        event_item,
+        invocation,
+        source_id="canvas_output",
+        output=output,
+    )
 
-    synthetic_id = next(iter(queue_session.results))
-    assert queue_session.results[synthetic_id] is output
-    assert synthetic_id not in queue_session.prepared_source_mapping
-    assert event_session.results[synthetic_id] is output
-    assert event_session.prepared_source_mapping[synthetic_id] == "dispatch"
+    assert queue_session.results == {"canvas_output": output}
+    assert queue_session.prepared_source_mapping == {}
+
+    event_id = next(iter(event_session.results))
+    assert event_session.results[event_id] is output
+    assert event_session.prepared_source_mapping[event_id] == "canvas_output"
+
+
+def test_emit_result_keeps_multiple_outputs_without_fake_prepared_nodes():
+    first = object()
+    second = object()
+    queue_session = SimpleNamespace(prepared_source_mapping={}, results={})
+    event_session = SimpleNamespace(prepared_source_mapping={}, results={})
+    queue_item = SimpleNamespace(session=queue_session)
+    event_item = SimpleNamespace(session=event_session)
+    invocation = Mock()
+    invocation.id = "dispatch"
+    invocation.model_copy.side_effect = lambda **kwargs: SimpleNamespace(id=kwargs["update"]["id"])
+    services = SimpleNamespace(events=SimpleNamespace(emit_invocation_started=Mock(), emit_invocation_complete=Mock()))
+
+    worker_pool._emit_result(
+        services,
+        queue_item,
+        event_item,
+        invocation,
+        source_id="canvas_output",
+        output=first,
+    )
+    worker_pool._emit_result(
+        services,
+        queue_item,
+        event_item,
+        invocation,
+        source_id="canvas_output",
+        output=second,
+    )
+
+    assert queue_session.results["canvas_output"] is second
+    assert first in queue_session.results.values()
+    assert queue_session.prepared_source_mapping == {}
+
+
+def test_remote_media_source_ids_follow_remote_prepared_source_mapping():
+    image_sources, video_sources = worker_pool._remote_media_source_ids(
+        {
+            "session": {
+                "prepared_source_mapping": {
+                    "image-exec": "canvas_output",
+                    "video-exec": "video_output",
+                },
+                "results": {
+                    "image-exec": {"image": {"image_name": "remote.png"}},
+                    "video-exec": {"video": {"video_name": "remote.mp4"}},
+                },
+            }
+        }
+    )
+
+    assert image_sources == {"remote.png": "canvas_output"}
+    assert video_sources == {"remote.mp4": "video_output"}
 
 
 def test_completed_remote_job_cleans_transferred_inputs(pool_environment, monkeypatch):

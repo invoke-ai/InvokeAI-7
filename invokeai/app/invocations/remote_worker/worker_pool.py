@@ -421,26 +421,49 @@ def _emit_result(
     queue_item: Any,
     event_item: Any,
     invocation: Any,
+    source_id: str,
     output: Any,
 ) -> None:
     synthetic_id = str(uuid.uuid4())
     synthetic = invocation.model_copy(update={"id": synthetic_id})
+    source_id = str(source_id or invocation.id)
 
-    queue_item.session.results[synthetic_id] = output
-    event_item.session.prepared_source_mapping[synthetic_id] = str(invocation.id)
+    # Persist remote results under the REAL source node id. Do not add the
+    # synthetic event id to prepared_source_mapping: GraphExecutionState requires
+    # every key in that mapping to exist in execution_graph.
+    #
+    # If the same source produces more than one imported output, keep the prior
+    # value under an unmapped synthetic result key and leave the newest/final
+    # output at source_id. Unfiltered history still retains both, while consumers
+    # filtering for canvas_output/video_output naturally get the final result.
+    previous = queue_item.session.results.get(source_id)
+    if previous is not None:
+        queue_item.session.results[synthetic_id] = previous
+    queue_item.session.results[source_id] = output
+
+    # event_item is an ephemeral deep copy used only for live events. Mapping the
+    # synthetic event invocation here preserves live source routing without ever
+    # persisting a fake execution node.
+    event_item.session.prepared_source_mapping[synthetic_id] = source_id
     event_item.session.results[synthetic_id] = output
 
     services.events.emit_invocation_started(queue_item=event_item, invocation=synthetic)
     services.events.emit_invocation_complete(queue_item=event_item, invocation=synthetic, output=output)
 
 
-def _persist_remote_results_after_completion(services: Any, queue_item: Any, worker: WorkerSpec) -> None:
+def _persist_remote_results(
+    services: Any,
+    queue_item: Any,
+    worker: WorkerSpec,
+    *,
+    phase: str,
+) -> None:
     try:
         services.session_queue.save_queue_item_session(int(queue_item.item_id), queue_item.session)
     except Exception as exc:
         services.logger.warning(
             f"Remote Workers [{worker.name}]: completed item {queue_item.item_id}, "
-            f"but could not persist imported result history: {exc}"
+            f"but could not persist imported result history {phase}: {exc}"
         )
 
 
@@ -649,6 +672,60 @@ def _dispatch_remote(
     return client, int(remote_item_id), board_id, uploaded_image_names, uploaded_video_names
 
 
+def _remote_media_source_ids(completed_item: dict[str, Any]) -> tuple[dict[str, str], dict[str, str]]:
+    """Map worker media names back to their original graph source node ids."""
+    session = completed_item.get("session")
+    if not isinstance(session, dict):
+        return {}, {}
+
+    results = session.get("results")
+    if not isinstance(results, dict):
+        return {}, {}
+
+    raw_mapping = session.get("prepared_source_mapping")
+    prepared_source_mapping = raw_mapping if isinstance(raw_mapping, dict) else {}
+    image_sources: dict[str, str] = {}
+    video_sources: dict[str, str] = {}
+
+    for result_id, result in results.items():
+        if not isinstance(result, dict):
+            continue
+
+        result_key = str(result_id)
+        mapped = prepared_source_mapping.get(result_key)
+        source_id = str(mapped) if isinstance(mapped, str) and mapped else result_key
+
+        image = result.get("image")
+        if isinstance(image, dict):
+            image_name = image.get("image_name")
+            if isinstance(image_name, str) and image_name:
+                image_sources[image_name] = source_id
+
+        images = result.get("images")
+        if isinstance(images, list):
+            for entry in images:
+                if not isinstance(entry, dict):
+                    continue
+                image_name = entry.get("image_name")
+                if isinstance(image_name, str) and image_name:
+                    image_sources[image_name] = source_id
+
+        video_candidates: list[Any] = [result.get("video")]
+        videos = result.get("videos")
+        if isinstance(videos, list):
+            video_candidates.extend(videos)
+        video_candidates.append(result)
+
+        for entry in video_candidates:
+            if not isinstance(entry, dict):
+                continue
+            video_name = entry.get("video_name")
+            if isinstance(video_name, str) and video_name:
+                video_sources[video_name] = source_id
+
+    return image_sources, video_sources
+
+
 def _import_completed(
     services: Any,
     queue_item: Any,
@@ -664,6 +741,7 @@ def _import_completed(
         save_local_video,
     )
 
+    image_source_ids, video_source_ids = _remote_media_source_ids(completed_item)
     all_images = client.extract_image_names(
         completed_item,
         non_intermediate_only=False,
@@ -697,6 +775,7 @@ def _import_completed(
                 metadata=image_metadata,
                 board_id=board_id,
                 result_destination=settings.result_destination,
+                source_node_id=image_source_ids.get(remote_name),
             )
         )
 
@@ -712,6 +791,7 @@ def _import_completed(
                 metadata=video_metadata,
                 board_id=board_id,
                 result_destination=settings.result_destination,
+                source_node_id=video_source_ids.get(remote_name),
             )
         )
 
@@ -857,9 +937,23 @@ def _run_remote_job(
                 )
 
             for dto in image_dtos:
-                _emit_result(services, queue_item, event_item, invocation, ImageOutput.build(dto))
+                _emit_result(
+                    services,
+                    queue_item,
+                    event_item,
+                    invocation,
+                    source_id=str(getattr(dto, "node_id", None) or invocation.id),
+                    output=ImageOutput.build(dto),
+                )
             for dto in video_dtos:
-                _emit_result(services, queue_item, event_item, invocation, VideoOutput.build(dto))
+                _emit_result(
+                    services,
+                    queue_item,
+                    event_item,
+                    invocation,
+                    source_id=str(getattr(dto, "node_id", None) or invocation.id),
+                    output=VideoOutput.build(dto),
+                )
 
             _emit_progress(
                 services,
@@ -879,8 +973,12 @@ def _run_remote_job(
                 )
 
             if complete_local and _status(services, int(queue_item.item_id)) == "in_progress":
+                # Persist before the terminal event: the frontend immediately fetches this
+                # queue row on completion and filters results by prepared_source_mapping.
+                _persist_remote_results(services, queue_item, worker, phase="before completion")
                 services.session_queue.complete_queue_item(int(queue_item.item_id))
-                _persist_remote_results_after_completion(services, queue_item, worker)
+                # Keep the previous post-completion write as a best-effort safeguard.
+                _persist_remote_results(services, queue_item, worker, phase="after completion")
 
             return "completed"
 

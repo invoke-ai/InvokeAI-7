@@ -62,6 +62,7 @@ def save_local_image(
     metadata: str | None,
     board_id: str,
     result_destination: str,
+    source_node_id: str | None = None,
 ) -> Any:
     user_id = getattr(queue_item, "user_id", None)
     target_board_id = (board_id.strip() or None) if result_destination == "gallery" else None
@@ -81,7 +82,7 @@ def save_local_image(
         workflow=workflow_json,
         graph=graph_json,
         session_id=getattr(queue_item, "session_id", None),
-        node_id=getattr(invocation, "id", None),
+        node_id=source_node_id or getattr(invocation, "id", None),
         user_id=user_id,
     )
 
@@ -95,6 +96,7 @@ def save_local_video(
     metadata: str | None,
     board_id: str,
     result_destination: str,
+    source_node_id: str | None = None,
 ) -> Any:
     """Stage one MP4 alongside outputs/videos; the native service moves it into storage."""
     user_id = getattr(queue_item, "user_id", None)
@@ -132,7 +134,7 @@ def save_local_video(
             workflow=workflow_json,
             graph=graph_json,
             session_id=getattr(queue_item, "session_id", None),
-            node_id=getattr(invocation, "id", None),
+            node_id=source_node_id or getattr(invocation, "id", None),
             user_id=user_id,
         )
     finally:
@@ -157,18 +159,14 @@ def cleanup_remote_media(
             client.delete_image(remote_name)
             deleted_images += 1
         except Exception as exc:
-            services.logger.warning(
-                f"Remote Workers: {reason}; remote image cleanup failed for {remote_name}: {exc}"
-            )
+            services.logger.warning(f"Remote Workers: {reason}; remote image cleanup failed for {remote_name}: {exc}")
 
     for remote_name in video_names:
         try:
             client.delete_video(remote_name)
             deleted_videos += 1
         except Exception as exc:
-            services.logger.warning(
-                f"Remote Workers: {reason}; remote video cleanup failed for {remote_name}: {exc}"
-            )
+            services.logger.warning(f"Remote Workers: {reason}; remote video cleanup failed for {remote_name}: {exc}")
 
     services.logger.info(
         f"Remote Workers: remote cleanup deleted {deleted_images}/{len(image_names)} image(s), "

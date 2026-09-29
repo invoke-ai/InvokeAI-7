@@ -219,6 +219,44 @@ def test_remote_metadata_client_preserves_json_objects_and_null():
     assert client._request_json_value.call_args_list[1].args == ("GET", "/api/v1/videos/i/x%20y.mp4/metadata")
 
 
+def test_remote_source_node_id_is_preserved_on_local_image_record(environment):
+    services, client, queue_item, invocation, *_ = environment
+    client.extract_image_names.return_value = ["remote.png"]
+    client.extract_video_names.return_value = []
+    client.filter_gallery_image_names.return_value = ["remote.png"]
+    client.filter_gallery_video_names.return_value = []
+    services.images.create.return_value = SimpleNamespace(image_name="primary.png")
+
+    settings = worker_pool.PoolSettings(
+        mode="Distributed",
+        workers=(),
+        result_destination="gallery",
+        local_gallery_board_id="",
+        keep_remote_copies=True,
+        auto_transfer_missing_models=False,
+        model_transfer_host="",
+        model_transfer_timeout_seconds=7200,
+        poll_interval_seconds=0.75,
+        timeout_seconds=14400,
+    )
+    worker_pool._import_completed(
+        services,
+        queue_item,
+        invocation,
+        settings,
+        client,
+        {
+            "session": {
+                "prepared_source_mapping": {"image-exec": "canvas_output"},
+                "results": {"image-exec": {"image": {"image_name": "remote.png"}}},
+            }
+        },
+        "",
+    )
+
+    assert services.images.create.call_args.kwargs["node_id"] == "canvas_output"
+
+
 def test_remote_image_and_video_metadata_reaches_local_services(environment):
     import json
 
