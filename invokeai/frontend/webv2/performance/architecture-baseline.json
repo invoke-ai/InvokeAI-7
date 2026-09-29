@@ -2,15 +2,15 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 898194,
+        "brotliBytes": 893888,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 897080,
+        "gzipBytes": 893144,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2135014,
-        "largestAssetRawBytes": 778953,
+        "initialRawBytes": 2119771,
+        "largestAssetRawBytes": 749035,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 91542,
+        "ownedRawBytes": 93037,
         "requestCount": 36,
         "scriptRequestCount": 20,
         "sourceOwners": [
@@ -250,6 +250,11 @@
           "source:src/platform/ui/hints/hintsContext.tsx",
           "source:src/platform/ui/hints/index.ts",
           "source:src/platform/ui/index.ts",
+          "source:src/platform/ui/list/ListDivider.tsx",
+          "source:src/platform/ui/list/ListItem.tsx",
+          "source:src/platform/ui/list/ListSectionHeader.tsx",
+          "source:src/platform/ui/list/ListStack.tsx",
+          "source:src/platform/ui/list/listLayout.ts",
           "source:src/platform/ui/settings/contracts.ts",
           "source:src/platform/ui/theme/applyTheme.ts",
           "source:src/platform/ui/theme/recipes.ts",
@@ -315,10 +320,11 @@
           "source:src/workbench/projects/session.ts",
           "source:src/workbench/projects/syncStore.ts",
           "source:src/workbench/projects/useProjectFileActions.ts",
-          "source:src/workbench/settings/SettingsButton.tsx",
           "source:src/workbench/settings/SettingsDialogHost.tsx",
           "source:src/workbench/settings/dialogResource.ts",
+          "source:src/workbench/settings/launchpad.tsx",
           "source:src/workbench/settings/settingsDialogStore.ts",
+          "source:src/workbench/settings/settingsSearchShortcut.ts",
           "source:src/workbench/settings/store.ts"
         ]
       },
@@ -328,17 +334,17 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1250886,
+        "brotliBytes": 1246113,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1244426,
+        "gzipBytes": 1240880,
         "imageRawBytes": 156376,
-        "initialRawBytes": 3221841,
-        "largestAssetRawBytes": 778953,
+        "initialRawBytes": 3215988,
+        "largestAssetRawBytes": 749035,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 144662,
-        "requestCount": 85,
-        "scriptRequestCount": 69,
+        "ownedRawBytes": 144054,
+        "requestCount": 73,
+        "scriptRequestCount": 57,
         "sourceOwners": [
           "package:@ark-ui/react",
           "package:@chakra-ui/react",
@@ -505,6 +511,7 @@
           "source:src/features/gallery/ui/GalleryDragCursor.tsx",
           "source:src/features/gallery/ui/GalleryItemSearch.tsx",
           "source:src/features/gallery/ui/GallerySearchField.tsx",
+          "source:src/features/gallery/ui/GallerySearchHelp.tsx",
           "source:src/features/gallery/ui/GalleryTileFrame.tsx",
           "source:src/features/gallery/ui/GalleryUiContext.tsx",
           "source:src/features/gallery/ui/GalleryUploadButton.tsx",
@@ -747,6 +754,7 @@
           "source:src/platform/ui/Popover.tsx",
           "source:src/platform/ui/RenameDialog.tsx",
           "source:src/platform/ui/ResizableTextarea.tsx",
+          "source:src/platform/ui/ResizeHandle.tsx",
           "source:src/platform/ui/RetryBoundary.tsx",
           "source:src/platform/ui/Row.tsx",
           "source:src/platform/ui/Scrollable.tsx",
@@ -769,6 +777,11 @@
           "source:src/platform/ui/hints/hintsContext.tsx",
           "source:src/platform/ui/hints/index.ts",
           "source:src/platform/ui/index.ts",
+          "source:src/platform/ui/list/ListDivider.tsx",
+          "source:src/platform/ui/list/ListItem.tsx",
+          "source:src/platform/ui/list/ListSectionHeader.tsx",
+          "source:src/platform/ui/list/ListStack.tsx",
+          "source:src/platform/ui/list/listLayout.ts",
           "source:src/platform/ui/settings/contracts.ts",
           "source:src/platform/ui/theme/applyTheme.ts",
           "source:src/platform/ui/theme/recipes.ts",
@@ -941,14 +954,15 @@
           "source:src/workbench/queue-integration/queueRunRestoration.ts",
           "source:src/workbench/queue-integration/useActiveQueueProgress.ts",
           "source:src/workbench/queue-integration/useQueueRecoveryProjectIds.ts",
-          "source:src/workbench/settings/SettingsButton.tsx",
           "source:src/workbench/settings/SettingsDialogHost.tsx",
           "source:src/workbench/settings/WidgetSettingsButton.tsx",
           "source:src/workbench/settings/applicationContributions.ts",
           "source:src/workbench/settings/catalog.ts",
           "source:src/workbench/settings/clearWorkspaceData.ts",
           "source:src/workbench/settings/dialogResource.ts",
+          "source:src/workbench/settings/launchpad.tsx",
           "source:src/workbench/settings/settingsDialogStore.ts",
+          "source:src/workbench/settings/settingsSearchShortcut.ts",
           "source:src/workbench/settings/store.ts",
           "source:src/workbench/shell/BottomPanel.tsx",
           "source:src/workbench/shell/CenterArea.tsx",
@@ -1058,7 +1072,7 @@
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-27",
+  "capturedAt": "2026-09-29",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",
@@ -1104,7 +1118,9 @@
       "src/features/queue/ui/launchpad/QueueStatusBand.tsx",
       "src/workbench/launchpad/home/livePanels.ts"
     ],
-    "editorForbiddenInitialChunkNames": ["ag-psd"],
+    "editorForbiddenInitialChunkNames": [
+      "ag-psd"
+    ],
     "inactiveWidgetGateOwner": "deepen-widget-registry-loading"
   }
 }
