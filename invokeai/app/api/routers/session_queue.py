@@ -62,7 +62,8 @@ def _image_record_exists(image_name: str) -> bool:
 
 
 def _video_record_exists(video_name: str) -> bool:
-    # Video records lack exists(); get() supplies the same existence check.
+    # video_records has no exists() the way image_records does, and widening that ABC would add
+    # divergence from upstream for no gain here — get() already answers the question.
     try:
         ApiDependencies.invoker.services.video_records.get(video_name)
     except VideoRecordNotFoundException:
@@ -643,8 +644,11 @@ def clear(
     """Clears the queue. Admin users clear (and cancel) all items; non-admin users clear only their
     own items — other users' queued and running items are untouched."""
     try:
-        # The service cancels every in-progress item within the caller's scope;
-        # a non-admin's clear must never depend on another user's current item.
+        # The service cancels every in-progress item in scope itself (there can be several
+        # with multiple workers), so there is no per-item authorization to do here: a
+        # non-admin's scope is exactly their own items. The previous single get_current()
+        # check both 403'd users whose arbitrary selected row belonged to someone else and
+        # let a scoped clear interrupt another user's running generation.
         user_id = None if current_user.is_admin else current_user.user_id
         return ApiDependencies.invoker.services.session_queue.clear(queue_id, user_id=user_id)
     except HTTPException:
