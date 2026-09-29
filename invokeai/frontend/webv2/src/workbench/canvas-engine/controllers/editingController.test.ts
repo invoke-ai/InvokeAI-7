@@ -108,8 +108,7 @@ describe('EditingController', () => {
       transform: createTransformOptions(),
     });
 
-    // The exposed selection records history over the created state; the
-    // float and a document swap reach the state itself.
+    // The exposed selection records history; floats and document swaps access the underlying state.
     controller.selection.clear();
     expect(selection.clear).toHaveBeenCalledTimes(1);
     controller.discardSelection();

@@ -11,11 +11,7 @@ interface GenerateToggleSwitchProps {
   onCheckedChange: (checked: boolean) => void;
 }
 
-/**
- * The one switch used across the Generate panel. Always owns its hidden-input
- * ids: sibling switches inside a shared Field.Root would otherwise receive the
- * same control id and a label click would toggle the wrong one.
- */
+/** Sibling switches sharing a Field need unique hidden-input IDs. */
 export const GenerateToggleSwitch = ({
   checked,
   disabled = false,

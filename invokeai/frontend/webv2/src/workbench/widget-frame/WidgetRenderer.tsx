@@ -16,7 +16,7 @@ import { Scrollable } from '@platform/ui/Scrollable';
 import { WidgetOverlayOwnerContext } from '@platform/ui/widgetOverlays';
 import { WidgetSettingsButton } from '@workbench/settings/WidgetSettingsButton';
 import { areWidgetPlacementProjectsEqual, getWidgetPlacementProject } from '@workbench/widgetPlacementMeta';
-import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
+import { useActiveProjectId, useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { useWorkbenchWidgetRegistry } from '@workbench/WorkbenchWidgetRegistryContext';
 import { memo, Suspense, use, useMemo } from 'react';
 
@@ -47,11 +47,8 @@ type WidgetChromeSlotName = 'actions' | 'label' | 'viewActions';
 interface WidgetChromeSlotByIdProps {
   instanceId: string;
   /**
-   * The region the hoisted chrome acts for; the center region, which hoists
-   * its chrome for every widget it shows, is the default. It becomes the
-   * runtime's region, which is what `closeWidgetInstance` and
-   * `revealWidgetInstance` act on — a caller hoisting chrome for some other
-   * region must say so, or those act on the center's placement instead.
+   * Specify the runtime region for hoisted chrome outside center so close/reveal commands target the correct
+   * placement.
    */
   region?: WorkbenchRegion;
   slot: WidgetChromeSlotName;
@@ -68,14 +65,8 @@ export const WidgetRendererById = ({ instanceId, widget, ...props }: WidgetRende
 };
 
 /**
- * Renders one chrome slot of a widget outside its own frame. The center region
- * floats its chrome over the work surface and a floating window owns its title
- * bar, so their label and action slots are mounted by `CenterArea` and
- * `FloatingWidgetWindow` rather than by the widget's frame — this resolves the
- * same implementation and runtime the view would get.
- *
- * Suspends on first load of the implementation chunk; callers wrap it in their
- * own `Suspense` so the rest of the chrome paints immediately.
+ * Resolve widget chrome with the view's implementation/runtime for center and floating hosts. Callers supply
+ * Suspense so other chrome paints during chunk loading.
  */
 export const WidgetChromeSlotById = ({ instanceId, region = 'center', slot, widget }: WidgetChromeSlotByIdProps) => {
   const selection = useActiveProjectSelector(
@@ -132,15 +123,12 @@ const WidgetChromeSlot = ({
     return null;
   }
 
-  // A widget-supplied label only replaces the standard title, which the center
-  // view selector already shows — a renamed instance keeps the selector's text.
+  // Custom labels replace only standard titles; renamed instances retain selector text.
   if (slot === 'label') {
     return HeaderLabel && !instanceMeta.title ? <HeaderLabel region={region} /> : null;
   }
 
-  // The window chrome around a floating widget already carries the frame's own
-  // controls (shade, maximize, dock). Preferences remain available beside the
-  // widget's own actions without duplicating those layout controls.
+  // Keep preferences beside floating widget actions without duplicating the window's layout controls.
   if (slot === 'viewActions') {
     return (
       <>
@@ -170,6 +158,7 @@ const WidgetChromeSlot = ({
 };
 
 export const WidgetRenderer = ({ instance, presentation, region, widget }: WidgetRendererProps) => {
+  const projectId = useActiveProjectId();
   const loadingFallback = useMemo(
     () => <WidgetLoadingFallback instance={instance} presentation={presentation} region={region} widget={widget} />,
     [instance, presentation, region, widget]
@@ -188,6 +177,7 @@ export const WidgetRenderer = ({ instance, presentation, region, widget }: Widge
     <WidgetFailureBoundary
       instance={instance}
       presentation={presentation}
+      projectId={projectId}
       region={region}
       resetKey={instance.id}
       widget={widget}
@@ -302,8 +292,6 @@ const WidgetShellFrame = ({
     );
   }
 
-  // The center region floats its chrome over the work surface, so the widget's
-  // header slots are mounted by `CenterArea` and the body runs full-bleed here.
   return (
     <Flex
       bg="bg.inset"
@@ -408,13 +396,8 @@ const HeaderSlot = memo(function HeaderSlot({
   );
 }, areSlotPropsEqual);
 
-// Grid content with minH="full" stretches fill-height widget views (gallery,
-// layers, preview) to the viewport while letting flowing views grow and scroll.
-// The explicit minmax(0, 1fr) column is load-bearing: an implicit auto track
-// sizes to its item's max-content, so any long unbreakable text or wide row
-// inside a widget (prompt strings, UUIDs, button groups) silently stretches
-// the widget past its panel and clips. Panels only ever scroll vertically.
-// Covered by PanelBodySlot.browser.test.tsx.
+// Stretch fill-height views while allowing flowing content to scroll vertically. minmax(0,1fr) prevents long
+// content from widening and clipping panels.
 const panelBodyContentProps = {
   display: 'grid',
   gridTemplateColumns: 'minmax(0, 1fr)',

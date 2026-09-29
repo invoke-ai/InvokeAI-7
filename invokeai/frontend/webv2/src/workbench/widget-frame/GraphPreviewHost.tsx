@@ -10,10 +10,7 @@ import { useTranslation } from 'react-i18next';
 
 import { buildGraphPreviewSource } from './graphPreviewSource';
 
-/**
- * Mounted only while the preview dialog is open (it subscribes to the whole
- * active project so the compiled graph tracks every settings edit live).
- */
+/** Subscribe to the whole project only while the preview is open so graph compilation follows settings edits. */
 export const GraphPreviewHost = ({
   isOpen,
   surface,

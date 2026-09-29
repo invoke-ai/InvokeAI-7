@@ -5,13 +5,7 @@ import { adjustPromptAttention } from '@features/generation/core/prompt/attentio
 export const PROMPT_ATTENTION_TARGET_ATTR = 'data-prompt-attention-target';
 export const PROMPT_ATTENTION_TARGET_PROPS = { [PROMPT_ATTENTION_TARGET_ATTR]: 'true' } as const;
 
-/**
- * `readOnly` is part of the test, not an afterthought. Writing here goes through
- * the native value setter and a synthetic `input` event, which React accepts on
- * a read-only textarea — so in template view mode the hotkeys wrote the *merged*
- * text back as the authored prompt, and the next submit merged it again.
- * Clicking the box leaves view mode, but tabbing into it does not.
- */
+/** Guard readOnly explicitly: native setters and synthetic input bypass it and could merge templates twice. */
 const isPromptAttentionTarget = (element: Element | null): element is HTMLTextAreaElement =>
   element instanceof HTMLTextAreaElement &&
   element.getAttribute(PROMPT_ATTENTION_TARGET_ATTR) === 'true' &&

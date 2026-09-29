@@ -66,6 +66,11 @@ class BoardRecordStorageBase(ABC):
         pass
 
     @abstractmethod
+    def get_shared_user_ids(self, board_id: str) -> list[str]:
+        """Gets the ids of the users a board has been explicitly shared with."""
+        pass
+
+    @abstractmethod
     def get_many(
         self,
         user_id: str,

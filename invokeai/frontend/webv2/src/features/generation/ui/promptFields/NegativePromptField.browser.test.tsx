@@ -85,9 +85,7 @@ describe('the negative prompt in template view mode', () => {
     expect(textarea.value).toBe('lowres, blurry');
   });
 
-  // Most templates carry no negative side at all. Treating that empty string as
-  // something to view made this field read-only for no reason, showing the
-  // authored text with the merge's trailing space hanging off the end of it.
+  // Empty negative templates remain editable.
   it('stays editable when the template has none', async () => {
     const textarea = await render('');
 

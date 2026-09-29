@@ -190,9 +190,7 @@ describe('ImageMapVocabularySettings', () => {
   });
 
   it('explains that the rebuild is queued behind image indexing', async () => {
-    // The rebuild runs on the index worker only once it has no images left to
-    // embed, so during a backfill the spinner can stand for as long as the
-    // backfill does. Without the counts it reads as a hang.
+    // Show indexing counts because vocabulary rebuild waits behind the entire image backfill.
     mocks.indexCounts = { embedded: 1204, failed: 0, pending: 16846, total: 18050 };
     await render({ state: 'building', terms: ['zebra'] });
 

@@ -1,11 +1,6 @@
 /**
- * DOM-free pan/zoom state transitions shared by every workbench viewport.
- *
- * Coordinate convention: `screen = zoom * content + pan`. Callers provide
- * their own zoom constraint because canvas, preview, and comparison viewports
- * have different limits. Constraints are applied before anchor translation is
- * calculated, so reaching a zoom limit is an exact no-op instead of becoming
- * an accidental pan.
+ * Shared DOM-free transitions use screen = zoom * content + pan. Clamp zoom before anchor translation so hitting a
+ * limit does not pan.
  */
 
 /** Wheel exponential zoom sensitivity: `zoom *= exp(-deltaY * step)`. */
@@ -78,15 +73,8 @@ export const panBy = (transform: PanZoomTransform, screenDelta: PanZoomPoint): P
 });
 
 /**
- * Applies a two-pointer pinch: zoom scales by how far the pointers have spread
- * since the gesture began, and the content point under the gesture's starting
- * midpoint is carried to the midpoint's current position — so the image tracks
- * the fingers rather than just growing around a fixed anchor.
- *
- * Every argument is measured against the transform the gesture *started* from,
- * so each move is one transition from that origin instead of a step on top of
- * the last one: clamping at a zoom limit never accumulates into drift, and
- * spreading past the limit still pans with the fingers.
+ * Measure every pinch move from the starting transform. Carry its anchored content point to the current midpoint,
+ * allowing pan at zoom limits without accumulated drift.
  */
 export const pinchZoomAtPoints = (
   start: PanZoomTransform,

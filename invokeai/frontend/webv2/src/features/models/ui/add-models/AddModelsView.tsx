@@ -1,8 +1,8 @@
 /* eslint-disable react-perf/jsx-no-jsx-as-prop, react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-object-as-prop */
-import type { StarterModel } from '@features/models/core/types';
+import type { ModelRecordChanges, StarterModel } from '@features/models/core/types';
 import type { ElementType } from 'react';
 
-import { Box, Checkbox, Flex, HStack, Icon, Input, InputGroup, Stack, Text } from '@chakra-ui/react';
+import { Box, Flex, HStack, Icon, Input, InputGroup, Spinner, Stack, Text } from '@chakra-ui/react';
 import { collectBases, collectTypes } from '@features/models/core/library';
 import {
   DEFAULT_STARTER_MODEL_FILTERS,
@@ -34,14 +34,15 @@ import {
 } from '@platform/state/accountLifecycle';
 import { getApiErrorMessage } from '@platform/transport/http';
 import { Button, Scrollable, Tooltip } from '@platform/ui';
-import { HuggingFaceIcon } from '@platform/ui/BrandIcon';
+import { HuggingFaceIcon } from '@platform/ui/VendoredIcon';
 import { DownloadIcon, FileIcon, FolderIcon, FolderSearchIcon, LinkIcon, SearchIcon } from 'lucide-react';
-import { useDeferredValue, useMemo, useState } from 'react';
+import { useDeferredValue, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { AccessTokenPopover } from './AccessTokenPopover';
 import { BundleChips } from './BundleChips';
 import { HuggingFaceFiles } from './HuggingFaceFiles';
+import { InstallOptions } from './InstallOptions';
 import { ScanResults } from './ScanResults';
 import { SelectedBundleBar } from './SelectedBundleBar';
 import { classifySource } from './sourceClassifier';
@@ -59,11 +60,11 @@ const SOURCE_KIND_ICONS: Record<string, ElementType> = {
 };
 
 /**
- * One box to add any model. The same field searches the curated starter
- * catalog and accepts a URL, local path, or HuggingFace repo to install
- * directly. Source-specific result panels live under `add-models/` so this file
- * stays focused on state and install orchestration.
+ * Sent only when ticked. Identification turns FP8 storage on for checkpoints that already store FP8 weights, and an
+ * explicit `false` would override that.
  */
+const FP8_STORAGE_INSTALL_CONFIG: ModelRecordChanges = { default_settings: { fp8_storage: true } };
+
 export const AddModelsView = () => {
   const { t } = useTranslation();
   const notify = useNotify();
@@ -83,15 +84,15 @@ export const AddModelsView = () => {
       left.selectedBundleName === right.selectedBundleName
   );
 
-  // Local state, so the box empties when the view unmounts (a tab switch) — but
-  // seeded once from whatever asked to search here on the way in. The read is
-  // pure, because StrictMode double-invokes this initializer; the consuming
-  // clear is the mount effect below.
+  // Read the one-shot seed purely for StrictMode initialization; consume it after mount and keep subsequent input
+  // state local.
   const [query, setQuery] = useState(getAddModelsSeed);
   const [accessToken, setAccessToken] = useState('');
   const [inplace, setInplace] = useState(true);
+  const [fp8Storage, setFp8Storage] = useState(false);
   const { isBusy: isPulling, run: runPull } = useScopedAction();
   const { isBusy: isScanning, run: runScan } = useScopedAction();
+  const scanAbortRef = useRef<AbortController | null>(null);
   const [installingBundle, setInstallingBundle] = useState<string | null>(null);
   const providerConfigs = useExternalProvidersSelector((snapshot) => snapshot.configs);
   const configuredExternalProviders = useMemo<ReadonlySet<string>>(
@@ -130,14 +131,12 @@ export const AddModelsView = () => {
 
   const trimmed = query.trim();
   const deferredTrimmed = useDeferredValue(trimmed);
-  // A pull/scan results panel is showing: focus on the results and hide the
-  // browse-only chrome (bundles, filter menu, starter catalog).
   const hasResults = hfLookup !== null || scan !== null;
   const kind = useMemo(() => classifySource(trimmed), [trimmed]);
   const searchIcon = (kind.labelKey ? SOURCE_KIND_ICONS[kind.labelKey] : undefined) ?? SearchIcon;
   const token = accessToken.trim() === '' ? undefined : accessToken.trim();
-  // The primary action depends on the detected input: folders are scanned for
-  // models; files, URLs, and HF repos are pulled. Access tokens only apply to URLs.
+  const installConfig = fp8Storage ? FP8_STORAGE_INSTALL_CONFIG : undefined;
+  // Folders scan; files, URLs, and repos install. Access tokens apply only to URLs.
   const canScan = kind.localKind === 'folder';
   const canPull = kind.isInstallable && !canScan;
 
@@ -202,9 +201,7 @@ export const AddModelsView = () => {
     }
   };
 
-  // Install-all from a results panel: silent per-model queueing with one
-  // summary toast, the same shape the bundle path uses — never a toast per
-  // file for a 40-file repo.
+  // Bulk installs queue silently and emit one summary notice rather than per-file toasts.
   const installAllSources = async (requests: InstallModelRequest[]) => {
     const owner = captureAccountScope();
     const queued = await installMany(requests);
@@ -228,7 +225,10 @@ export const AddModelsView = () => {
           if (lookup.is_diffusers) {
             updateModelsUi({ hfLookup: null });
 
-            if ((await install({ accessToken: token, source: trimmed })) && isAccountScopeCurrent(owner)) {
+            if (
+              (await install({ accessToken: token, config: installConfig, source: trimmed })) &&
+              isAccountScopeCurrent(owner)
+            ) {
               setQuery('');
             }
 
@@ -241,14 +241,16 @@ export const AddModelsView = () => {
             return;
           }
 
-          // A single-file repo has nothing to choose from — install it directly,
-          // mirroring the diffusers path, instead of showing a one-row list.
+          // Install single-file repositories directly because no selection is needed.
           const [onlyUrl] = lookup.urls;
 
           if (lookup.urls.length === 1 && onlyUrl) {
             updateModelsUi({ hfLookup: null });
 
-            if ((await install({ accessToken: token, source: onlyUrl })) && isAccountScopeCurrent(owner)) {
+            if (
+              (await install({ accessToken: token, config: installConfig, source: onlyUrl })) &&
+              isAccountScopeCurrent(owner)
+            ) {
               setQuery('');
             }
 
@@ -261,7 +263,12 @@ export const AddModelsView = () => {
         }
 
         if (
-          (await install({ accessToken: token, inplace: kind.looksLocal ? inplace : undefined, source: trimmed })) &&
+          (await install({
+            accessToken: token,
+            config: installConfig,
+            inplace: kind.looksLocal ? inplace : undefined,
+            source: trimmed,
+          })) &&
           isAccountScopeCurrent(owner)
         ) {
           setQuery('');
@@ -271,17 +278,37 @@ export const AddModelsView = () => {
     );
   };
 
+  // Stop aborts the request; the server watches for the disconnect and
+  // abandons its directory walk, so a wrong folder does not keep crawling.
   const handleScan = async () => {
+    // Enter in the field reaches here while the button reads Stop; a second
+    // scan must not replace the controller the running one is wired to.
+    if (scanAbortRef.current) {
+      return;
+    }
+
     await runScan(
       async (owner) => {
-        const results = await scanFolderForModels(trimmed, owner.signal);
+        const abort = new AbortController();
 
-        assertAccountScopeCurrent(owner);
-        updateModelsUi({ scan: { path: trimmed, results } });
+        scanAbortRef.current = abort;
+        try {
+          const results = await scanFolderForModels(trimmed, AbortSignal.any([owner.signal, abort.signal]));
+
+          assertAccountScopeCurrent(owner);
+          updateModelsUi({ scan: { path: trimmed, results } });
+        } finally {
+          scanAbortRef.current = null;
+        }
       },
-      (message) => notify.error(t('models.scanFailed'), message)
+      (message, error) => {
+        if (!(error instanceof DOMException && error.name === 'AbortError')) {
+          notify.error(t('models.scanFailed'), message);
+        }
+      }
     );
   };
+  const handleStopScan = () => scanAbortRef.current?.abort();
 
   return (
     <Flex direction="column" h="full" minH="0">
@@ -318,9 +345,14 @@ export const AddModelsView = () => {
             />
           ) : null}
 
-          {canScan ? (
+          {canScan && isScanning ? (
+            <Button size="sm" variant="outline" onClick={handleStopScan}>
+              <Spinner size="xs" />
+              {t('models.stopScan')}
+            </Button>
+          ) : canScan ? (
             <Tooltip content={t('models.scanFolderTooltip')}>
-              <Button loading={isScanning} size="sm" variant="solid" onClick={() => void handleScan()}>
+              <Button size="sm" variant="solid" onClick={() => void handleScan()}>
                 <Icon as={FolderSearchIcon} boxSize="3.5" />
                 {t('models.scan')}
               </Button>
@@ -354,17 +386,13 @@ export const AddModelsView = () => {
                 {t('models.toInstallFrom', { source: t(kind.labelKey) })}
               </Text>
             )}
-            {kind.localKind === 'file' ? (
-              <Checkbox.Root
-                checked={inplace}
-                colorPalette="accent"
-                size="xs"
-                onCheckedChange={(event) => setInplace(event.checked === true)}
-              >
-                <Checkbox.HiddenInput />
-                <Checkbox.Control />
-                <Checkbox.Label fontSize="2xs">{t('models.installInPlace')}</Checkbox.Label>
-              </Checkbox.Root>
+            {canPull ? (
+              <InstallOptions
+                fp8Storage={fp8Storage}
+                inplace={kind.localKind === 'file' ? inplace : undefined}
+                onSetFp8Storage={setFp8Storage}
+                onSetInplace={setInplace}
+              />
             ) : null}
           </HStack>
         ) : null}
@@ -404,24 +432,32 @@ export const AddModelsView = () => {
           <Stack gap="3">
             {hfLookup ? (
               <HuggingFaceFiles
+                fp8Storage={fp8Storage}
                 lookup={hfLookup}
                 pendingSources={pendingSources}
                 onClear={() => updateModelsUi({ hfLookup: null })}
-                onInstall={(url) => void install({ accessToken: token, source: url })}
+                onInstall={(url) => void install({ accessToken: token, config: installConfig, source: url })}
                 onInstallAll={(urls) =>
-                  void installAllSources(urls.map((url) => ({ accessToken: token, source: url })))
+                  void installAllSources(
+                    urls.map((url) => ({ accessToken: token, config: installConfig, source: url }))
+                  )
                 }
+                onSetFp8Storage={setFp8Storage}
               />
             ) : null}
 
             {scan ? (
               <ScanResults
+                fp8Storage={fp8Storage}
                 inplace={inplace}
                 pendingSources={pendingSources}
                 scan={scan}
                 onClear={() => updateModelsUi({ scan: null })}
-                onInstall={(path) => void install({ inplace, source: path })}
-                onInstallAll={(paths) => void installAllSources(paths.map((path) => ({ inplace, source: path })))}
+                onInstall={(path) => void install({ config: installConfig, inplace, source: path })}
+                onInstallAll={(paths) =>
+                  void installAllSources(paths.map((path) => ({ config: installConfig, inplace, source: path })))
+                }
+                onSetFp8Storage={setFp8Storage}
                 onSetInplace={setInplace}
               />
             ) : null}

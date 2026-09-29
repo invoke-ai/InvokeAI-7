@@ -30,16 +30,8 @@ import {
 } from '@features/workflow/utility';
 
 /**
- * Adapters between the project graph document and xyflow's node/edge state.
- * The document is the source of truth; xyflow state is rebuilt from it on
- * every document change, carrying over transient view state (selection).
- *
- * Rebuilds preserve object identity for unchanged nodes/edges so memoized
- * node components skip re-rendering (see React Flow's performance guidance) —
- * the document reducer already keeps untouched node identities stable.
- * Derived per-node facts the node components need (incoming connections,
- * Linear-UI exposure) are precomputed into `data` here, so node components
- * never subscribe to workbench state.
+ * Rebuild from document truth while preserving unchanged identities and selection. Precompute connection/exposure
+ * facts so nodes need no workbench subscriptions.
  */
 
 export type InvocationFlowNode = FlowNode<
@@ -94,6 +86,41 @@ const createInvocationNodeTemplateView = (template: InvocationTemplate): Invocat
   outputTemplates: Object.values(template.outputs),
   template,
 });
+
+const dynamicTemplateViewCache = new WeakMap<
+  InvocationTemplate,
+  WeakMap<NonNullable<WorkflowInvocationNode['data']['dynamicInputTemplates']>, InvocationNodeTemplateView>
+>();
+
+const getInvocationNodeTemplateView = (
+  template: InvocationNodeTemplateView,
+  dynamicInputTemplates: WorkflowInvocationNode['data']['dynamicInputTemplates']
+): InvocationNodeTemplateView => {
+  if (!dynamicInputTemplates || Object.keys(dynamicInputTemplates).length === 0) {
+    return template;
+  }
+
+  let cached = dynamicTemplateViewCache.get(template.template);
+
+  if (!cached) {
+    cached = new WeakMap();
+    dynamicTemplateViewCache.set(template.template, cached);
+  }
+
+  const existing = cached.get(dynamicInputTemplates);
+
+  if (existing) {
+    return existing;
+  }
+
+  const view = createInvocationNodeTemplateView({
+    ...template.template,
+    inputs: { ...template.template.inputs, ...dynamicInputTemplates },
+  });
+  cached.set(dynamicInputTemplates, view);
+
+  return view;
+};
 
 const templateViewCache = new WeakMap<InvocationTemplates, Map<string, InvocationNodeTemplateView>>();
 
@@ -191,7 +218,10 @@ export const toFlowNodes = (
       const connectedSourceHandles = connectedSourcesByNode.get(documentNode.id) ?? EMPTY_NAMES;
       const connectedTargetHandles = connectedByNode.get(documentNode.id) ?? EMPTY_NAMES;
       const exposedFieldNames = exposedByNode.get(documentNode.id) ?? EMPTY_NAMES;
-      const template = templateViews.get(documentNode.data.type) ?? null;
+      const baseTemplate = templateViews.get(documentNode.data.type);
+      const template = baseTemplate
+        ? getInvocationNodeTemplateView(baseTemplate, documentNode.data.dynamicInputTemplates)
+        : null;
 
       if (
         previous?.type === 'invocation' &&
@@ -419,7 +449,6 @@ export const toFlowEdges = (
     const animated = isConnectedToSelectedNode && !reduceMotion ? true : undefined;
     const className = isConnectedToSelectedNode ? SELECTED_NODE_EDGE_CLASS : undefined;
     const style = isConnectedToSelectedNode ? SELECTED_NODE_EDGE_STYLE : undefined;
-    const zIndex = isConnectedToSelectedNode ? 1000 : undefined;
 
     if (
       previous &&
@@ -431,8 +460,7 @@ export const toFlowEdges = (
       previous.animated === animated &&
       previous.className === className &&
       isSameEdgeData(previous.data, data) &&
-      previous.style === style &&
-      previous.zIndex === zIndex
+      previous.style === style
     ) {
       return previous;
     }
@@ -449,7 +477,6 @@ export const toFlowEdges = (
       target: edge.target,
       targetHandle: edge.targetHandle,
       type: flowType,
-      zIndex,
     };
   });
 };

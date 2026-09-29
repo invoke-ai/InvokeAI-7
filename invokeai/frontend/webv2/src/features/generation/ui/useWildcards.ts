@@ -20,13 +20,7 @@ export interface WildcardWrite {
   id?: string;
 }
 
-/**
- * A run of writes that stopped part-way, carrying how many had landed.
- *
- * The count is the point: the ones already written are real, and a caller that
- * reports only "it failed" sends the user back for a second run that then
- * clashes with everything the first one made.
- */
+/** Report completed writes on partial success so retries do not duplicate them. */
 export class WildcardWriteError extends Error {
   constructor(
     readonly done: number,
@@ -45,38 +39,22 @@ export interface WildcardCatalog {
   create: (wildcard: { name: string; values: string[] }) => Promise<void>;
   update: (id: string, changes: { name?: string; values?: string[] }) => Promise<void>;
   remove: (id: string) => Promise<void>;
-  /**
-   * A run of writes with a single invalidation at the end.
-   *
-   * Resolves with how many landed, and rethrows whatever stopped it — the caller
-   * needs both to say "stopped after 6 of 40". Ordinary edits go through the
-   * single-write methods above; this exists for import, where doing it one call
-   * at a time meant re-fetching the whole catalog, plus every dynamic-prompt
-   * expansion, between each write and the next.
-   */
+  /** Invalidate once after the batch; failures include the completed-write count. */
   applyWrites: (writes: readonly WildcardWrite[], owner: AccountScope) => Promise<number>;
 }
 
-/**
- * The shared wildcard catalog. Every mutation invalidates the dynamic prompts
- * cache too, because editing a wildcard changes what an unchanged prompt expands
- * to and that cache never goes stale on its own.
- */
+/** Wildcard edits invalidate otherwise permanent expansion entries. */
 export const useWildcards = (): WildcardCatalog => {
   const queryClient = useQueryClient();
   const query = useQuery(wildcardsQueryOptions());
   const wildcards = useMemo(() => query.data ?? [], [query.data]);
-  // Only a wildcard with values resolves; the backend omits empty ones from its
-  // manager, so an empty one must read as unknown here too.
+  // The backend omits empty wildcards, so they must remain unknown.
   const knownNames = useMemo(
     () => new Set(wildcards.filter((wildcard) => wildcard.values.length > 0).map((wildcard) => wildcard.name)),
     [wildcards]
   );
 
-  // Each mutation captures the identity that started it, so a sign-out mid-flight
-  // does not invalidate the next account's caches on the way back. Stated once,
-  // as `usePromptTemplates` does — three copies of it was three chances for the
-  // next mutation added here to forget a step.
+  // Capture identity separately for every mutation.
   const runAndInvalidate = useCallback(
     async (run: () => Promise<unknown>): Promise<void> => {
       const owner = captureAccountScope();
@@ -122,10 +100,7 @@ export const useWildcards = (): WildcardCatalog => {
         failure = caught;
       }
 
-      // Whatever landed before the failure is real, so the caches are stale
-      // either way — invalidate on the strength of that rather than on the run
-      // having finished. The scope check stays where it is for every other
-      // mutation: a sign-out mid-run must not drop the next account's caches.
+      // Invalidate after partial success, fenced to the originating account.
       if (done > 0) {
         assertAccountScopeCurrent(owner);
         await invalidateWildcardDependents(queryClient);

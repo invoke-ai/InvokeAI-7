@@ -10,12 +10,8 @@ import { createExternalStore } from '@platform/state/externalStore';
 import { apiFetchJson, getApiErrorMessage } from '@platform/transport/http';
 
 /**
- * The accelerators available for generation, and which of them the server is configured to
- * use. Pull-based like `modelCacheStore`: there are no socket events for app config.
- *
- * `generation_devices` is server-wide app config (admin-only, `PATCH
- * /api/v1/app/runtime_config`) and only takes effect after a restart, so this is
- * deliberately not treated as live state — nothing here re-reads on a timer.
+ * Read available accelerators and server-wide generation_devices without polling; configuration takes effect only
+ * after restart and has no socket updates.
  */
 
 /** `auto` uses every available accelerator; an explicit list pins generation to those devices. */
@@ -64,11 +60,8 @@ const readGenerationDevices = (response: RuntimeConfigResponse | null): Generati
   response?.config?.generation_devices ?? null;
 
 /**
- * Load the device options and the current setting together.
- *
- * The options endpoint is available to any authenticated user, but the runtime
- * config is admin-only. A non-admin therefore gets the options and a null setting
- * rather than an error, which is what the read-only view wants.
+ * Non-admins can read device options but not runtime config; return a null setting without failing the read-only
+ * view.
  */
 export const refreshGenerationDevices = (): Promise<void> => {
   if (inflight) {
@@ -118,12 +111,7 @@ export const refreshGenerationDevices = (): Promise<void> => {
   return inflight;
 };
 
-/**
- * Persist a new `generation_devices` setting. Admin-only; takes effect on restart.
- *
- * The backend validates that every device actually exists on the machine and 422s
- * otherwise, so a stale options list cannot write a config that fails at startup.
- */
+/** Admin changes take effect on restart; backend device validation rejects stale or nonexistent selections. */
 export const updateGenerationDevices = async (setting: GenerationDevicesSetting): Promise<void> => {
   const owner = captureAccountScope();
 

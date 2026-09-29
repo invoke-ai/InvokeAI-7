@@ -55,15 +55,12 @@ export interface CreateFontRuntimeOptions {
 }
 
 const downloadDefaultFont = async (reference: FontDownloadReference, signal?: AbortSignal): Promise<Uint8Array> => {
-  // Keep the authenticated route shell and editor boot free of catalog/query
-  // code. The transport is only needed after a custom face is requested.
+  // Load catalog transport only when a custom face is requested.
   const { downloadFont } = await import('./data/api');
   return downloadFont(reference, signal);
 };
 
 const getDefaultFont = async (id: string, signal?: AbortSignal): Promise<FontRecord> => {
-  // Metadata validation is an output boundary too, but catalog code should
-  // stay out of the authenticated shell until a face is actually used.
   const { getFont } = await import('./data/api');
   return getFont(id, signal);
 };
@@ -238,12 +235,8 @@ const fontFaceDescriptors = (face: FontRecord, reference: FontDownloadReference)
   const axes = new Set(face.axes.map((axis) => axis.tag));
   const requestedAxes = reference.axes ?? {};
 
-  // The download endpoint returns a pinned static instance when coordinates are
-  // present. Its CSS descriptor must describe that instance, otherwise a
-  // requested wght=900 face is registered as the metadata's default 400 face
-  // and the browser may synthesize another bold pass over the already-bold
-  // outline. Static files (and requests without the corresponding axis) keep
-  // their catalog descriptor so CSS bold synthesis remains available.
+  // Pinned axes must set the CSS descriptor to avoid synthesizing bold over an already-bold instance. Otherwise
+  // retain catalog descriptors for browser synthesis.
   if (axes.has('wght') && Number.isFinite(requestedAxes.wght)) {
     weight = requestedAxes.wght!;
   }
@@ -264,12 +257,8 @@ const createSnapshot = (generation: number, states: ReadonlyMap<string, FontLoad
   Object.freeze({ generation, states });
 
 /**
- * Creates a session-owned browser font registry. Every request is keyed by the
- * persisted resource identity and normalized variation coordinates, so two
- * consumers cannot race to register the same bytes under different names.
- * Requested CSS style and weight stay outside the key: they describe how a
- * consumer uses a static face, while the face's catalog metadata owns the
- * registration descriptor and the browser performs any requested synthesis.
+ * Registration identity includes resource and normalized axes, but excludes requested CSS style/weight: catalog
+ * descriptors own static-face synthesis.
  */
 export const createFontRuntime = (options: CreateFontRuntimeOptions = {}): FontRuntime => {
   const runtimeId = nextRuntimeId++;
@@ -422,10 +411,7 @@ export const createFontRuntime = (options: CreateFontRuntimeOptions = {}): FontR
       }
       released = true;
       request.consumers.delete(token);
-      // The shared request belongs to the loader/runtime, while each caller
-      // owns only its consumer. Abort the transport only after every caller
-      // has gone away; this keeps one canceled raster job from canceling a
-      // still-live text editor or another layer using the same instance.
+      // Abort shared transport only after its last consumer releases it.
       if (request.consumers.size === 0 && inflight.get(request.key) === request) {
         request.requestController.abort(createAbortError());
       }

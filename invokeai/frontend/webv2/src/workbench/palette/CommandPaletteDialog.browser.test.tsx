@@ -248,12 +248,8 @@ describe('CommandPaletteDialog interaction', () => {
     const { input } = await renderPalette({ entries: [], providers: [provider] });
 
     await act(() => userEvent.fill(input, 'zz'));
-    // Let the root search reject first, so the scope is entered from the settled
-    // state rather than from the window before the debounce fires. Tab only
-    // enters a scope when a scope row is highlighted, and the rejected root
-    // search puts its own navigable "Retry entities search" row ahead of the
-    // trailing scope rows — so reach the scope row explicitly, as ArrowUp wraps
-    // to it either way.
+    // Wait for root rejection, then explicitly highlight the scope row; the retry row precedes scopes and Tab
+    // enters only the highlighted scope.
     await waitForDebounce();
     await act(() => userEvent.keyboard('{ArrowUp}'));
     await act(() => userEvent.keyboard('{Tab}'));

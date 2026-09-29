@@ -34,6 +34,7 @@ from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.backend.patches.layer_patcher import LayerPatcher, PatchSpec
 from invokeai.backend.patches.lora_conversions.anima_lora_constants import ANIMA_LORA_QWEN3_PREFIX
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
+from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes, requires_sidecar_patching
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import (
     AnimaConditioningInfo,
     ConditioningFieldData,
@@ -121,9 +122,17 @@ class AnimaTextEncoderInvocation(BaseInvocation):
         # --- Step 1: Encode with Qwen3 0.6B ---
         text_encoder_info = context.models.load(self.qwen3_encoder.text_encoder)
         tokenizer_info = context.models.load(self.qwen3_encoder.tokenizer)
+        text_encoder_format = context.models.get_config(self.qwen3_encoder.text_encoder).format
+        # An nvfp4 build dequantizes each packed Linear per forward, a transient its resident size does not
+        # cover. Read from the unlocked model, before the lock the reservation applies to; zero for other builds.
+        dequant_bytes = peak_dequant_transient_bytes(
+            text_encoder_info.model, TorchDevice.choose_anima_inference_dtype(text_encoder_info.compute_device)
+        )
 
         with ExitStack() as exit_stack:
-            (_, text_encoder) = exit_stack.enter_context(text_encoder_info.model_on_device())
+            (_, text_encoder) = exit_stack.enter_context(
+                text_encoder_info.model_on_device(working_mem_bytes=dequant_bytes)
+            )
             (_, tokenizer) = exit_stack.enter_context(tokenizer_info.model_on_device())
 
             # Use the encoder's intended compute device, not its current parameter residency: partial loading may
@@ -139,6 +148,9 @@ class AnimaTextEncoderInvocation(BaseInvocation):
                     patches=self._lora_iterator(context),
                     prefix=ANIMA_LORA_QWEN3_PREFIX,
                     dtype=lora_dtype,
+                    # Quantized weights (packed nvfp4 Linears, GGUF, SDNQ) cannot take a direct patch, so
+                    # their LoRAs ride as sidecars.
+                    force_sidecar_patching=requires_sidecar_patching(text_encoder, text_encoder_format),
                 )
             )
 

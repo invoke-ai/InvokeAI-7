@@ -54,9 +54,7 @@ void i18n.use(initReactI18next).init({
         },
         widgets: {
           generate: {
-            // Verbatim from `public/locales/en.json`: Ideogram 4's overrides really are labelled
-            // "Steps" and "Guidance", the same as the shared controls beside them. Inventing
-            // distinct names here would hide that from the one test that renders both at once.
+            // Retain duplicate labels in fixtures so tests expose real naming collisions.
             ideogram4ColorHelp: 'Comma-separated color terms folded into the caption.',
             ideogram4ColorPalette: 'Color palette',
             ideogram4GuidanceScale: 'Guidance',
@@ -80,12 +78,7 @@ void i18n.use(initReactI18next).init({
   },
 });
 
-/**
- * FLUX Fill's own recommendation is `guidance=30`, well past the guidance slider's practical top of
- * 10. That is the case the scrubber's looser `inputMax` exists for: without it the field
- * clamps to the slider's bound the first time it loses focus, and the model's own default is gone
- * before the user has touched anything.
- */
+/** FLUX Fill defaults to guidance 30, above its track ceiling of 10. */
 const fluxFillModel: MainModelConfig = {
   base: 'flux',
   default_settings: { cfg_scale: 1, guidance: 30 },
@@ -260,10 +253,7 @@ describe('GenerateRenderSection seed field', () => {
   });
 });
 
-/**
- * The shared steps and guidance controls are scrubbers, whose slider is named by `aria-labelledby`;
- * Ideogram 4's overrides are still sliders named by `aria-label`. One resolver reads both.
- */
+/** Resolve names through both aria-labelledby and aria-label. */
 const sliderName = (slider: Element): string | null => {
   const labelId = slider.getAttribute('aria-labelledby');
 
@@ -296,8 +286,7 @@ const pressOnSlider = (label: string, key: string) =>
   settle(() => guidanceSlider(label)?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key })));
 
 describe('GenerateRenderSection guidance field', () => {
-  // The guidance label and the model's stored guidance both come from the served table now,
-  // and the resolver returns nothing without it -- the field would render empty.
+  // Seed capabilities so policy resolution is nonempty.
   seedArchitectureCapabilities();
 
   it('does not clamp a model default above the slider track when the editor closes', async () => {
@@ -307,26 +296,21 @@ describe('GenerateRenderSection guidance field', () => {
 
     await openAndBlurEditor();
 
-    // The commit is the observable, not the shown value: the field is controlled, so the value
-    // prop puts 30 back either way and only the caller sees the clamp. Dropping inputMax makes
-    // this a commit of 10, which is then the value every subsequent graph is compiled with.
+    // Assert committed values; controlled props can hide unintended clamping.
     expect(onCommit).not.toHaveBeenCalled();
   });
 
   it('still holds the guidance track itself to its practical range', async () => {
     const onCommit = await render(fluxFillModel);
 
-    // The track ends at 10 even while the value sits past it: End lands on the track's end, not
-    // on the input ceiling the model default needed.
+    // End targets the slider track, not the input ceiling.
     await pressOnSlider('Guidance', 'End');
 
     expect(onCommit).toHaveBeenCalledWith({ cfgScale: 10 });
   });
 
   it('clamps a typed guidance to the ceiling the architecture declares', async () => {
-    // The reported failure, from the other side: a project that stored FLUX Fill's 30 and then
-    // selected a FLUX.2 model. With a fixed input maximum of 100 the 30 persisted and was submitted
-    // to `flux2_denoise.guidance` (le=20), which rejects it at enqueue with nothing said in the UI.
+    // Exercise the FLUX Fill-to-FLUX.2 bound transition.
     const onCommit = await render(flux2Model, { cfgScale: 30 });
 
     await openAndBlurEditor();
@@ -335,8 +319,7 @@ describe('GenerateRenderSection guidance field', () => {
   });
 
   it('starts the guidance track at the floor the architecture declares', async () => {
-    // `ernie_image_denoise.guidance_scale` is ge=1: scrubbing to 0, or typing 0.5, used to persist
-    // and be forwarded unchanged by graph.ts.
+    // ERNIE guidance has a minimum of 1.
     const onCommit = await render(ernieModel, { cfgScale: 0.5 });
 
     await openAndBlurEditor('CFG');
@@ -351,18 +334,14 @@ describe('GenerateRenderSection guidance field', () => {
   });
 
   it('holds the Ideogram 4 overrides to their own node bounds', async () => {
-    // Not the shared control: `ideogram4_denoise` takes preset-derived optional overrides whose
-    // constraints sit on the numeric branch of an `anyOf` -- guidance ge=1/le=20, steps ge=2, mu
-    // ge=-4/le=4. The guidance control offered 0 and the mu control 0..10, both forwarded verbatim.
+    // Ideogram override bounds come from numeric anyOf branches.
     await render(ideogram4Model, { ideogram4GuidanceScale: 5, ideogram4Mu: 1, ideogram4Steps: 48 });
     const ranges = (label: string) =>
       slidersNamed(label).map((slider) => [slider.getAttribute('aria-valuemin'), slider.getAttribute('aria-valuemax')]);
 
-    // Two per name: the shared control first, then Ideogram's override. They carry the same
-    // accessible name in the product, which is its own (pre-existing) problem — asserting both
-    // ranges at once is what keeps this test honest about which is which.
+    // Address shared guidance before the override; both controls have the same accessible label.
     expect(ranges('Guidance')).toEqual([
-      ['0', '10'],
+      ['1', '10'],
       ['1', '20'],
     ]);
     expect(ranges('Steps')).toEqual([
@@ -373,9 +352,7 @@ describe('GenerateRenderSection guidance field', () => {
   });
 
   it('names the broken bound on the field, not only in the Invoke button tooltip', async () => {
-    // Model selection clamps, so this is what a recalled or previously persisted value looks like:
-    // the field shows 30, Invoke is disabled elsewhere, and without this the only explanation is a
-    // tooltip on a button in another panel.
+    // Show local errors for persisted/recalled values that bypass selection clamps.
     await render(flux2Model, { cfgScale: 30 });
 
     expect(host?.querySelector('[role="alert"]')?.textContent).toBe('Guidance must be at most 20 for FLUX.2 dev.');
@@ -390,8 +367,7 @@ describe('GenerateRenderSection guidance field', () => {
   });
 
   it('drops the model-default mark the guidance track cannot place', async () => {
-    // FLUX Fill's default of 30 has no position on a track that stops at 10. Steps keeps its own
-    // mark (30 of 100), so this is the out-of-range mark going, not marks in general.
+    // Exclude off-track default marks while retaining in-range marks.
     await render(fluxFillModel);
     const [stepsFrame, guidanceFrameElement] = [...(host?.querySelectorAll('[data-scope="scrubber"]') ?? [])];
 
@@ -401,9 +377,7 @@ describe('GenerateRenderSection guidance field', () => {
 });
 
 describe('GenerateRenderSection before the capability table arrives', () => {
-  // No `seedArchitectureCapabilities()` here on purpose. Generation is blocked outright without the
-  // table, so the fallback guidance range is deliberately the widest one: tightening it would clamp
-  // a stored value the user legitimately had while the capabilities are still in flight.
+  // Use wide fallback bounds while generation is gated to avoid premature destructive clamps.
   it('keeps the guidance field permissive rather than guessing a bound', async () => {
     const onCommit = await render(fluxFillModel, { cfgScale: 30 });
 

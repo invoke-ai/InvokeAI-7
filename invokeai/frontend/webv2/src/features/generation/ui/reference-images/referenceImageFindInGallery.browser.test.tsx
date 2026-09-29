@@ -10,12 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ReferenceImageCard } from './ReferenceImageCard';
 
-/**
- * A cropped reference image is TWO gallery records: the original the user
- * picked, and the intermediate upload the crop produced. The card shows the
- * crop, so the naive wiring sends the crop's name — and an intermediate is
- * never listed in the grid, leaving the badge silently inert.
- */
+/** Crop intermediates have separate identities and stay out of the gallery; retain the original for reveal. */
 const i18n = i18next.createInstance();
 await i18n.use(initReactI18next).init({
   fallbackLng: 'en',
@@ -77,8 +72,7 @@ const renderCard = async (referenceImage: GenerateReferenceImage) => {
   );
 };
 
-// Named after the media, not a bare "Find in Gallery": a stack of reference
-// cards otherwise renders N controls a screen reader cannot tell apart.
+// Use media-specific action names to distinguish repeated cards accessibly.
 const findButton = (): HTMLButtonElement | null =>
   document.querySelector<HTMLButtonElement>('button[aria-label="Find original.png in Gallery"]');
 
@@ -109,8 +103,7 @@ describe('reference image find-in-gallery badge', () => {
   it('stays available while the reference is toggled off', async () => {
     await renderCard({ ...CROPPED_REFERENCE, isEnabled: false });
 
-    // Crop and Use size are edits and go dead with the reference; locating its
-    // source changes nothing about the generation, so it must not.
+    // Locate stays enabled for disabled references because it does not edit generation.
     expect(findButton()?.disabled).toBe(false);
   });
 });

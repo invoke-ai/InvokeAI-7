@@ -438,6 +438,16 @@ const zWanReferenceImageConfig = z.object({
 });
 export type WanReferenceImageConfig = z.infer<typeof zWanReferenceImageConfig>;
 
+// Krea-2 transfers style training-free, by splicing the reference's attention keys/values into the
+// target's - no adapter model needed. styleStrength is the only knob surfaced here; the rest of the
+// tuning parameters live on the krea2_style_reference node and keep their defaults.
+const zKrea2ReferenceImageConfig = z.object({
+  type: z.literal('krea2_reference_image'),
+  image: zCroppableImageWithDims.nullable(),
+  styleStrength: z.number().gte(0).lte(2).default(1),
+});
+export type Krea2ReferenceImageConfig = z.infer<typeof zKrea2ReferenceImageConfig>;
+
 // MiniMax H3 first-frame conditioning uses the model's own VAE + vision
 // context - no separate adapter model needed. Consumed only in video output
 // mode (the first enabled ref image becomes the video's first frame).
@@ -465,6 +475,7 @@ export const zRefImageState = z.object({
     zQwenImageReferenceImageConfig,
     zWanReferenceImageConfig,
     zMiniMaxH3ReferenceImageConfig,
+    zKrea2ReferenceImageConfig,
   ]),
 });
 export type RefImageState = z.infer<typeof zRefImageState>;
@@ -488,6 +499,9 @@ export const isQwenImageReferenceImageConfig = (
 
 export const isWanReferenceImageConfig = (config: RefImageState['config']): config is WanReferenceImageConfig =>
   config.type === 'wan_reference_image';
+
+export const isKrea2ReferenceImageConfig = (config: RefImageState['config']): config is Krea2ReferenceImageConfig =>
+  config.type === 'krea2_reference_image';
 
 export const isMiniMaxH3ReferenceImageConfig = (
   config: RefImageState['config']

@@ -1,11 +1,3 @@
-/**
- * Labels for the accelerator a queue item ran on.
- *
- * With `generation_devices` (default `auto`) the backend runs one session per accelerator
- * concurrently, and tags each queue item and progress event with the device that
- * processed it. These helpers turn `"cuda:1"` into something a person can read.
- */
-
 /** One device the backend offers for generation, from `GET /api/v1/app/generation_device_options`. */
 export interface GenerationDeviceOption {
   /** Device identifier, e.g. `cuda:0`, `xpu:0`, `mps`, `cpu`. */
@@ -42,13 +34,8 @@ export const resolveRandDeviceMetadata = (useCpuNoise: boolean, options: readonl
 };
 
 /**
- * Map device id → display label, disambiguating identically-named accelerators with a
- * 1-based `#N` suffix. A uniquely-named device gets no suffix.
- *
- * The ordinal follows the order the options are given, and the backend returns
- * every installed indexed accelerator in backend order — not just the ones enabled in
- * `generation_devices`. That matters: numbering off a filtered list would renumber
- * the survivors when a device is disabled, so `cuda:2` would stop being `#3`.
+ * Disambiguate duplicate device names with backend-order 1-based suffixes across all installed accelerators,
+ * including disabled ones.
  */
 export const getDeviceNameLabels = (options: readonly GenerationDeviceOption[]): Record<string, string> => {
   const nameCounts = new Map<string, number>();
@@ -77,14 +64,7 @@ export interface DeviceLabel {
   name: string;
 }
 
-/**
- * Resolve a device string to the badge + tooltip pair, or null when there is
- * nothing worth showing.
- *
- * Null covers three cases: the device is not an indexed accelerator, only one accelerator exists (no
- * ambiguity to resolve, so a badge would be noise), or the device is absent from
- * the reported options.
- */
+/** Show badges only for reported indexed accelerators when multiple accelerators exist. */
 export const getDeviceLabel = (
   device: string | null | undefined,
   options: readonly GenerationDeviceOption[]

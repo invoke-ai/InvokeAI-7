@@ -9,7 +9,8 @@ import type {
 import type { WorkbenchAction } from '@workbench/workbenchState.testing';
 import type { WorkbenchWidgetCommands } from '@workbench/workbenchStore';
 
-import { clearProjectDiagnostics, configureDiagnostics, getProjectDiagnostics } from '@workbench/diagnostics/logger';
+import { DEFAULT_LOGGING_CONFIG } from '@platform/logging/contracts';
+import { configureLogging, getLogSnapshot, resetLogging } from '@platform/logging/logger';
 import { createExtensionRegistry } from '@workbench/extensions/extensionRegistry';
 import { createWidgetImplementationResource } from '@workbench/widgetImplementationResource';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -54,6 +55,7 @@ const createDispatch = () => {
 
   const widgets: WorkbenchWidgetCommands = {
     dockFloating: (instanceId) => dispatch({ instanceId, type: 'dockFloatingWidget' }),
+    closeFloating: (instanceId) => dispatch({ instanceId, type: 'closeFloatingWidget' }),
     float: (instanceId, region) =>
       dispatch(region ? { instanceId, region, type: 'floatWidget' } : { instanceId, type: 'floatWidget' }),
     focusFloating: (instanceId) => dispatch({ instanceId, type: 'focusFloatingWidget' }),
@@ -108,13 +110,8 @@ const createPlacementProject = (
 
 describe('createWidgetRuntime', () => {
   beforeEach(() => {
-    clearProjectDiagnostics('project-1');
-    configureDiagnostics({
-      enabled: true,
-      level: 'trace',
-      namespaces: ['workflows'],
-      performanceTimingsEnabled: false,
-    });
+    resetLogging();
+    configureLogging({ ...DEFAULT_LOGGING_CONFIG, level: 'trace', namespaces: ['workflows'] });
   });
 
   it('deep clones runtime state snapshots', () => {
@@ -169,17 +166,16 @@ describe('createWidgetRuntime', () => {
 
     runtime.diagnostics.logger('workflows').info('Widget rendered');
 
-    expect(getProjectDiagnostics('project-1')).toMatchObject([
+    expect(getLogSnapshot().entries).toMatchObject([
       {
         level: 'info',
         message: 'Widget rendered',
         namespace: 'workflows',
         source: {
-          instanceId: 'workflow:center',
-          kind: 'widget',
+          area: 'workflow',
+          namespace: 'workflows',
           projectId: 'project-1',
-          region: 'center',
-          typeId: 'workflow',
+          widget: { instanceId: 'workflow:center', region: 'center', typeId: 'workflow' },
         },
       },
     ]);

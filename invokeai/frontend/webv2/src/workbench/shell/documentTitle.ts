@@ -1,22 +1,9 @@
-/**
- * Generation progress in the browser tab, for the batch you walked away from.
- *
- * Batches run for minutes and people switch tabs while they do; every other
- * progress surface in the app is invisible the moment this document is not the
- * foreground one. Tab titles truncate hard and from the right, so the numbers
- * lead and the product name trails.
- */
+/** Lead tab titles with progress because background tabs hide other indicators and truncate labels from the right. */
 
 /** Mirrors the static `<title>` in index.html, which is what we restore to. */
 export const DOCUMENT_TITLE_BASE = 'Invoke V7 Workbench';
 
-/**
- * The trailing label while a batch runs, deliberately shorter than the idle
- * title. The idle title can afford to name the product precisely; a running one
- * is competing for the same few characters as the numbers, and those are the
- * part worth reading. Spending the width on "V7 Workbench" is what pushes the
- * percent out of a pinned or crowded tab.
- */
+/** Shorten the running title's product label to leave room for progress in crowded tabs. */
 export const DOCUMENT_TITLE_PRODUCT = 'Invoke';
 
 export interface DocumentTitleLabels {

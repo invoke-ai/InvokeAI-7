@@ -92,6 +92,28 @@ flux2_klein_9b_fp8 = StarterModel(
     dependencies=[flux2_vae, flux2_klein_qwen3_8b_encoder],
 )
 
+# A community repack rather than a BFL or Comfy-Org release -- neither publishes an int8 build of
+# FLUX.2. It is listed because it is the only FLUX.2 build whose download size is also its resident
+# size on every device: `Int8ConvrotLinear` keeps the stored codes and dequantizes per forward,
+# where the fp8 weights above expand to bf16 on load unless `fp8_compute` is available.
+#
+# Pinned to a commit rather than `main`, which for this entry is a correctness matter and not just
+# reproducibility: the decode is driven by the file's own `comfy_quant` marker, which today says
+# `int8_tensorwise` with no `convrot` flag. A reupload at the same path that added `"convrot": true`
+# -- or that was genuinely rotated -- would be derotated with a Hadamard that was never applied, and
+# the result loads cleanly, logs "kept 144 layer(s) in int8" and generates noise.
+flux2_klein_9b_int8 = StarterModel(
+    name="FLUX.2 Klein 9B (int8)",
+    base=BaseModelType.Flux2,
+    source="https://huggingface.co/Winnougan/Klein9b-Distilled-Base-INT8-Convrot/resolve/0373bf363446b8aa1e77245658dc2163875d7f08/flux-2-klein-9b-int8-convrot.safetensors",
+    description="FLUX.2 Klein 9B in ComfyUI int8_tensorwise, from a community repack (no first-party "
+    "int8 build of FLUX.2 exists). Unlike the FP8 build it stays at its download size in memory on "
+    "every supported GPU - 9.5GB rather than ~18GB - because the weights are dequantized per forward "
+    "instead of on load. Quality matches FP8 closely. Installs with VAE and Qwen3 8B encoder. ~9.5GB",
+    type=ModelType.Main,
+    dependencies=[flux2_vae, flux2_klein_qwen3_8b_encoder],
+)
+
 flux2_klein_4b_sdnq = StarterModel(
     name="FLUX.2 Klein 4B (SDNQ dynamic 4-bit)",
     base=BaseModelType.Flux2,

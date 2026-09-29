@@ -131,20 +131,8 @@ export const getGalleryDeletionSuccessor = (
 };
 
 /*
- * Reveal requests: an explicit "scroll this item into view" signal from
- * surfaces outside the grid (the image map's reveal). Deliberately NOT derived
- * from the selection, which also changes when a finished generation
- * auto-selects its image — scrolling on that yanked the grid out from under a
- * browsing user. A reveal is a deliberate gesture, so it gets its own channel,
- * and a token, so repeating the same gesture (re-clicking the same map point
- * after scrolling away) reveals again even though the selection is unchanged.
- *
- * Module-scoped rather than persisted: a reveal is an ephemeral intent for the
- * currently mounted grid, and persisting it would replay a stale scroll in the
- * next session. It lives here, beside the selection helpers it travels with,
- * rather than in a module of its own — a separate one becomes a separate chunk
- * and an extra request in the gallery widget's load, which the performance
- * budgets police.
+ * Explicit, tokenized reveals can repeat without selection changes. Keep them ephemeral to avoid replaying stale
+ * scrolls; colocating avoids another gallery chunk.
  */
 
 export interface GalleryRevealRequest {
@@ -176,18 +164,8 @@ export const subscribeGalleryRevealRequests = (listener: () => void): (() => voi
 };
 
 /*
- * Navigation ordering. A reveal resolves its item over the network before it
- * touches anything, so two gestures in flight can land out of order; the newer
- * one must win. The counter is module-scoped for the same reason the reveal
- * channel above is: the thing it guards — the gallery selection — is global, so
- * a per-mount ref leaves a hole whenever a caller unmounts with a hydrate in
- * flight (switching the right-panel tab away and back), where the abandoned
- * closure compares against its own dead ref, passes, and overwrites the newer
- * mount's selection. One counter spans every surface that navigates the grid.
- *
- * It lives here rather than beside the reveal that uses it because that module
- * is loaded on demand, and a caller which defers it still has to take its place
- * in the ordering at the moment of the press.
+ * Order navigation gestures across mounts and surfaces before async hydration; only the latest may update the
+ * shared selection.
  */
 
 let navigationSequence = 0;
@@ -197,3 +175,84 @@ export const claimGalleryNavigationSequence = (): number => ++navigationSequence
 
 /** False once a newer navigation has been claimed, which is when a slow hydrate must stand down. */
 export const isGalleryNavigationCurrent = (sequence: number): boolean => sequence === navigationSequence;
+
+/*
+ * Grid and Preview share section order; horizontal navigation crosses seams while vertical navigation preserves
+ * columns.
+ */
+
+export type GalleryNavigationEntry =
+  | { kind: 'item'; item: GalleryItem }
+  | { kind: 'session'; id: string; navigable: boolean };
+
+export type GalleryNavigationDirection = 'down' | 'left' | 'right' | 'up';
+
+export const getGallerySessionNavigationKey = (sessionId: string): string => `session:${sessionId}`;
+
+const getGalleryNavigationEntryKey = (entry: GalleryNavigationEntry): string =>
+  entry.kind === 'item' ? toGalleryItemKey(entry.item) : getGallerySessionNavigationKey(entry.id);
+
+const isNavigable = (entry: GalleryNavigationEntry | undefined): entry is GalleryNavigationEntry =>
+  entry !== undefined && (entry.kind === 'item' || entry.navigable);
+
+/**
+ * Each section starts its own rows. Vertical navigation preserves columns, selects the nearest navigable cell, and
+ * skips empty rows; no cursor starts at the first entry.
+ */
+export const getGalleryNavigationStep = (
+  sections: readonly (readonly GalleryNavigationEntry[])[],
+  cursorKey: string | null,
+  direction: GalleryNavigationDirection,
+  columnCount = 1
+): GalleryNavigationEntry | null => {
+  const entries = sections.flat();
+  const index =
+    cursorKey === null ? -1 : entries.findIndex((entry) => getGalleryNavigationEntryKey(entry) === cursorKey);
+
+  if (index === -1) {
+    return entries.find(isNavigable) ?? null;
+  }
+
+  if (direction === 'left' || direction === 'right') {
+    const step = direction === 'right' ? 1 : -1;
+
+    for (let candidate = index + step; candidate >= 0 && candidate < entries.length; candidate += step) {
+      if (isNavigable(entries[candidate])) {
+        return entries[candidate]!;
+      }
+    }
+
+    return null;
+  }
+
+  const rows: { length: number; start: number }[] = [];
+  let sectionStart = 0;
+
+  for (const section of sections) {
+    for (let offset = 0; offset < section.length; offset += columnCount) {
+      rows.push({ length: Math.min(columnCount, section.length - offset), start: sectionStart + offset });
+    }
+
+    sectionStart += section.length;
+  }
+
+  const rowIndex = rows.findIndex((row) => index >= row.start && index < row.start + row.length);
+  const column = index - rows[rowIndex]!.start;
+  const step = direction === 'down' ? 1 : -1;
+
+  for (let target = rowIndex + step; target >= 0 && target < rows.length; target += step) {
+    const row = rows[target]!;
+    const landing = Math.min(column, row.length - 1);
+
+    // Nearest navigable cell of the row by column distance, the left one on a tie.
+    for (let distance = 0; distance < row.length; distance += 1) {
+      for (const candidate of [landing - distance, landing + distance]) {
+        if (candidate >= 0 && candidate < row.length && isNavigable(entries[row.start + candidate])) {
+          return entries[row.start + candidate]!;
+        }
+      }
+    }
+  }
+
+  return null;
+};

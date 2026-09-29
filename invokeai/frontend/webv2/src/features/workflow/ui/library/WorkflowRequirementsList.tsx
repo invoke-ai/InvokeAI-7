@@ -21,12 +21,7 @@ import { CheckIcon, DownloadIcon, TriangleAlertIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * "Requires": one row per model a workflow needs, resolved against what is
- * installed, what the starter catalog can fetch, and what is already
- * downloading. The rows stay neutral — only the *installable* state earns the
- * amber download treatment, because it is the only one the user can act on.
- */
+/** Highlight installable requirements only; other missing states have no actionable download. */
 
 const SKELETON_ROW_COUNT = 2;
 const EMPTY_STARTERS: readonly StarterModel[] = [];
@@ -63,12 +58,7 @@ export interface ModelRequirementDeps {
   activeInstallSources: ReadonlySet<string>;
 }
 
-/**
- * The three inputs every requirement resolution needs, plus the one-time load
- * of the two catalogs behind them. Both the detail panel and the grid's
- * missing-model badges read them through here, so they always resolve against
- * the same data.
- */
+/** Share catalog loading and resolution inputs between details and grid badges. */
 export const useModelRequirementDeps = (): ModelRequirementDeps => {
   const installedModels = useModelsSelector(selectInstalledModels);
   const starterModels = useStartersSelector(selectStarterModels);
@@ -88,13 +78,8 @@ export const useModelRequirementDeps = (): ModelRequirementDeps => {
 type ReadyEnrichment = Extract<WorkflowLibraryEntryEnrichment, { status: 'ready' }>;
 
 /**
- * Resolution is keyed by the enrichment object because that is exactly what
- * changes when one workflow finishes parsing: the browse store publishes a new
- * `entries` array per *individual* completion, with four workers running, so a
- * page of 20 lands 20 arrays. Without this, every one of those would re-resolve
- * every row — quadratic, synchronously, in render. The deps the entry was
- * resolved under are stored alongside, so a model install or a starter-catalog
- * load invalidates the entry as it should.
+ * Cache by enrichment identity and catalog dependencies to avoid quadratic row resolution as individual entries
+ * finish parsing.
  */
 const resolutionCache = new WeakMap<
   ReadyEnrichment,
@@ -119,13 +104,7 @@ export const resolveEntryRequirements = (
   return resolved;
 };
 
-/**
- * How many models each card would have to *download* to run — the count the
- * grid badges and, on the selected card, exactly what the panel's Install
- * button offers to fetch. Requirements nothing in the catalog can satisfy are
- * deliberately excluded: an "Install 3 models" badge that installs 2 is worse
- * than a quiet card.
- */
+/** Count only models the install action can download so card badges agree with the offered operation. */
 export const useWorkflowLibraryMissingCounts = (
   entries: readonly WorkflowLibraryEntry[]
 ): ReadonlyMap<string, number> => {
@@ -167,8 +146,6 @@ const RequirementRow = ({
   const presentation = STATUS_PRESENTATION[resolved.status];
   const statusLabel = t(presentation.labelKey);
   const { label } = resolved.requirement;
-  // `null` for rows there is nothing to install (already installed, or nothing
-  // the query could name) — those stay plain text.
   const searchTerm = getAddModelsSearchTerm(resolved);
   const canFindModel = Boolean(onFindModel) && searchTerm !== null;
   const handleFindModel = useCallback(() => {
@@ -220,8 +197,6 @@ export interface WorkflowRequirementsListProps {
 export const WorkflowRequirementsList = ({ errorMessage, resolved, onFindModel }: WorkflowRequirementsListProps) => {
   const { t } = useTranslation();
 
-  // A readable workflow that needs no models says so by omission, not by an
-  // empty section header.
   if (!errorMessage && resolved?.length === 0) {
     return null;
   }

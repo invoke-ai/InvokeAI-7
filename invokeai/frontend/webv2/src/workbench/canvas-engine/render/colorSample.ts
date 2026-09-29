@@ -1,16 +1,6 @@
 /**
- * Samples the composited document color at a document-space point, for the
- * color-picker tool. Composites just the renderable layers (bottom → top,
- * respecting opacity/blend/transform, matching {@link compositeDocument}'s
- * paint order) into a 1×1 scratch surface translated so the sampled pixel
- * lands at its origin — cheap regardless of document size, since only one
- * destination pixel is ever rasterized.
- *
- * The document background (solid fill or checkerboard) and the staged
- * preview are intentionally excluded: a point with no layer coverage samples
- * as fully transparent (`null`), not the page chrome.
- *
- * Zero React, zero import-time side effects.
+ * Samples composited layer pixels into a translated 1x1 scratch using normal ordering and display effects.
+ * Excludes background/checkerboard and staged previews so uncovered points return null.
  */
 
 import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
@@ -30,11 +20,8 @@ export interface RgbaSample {
 }
 
 /**
- * Samples the composited document color at `docPoint` (document space;
- * fractional coordinates are floored to the covering pixel). The canvas plane
- * is unbounded, so transformed layer content outside the document dimensions
- * remains pickable. Returns `null` when no renderable layer covers the point
- * with non-zero alpha.
+ * Floors document coordinates to a pixel; transformed content remains pickable outside document dimensions.
+ * Returns null for zero-alpha coverage.
  */
 export const sampleDocumentColor = (
   doc: CanvasDocumentContractV3,
@@ -51,9 +38,8 @@ export const sampleDocumentColor = (
 
   const scratch = backend.createSurface(1, 1);
   const view: Mat2d = { a: 1, b: 0, c: 0, d: 1, e: -px, f: -py };
-  // Reuse the canonical compositor so sampling shares its layer ordering,
-  // cache-origin placement, transforms, blend modes, and display effects.
-  // Omitting a checkerboard tile and staged preview keeps empty space transparent.
+  // Use canonical compositing for placement and display effects, omitting checkerboard/staged previews to retain
+  // transparent empty space.
   compositeDocument(scratch, doc, layers, view, { backend, ...providers });
 
   const { data } = scratch.ctx.getImageData(0, 0, 1, 1);

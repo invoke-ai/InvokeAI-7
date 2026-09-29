@@ -16,20 +16,15 @@ import { WorkbenchWidgetRegistryProvider } from '@workbench/WorkbenchWidgetRegis
 import { useMemo } from 'react';
 
 import { BootWidgetHintController } from './BootWidgetHintController';
+import { GalleryRealtimeRuntime } from './GalleryRealtimeRuntime';
 import { GenerateWidgetSyncRuntime } from './GenerateWidgetSyncRuntime';
 import { QueueRuntimeAdapter } from './QueueRuntimeAdapter';
 import { RecallParametersRuntime } from './RecallParametersRuntime';
 import { WorkbenchUiPorts } from './workbenchPorts';
 
 /**
- * The authenticated editor: providers, editor-only runtimes, and the shell.
- * The shared backend socket is mounted above this route; `WorkbenchRuntime`
- * attaches the generation queue listeners while the editor is open.
- *
- * The route's search params shape the boot: ?project deep-links a library
- * project into the session, ?new starts a fresh draft. Both are consumed by
- * the persistence load; the session controller handles params that change
- * while the editor is already mounted.
+ * Editor-only composition. Persistence handles initial ?project/?new; the session controller handles later search
+ * changes.
  */
 export const WorkbenchApp = () => {
   const search = useSearch({ strict: false }) as WorkbenchSearch;
@@ -38,9 +33,7 @@ export const WorkbenchApp = () => {
     [search.new, search.project]
   );
 
-  // Start widget chunk downloads now, while project hydration is still in
-  // flight — the provider below withholds the shell until hydration, and
-  // without this the first widget byte doesn't move until after it.
+  // Preload widget chunks during hydration; the provider withholds the shell until hydration finishes.
   useMountEffect(preloadBootWidgets);
 
   return (
@@ -54,6 +47,7 @@ export const WorkbenchApp = () => {
           <WorkbenchHotkeyRuntime />
           <WorkbenchCommandPalette />
           <QueueRuntimeAdapter />
+          <GalleryRealtimeRuntime />
           <WorkbenchRuntime />
           <WorkbenchSessionController search={search} />
           <WidgetHosts />

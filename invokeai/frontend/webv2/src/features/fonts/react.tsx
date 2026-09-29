@@ -28,12 +28,7 @@ const createAbortError = (): Error => {
   return error;
 };
 
-/**
- * Keeps the provider/context seam small enough for the authenticated shell.
- * The browser registry and authenticated transport are loaded only after the
- * route mounts, while callers can still retain faces and queue ensures during
- * that short handoff.
- */
+/** Loads the browser registry after mount; callers may retain faces and queue ensures during initialization. */
 const createDeferredFontRuntime = (): DeferredFontRuntime => {
   const listeners = new Set<() => void>();
   const pendingRetains = new Set<PendingRetain>();
@@ -65,9 +60,7 @@ const createDeferredFontRuntime = (): DeferredFontRuntime => {
       resolveDelegate = resolve;
       rejectDelegate = reject;
     });
-    // The provider creates this promise before any consumer necessarily asks
-    // for a face. Mark a disposal/import failure as handled while preserving
-    // the rejection for callers that are waiting on it.
+    // Handle failures before consumers attach, while preserving rejection for waiting callers.
     void delegatePromise.catch(() => undefined);
     return delegatePromise;
   };

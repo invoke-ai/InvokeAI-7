@@ -3,7 +3,6 @@ import type { GalleryImage, GalleryImageMetadata, GalleryItem, GalleryItemKey } 
 import { DataList, HStack, Icon, Stack, Tabs, Text } from '@chakra-ui/react';
 import { galleryImages, galleryVideos } from '@features/gallery';
 import { toGalleryItemKey } from '@features/gallery/contracts';
-import { useAuthSession } from '@features/identity';
 import { IconButton, Scrollable, Tooltip } from '@platform/ui';
 import { JsonPreview } from '@platform/ui/JsonPreview';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
@@ -11,32 +10,26 @@ import { useQuery } from '@tanstack/react-query';
 import {
   EMPTY_IMAGE_RECALL_CAPABILITIES,
   getImageRecallVerb,
-  RecallActionButtons,
   type ImageActions,
   type ImageRecallCapabilities,
   type ImageRecallKind,
 } from '@workbench/image-actions';
-import { ChevronDownIcon, ChevronRightIcon, CopyIcon } from 'lucide-react';
-import { useCallback } from 'react';
+import { CopyIcon } from 'lucide-react';
+import { useCallback, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { parsePreviewMetadata, type PreviewMetadataEntry } from './previewMetadata';
 
 /**
- * The footer's collapsible "Details" section: how the image was made (prompt,
- * seed, model, sampler settings) as quiet label/value rows with per-row copy
- * and the recall verbs wired to the existing recall machinery. Video Details
- * expose the backend's raw metadata/workflow/graph payloads instead. The query
- * child exists only while expanded and is keyed by account + qualified item
- * identity, so closing or changing identity aborts supported transports.
+ * Show parsed image details with copy/recall, or raw video payloads. Key query children by account and qualified
+ * identity so closure/identity changes abort supported transports.
  */
 
 const GROUP_HOVER_VISIBLE = { opacity: 1 };
 
 /**
- * Rows whose value maps onto a single-field recall verb. Rows without a
- * dedicated verb (model, steps, scheduler — only recallable via All/Remix)
- * keep just the copy button.
+ * Offer field recall only where a dedicated verb exists; model/steps/scheduler retain copy and use All/Remix for
+ * recall.
  */
 const ENTRY_RECALL_KINDS: Partial<
   Record<string, { capability: keyof ImageRecallCapabilities; kind: ImageRecallKind }>
@@ -48,49 +41,38 @@ const ENTRY_RECALL_KINDS: Partial<
   size: { capability: 'dimensions', kind: 'dimensions' },
 };
 
-export const PreviewMetadataPanel = ({
+export const PreviewDetails = ({
+  accountEpoch,
   actions,
   image,
-  isOpen,
   item,
-  onToggle,
 }: {
+  /** Read by the caller, outside the popover's presence boundary, so an account change re-keys the query. */
+  accountEpoch: number;
   actions: ImageActions;
   image: GalleryImage | null;
-  isOpen: boolean;
   item: GalleryItem;
-  onToggle: () => void;
 }) => {
-  const { t } = useTranslation();
-  const accountEpoch = useAuthSession().accountEpoch;
   const itemKey = toGalleryItemKey(item);
 
   return (
-    <Stack gap="2">
-      <HStack as="button" aria-expanded={isOpen} color="fg.muted" gap="1" w="fit-content" onClick={onToggle}>
-        <Icon as={isOpen ? ChevronDownIcon : ChevronRightIcon} boxSize="3" />
-        <Text fontSize="2xs" fontWeight="700" textTransform="uppercase">
-          {t('widgets.preview.details')}
-        </Text>
-      </HStack>
-      {isOpen ? (
-        <PreviewDetailsQuery
-          key={`${accountEpoch}:${itemKey}`}
-          accountEpoch={accountEpoch}
-          actions={actions}
-          image={image}
-          item={item}
-          itemKey={itemKey}
-        />
-      ) : null}
-    </Stack>
+    <PreviewDetailsQuery
+      key={`${accountEpoch}:${itemKey}`}
+      accountEpoch={accountEpoch}
+      actions={actions}
+      image={image}
+      item={item}
+      itemKey={itemKey}
+    />
   );
 };
 
 type PreviewDetailsData =
   | {
+      graph: string | null;
       kind: 'image';
       metadata: GalleryImageMetadata | null;
+      workflow: string | null;
     }
   | {
       graph: string | null;
@@ -117,12 +99,16 @@ const PreviewDetailsQuery = ({
     queryFn: async ({ signal }): Promise<PreviewDetailsData> => {
       if (item.kind === 'image') {
         if (!image) {
-          return { kind: 'image', metadata: null };
+          return { graph: null, kind: 'image', metadata: null, workflow: null };
         }
 
-        const metadata = await galleryImages.metadata(item.name, signal);
+        // Show complete raw metadata alongside parsed fields because workflows may add arbitrary entries.
+        const [metadata, workflow] = await Promise.all([
+          galleryImages.metadata(item.name, signal),
+          galleryImages.workflow(item.name, signal),
+        ]);
 
-        return { kind: 'image', metadata };
+        return { graph: workflow.graph, kind: 'image', metadata, workflow: workflow.workflow };
       }
 
       const [metadata, workflow] = await Promise.all([
@@ -148,7 +134,7 @@ const PreviewDetailsQuery = ({
     const details = isVideoDetails(detailsQuery.data) ? detailsQuery.data : null;
 
     return (
-      <VideoDetails
+      <DetailsTabs
         graph={details?.graph ?? null}
         metadata={details?.metadata ?? null}
         workflow={details?.workflow ?? null}
@@ -161,13 +147,19 @@ const PreviewDetailsQuery = ({
     image && details ? actions.deriveImageRecallCapabilities(image, details.metadata) : EMPTY_IMAGE_RECALL_CAPABILITIES;
 
   return (
-    <ImageDetails
-      actions={actions}
-      capabilities={capabilities}
-      image={image}
-      isLoading={detailsQuery.isPending}
+    <DetailsTabs
+      graph={details?.graph ?? null}
       metadata={details?.metadata ?? null}
-    />
+      workflow={details?.workflow ?? null}
+    >
+      <ImageDetails
+        actions={actions}
+        capabilities={capabilities}
+        image={image}
+        isLoading={detailsQuery.isPending}
+        metadata={details?.metadata ?? null}
+      />
+    </DetailsTabs>
   );
 };
 
@@ -207,7 +199,7 @@ const ImageDetails = ({
   );
 
   return (
-    <Scrollable maxH="40cqh">
+    <Scrollable flex="1" minH="0">
       <Stack gap="2" pe="1">
         {isLoading ? (
           <Text color="fg.subtle" fontSize="2xs">
@@ -229,47 +221,67 @@ const ImageDetails = ({
             })}
           </DataList.Root>
         )}
-        <RecallActionButtons
-          capabilities={capabilities}
-          disabledReason={t('widgets.preview.recallNotAvailable')}
-          onRecall={handleRecall}
-        />
       </Stack>
     </Scrollable>
   );
 };
 
-const VideoDetails = ({
+const DetailsTabs = ({
+  children: details,
   graph,
   metadata,
   workflow,
 }: {
+  /** The parsed rows + recall verbs; images only. */
+  children?: ReactNode;
   graph: string | null;
   metadata: Record<string, unknown> | null;
   workflow: string | null;
 }) => {
   const { t } = useTranslation();
+  // A tab with nothing behind it is disabled rather than opening onto an empty
+  // pane, so the first tab with content is where the popover opens.
+  const defaultValue = details ? 'details' : metadata !== null ? 'metadata' : workflow !== null ? 'workflow' : 'graph';
 
   return (
-    <Tabs.Root defaultValue="metadata" lazyMount size="sm" unmountOnExit variant="outline">
-      <Tabs.List>
-        <Tabs.Trigger fontSize="2xs" value="metadata">
+    <Tabs.Root
+      defaultValue={defaultValue}
+      display="flex"
+      flexDirection="column"
+      lazyMount
+      minH="0"
+      size="sm"
+      unmountOnExit
+      variant="outline"
+    >
+      <Tabs.List flexShrink={0}>
+        {details ? (
+          <Tabs.Trigger fontSize="2xs" value="details">
+            {t('widgets.preview.details')}
+          </Tabs.Trigger>
+        ) : null}
+        <Tabs.Trigger disabled={metadata === null} fontSize="2xs" value="metadata">
           {t('widgets.preview.metadata')}
         </Tabs.Trigger>
-        <Tabs.Trigger fontSize="2xs" value="workflow">
+        <Tabs.Trigger disabled={workflow === null} fontSize="2xs" value="workflow">
           {t('widgets.preview.workflow')}
         </Tabs.Trigger>
-        <Tabs.Trigger fontSize="2xs" value="graph">
+        <Tabs.Trigger disabled={graph === null} fontSize="2xs" value="graph">
           {t('widgets.preview.graph')}
         </Tabs.Trigger>
       </Tabs.List>
-      <Tabs.Content value="metadata">
-        <JsonPreview label={t('widgets.preview.metadataJsonLabel')} maxH="40cqh" value={metadata} />
+      {details ? (
+        <Tabs.Content display="flex" flexDirection="column" minH="0" value="details">
+          {details}
+        </Tabs.Content>
+      ) : null}
+      <Tabs.Content display="flex" flexDirection="column" minH="0" value="metadata">
+        <JsonPreview label={t('widgets.preview.metadataJsonLabel')} maxH="100%" value={metadata} />
       </Tabs.Content>
-      <Tabs.Content value="workflow">
+      <Tabs.Content display="flex" flexDirection="column" minH="0" value="workflow">
         <RawJsonPreview label={t('widgets.preview.workflowJsonLabel')} text={workflow} />
       </Tabs.Content>
-      <Tabs.Content value="graph">
+      <Tabs.Content display="flex" flexDirection="column" minH="0" value="graph">
         <RawJsonPreview label={t('widgets.preview.graphJsonLabel')} text={graph} />
       </Tabs.Content>
     </Tabs.Root>
@@ -278,17 +290,12 @@ const VideoDetails = ({
 
 const RawJsonPreview = ({ label, text }: { label: string; text: string | null }) =>
   text === null ? (
-    <JsonPreview label={label} maxH="40cqh" value={null} />
+    <JsonPreview label={label} maxH="100%" value={null} />
   ) : (
-    <JsonPreview label={label} maxH="40cqh" text={text} />
+    <JsonPreview label={label} maxH="100%" text={text} />
   );
 
-/**
- * A DataList item extended with hover-revealed value actions: recall (when
- * the row maps onto a single-field recall verb) and copy. The recall button
- * reuses the verb row's icon and label so both affordances read as the same
- * action.
- */
+/** Share recall labels/icons with the verb row; reveal row-level recall and copy actions on hover. */
 const MetadataRow = ({
   entry,
   onRecall,
@@ -310,7 +317,7 @@ const MetadataRow = ({
   return (
     <DataList.Item alignItems="start" className="group">
       <DataList.ItemLabel fontSize="2xs">{entry.label}</DataList.ItemLabel>
-      <DataList.ItemValue fontSize="2xs" minW="0">
+      <DataList.ItemValue alignItems="flex-start" fontSize="2xs" minW="0">
         {entry.isMultiline ? (
           <Text flex="1" fontSize="2xs" minW="0" whiteSpace="pre-wrap">
             {entry.value}
@@ -319,6 +326,7 @@ const MetadataRow = ({
           <MiddleTruncate flex="1" fontSize="2xs" minW="0" text={entry.value} />
         )}
         <HStack
+          alignSelf="flex-start"
           flexShrink={0}
           gap="0"
           opacity={0}

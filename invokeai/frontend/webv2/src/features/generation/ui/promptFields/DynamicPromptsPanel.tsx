@@ -23,11 +23,9 @@ import { useTranslation } from 'react-i18next';
 /** Rendering every row of a 10,000-prompt expansion would cost more than it tells the user. */
 const MAX_PREVIEW_ROWS = 200;
 const TABULAR_NUMS = { fontVariantNumeric: 'tabular-nums' } as const;
-// The rows sit on the popover's `bg.muted` surface, where the row recipe's
-// `bg.muted/60` hover is invisible — hover needs the next surface step.
+// Use a hover fill distinct from the popover's muted surface.
 const PROMPT_ROW_HOVER_PROPS = { bg: 'bg.emphasized/60' } as const;
-// The preview text is the row's whole point; a disabled row loses its
-// affordances (row-recipe hover, dimming, not-allowed cursor), not its ink.
+// Keep preview text readable while interactions are disabled.
 const DISABLED_PROMPT_ROW_PROPS = { cursor: 'default', opacity: 1 } as const;
 const NO_HOVER_PROPS = { bg: 'transparent' } as const;
 const MENU_POSITIONING = { placement: 'bottom-start' } as const;
@@ -54,14 +52,11 @@ export const DynamicPromptsPanel = ({
 }) => {
   const { t } = useTranslation();
   const { onChange } = config;
-  // Chakra derives the switch's label/input ids from its own counter, which can
-  // collide with the number input beside it and send label clicks to the wrong
-  // control. Explicit ids keep them apart.
+  // Explicit sibling input IDs prevent labels from targeting the wrong control.
   const seedSwitchId = useId();
   const modeFieldId = useId();
   const modeTriggerId = useId();
-  // A <label for> cannot name a button, so the trigger is named by the field's
-  // label plus its own text: "Mode" + "All combinations".
+  // aria-labelledby combines the field label and value for the composite trigger's accessible name.
   const modeLabelledBy = `${modeFieldId}-label ${modeTriggerId}`;
   const modeMenuIds = useMemo(() => ({ trigger: modeTriggerId }), [modeTriggerId]);
   const seedSwitchIds = useMemo(() => ({ hiddenInput: seedSwitchId, label: `${seedSwitchId}-label` }), [seedSwitchId]);
@@ -103,9 +98,7 @@ export const DynamicPromptsPanel = ({
   return (
     <Stack gap="2.5">
       <PromptPanelHeader label={t('widgets.generate.dynamicPrompts.title')}>
-        {/* Monospace rather than inline icons: lucide's X is a close glyph, not a
-            times sign, and there is no arithmetic multiply in the set. Mono with
-            tabular figures also stops the badge jittering as the counts change. */}
+        {/* Use a literal multiplication sign and tabular figures. */}
         <Badge
           color="fg.muted"
           css={TABULAR_NUMS}
@@ -128,8 +121,7 @@ export const DynamicPromptsPanel = ({
 
       <HStack align="end" gap="2">
         <Field id={modeFieldId} label={t('widgets.generate.dynamicPrompts.mode')}>
-          {/* A menu rather than a Select: Chakra's Select renders a hidden native
-              select whose sync throws inside this popover. */}
+          {/* Use a menu to avoid Select's hidden-native synchronization failure. */}
           <Menu.Root ids={modeMenuIds} positioning={MENU_POSITIONING}>
             <Menu.Trigger asChild>
               <Button
@@ -227,8 +219,7 @@ export const DynamicPromptsPanel = ({
             <DynamicPromptRow
               key={`${index}-${prompt}`}
               index={index}
-              // Pulling the only expansion in would paste back what the prompt
-              // box already says; the row stays a plain preview then.
+              // A single unchanged expansion is read-only because applying it is a no-op.
               isDisabled={expansion.prompts.length === 1}
               prompt={prompt}
               showSyntaxHighlighting={showSyntaxHighlighting}
@@ -285,8 +276,7 @@ const DynamicPromptRow = ({
           {index + 1}
         </Text>
         <Text as="span" color="fg" fontFamily="mono" fontSize="0.72rem" textAlign="start" wordBreak="break-word">
-          {/* An expanded prompt has no dynamic syntax left in it, so the useful
-              colouring here is attention and embeddings — the defaults. */}
+          {/* Expanded prompts highlight attention/embeddings only; dynamic syntax has already been consumed. */}
           <HighlightedPrompt enabled={showSyntaxHighlighting} prompt={prompt} />
         </Text>
       </button>

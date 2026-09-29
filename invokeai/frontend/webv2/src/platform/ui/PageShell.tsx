@@ -6,23 +6,8 @@ import { Flex, HStack, Heading, Stack, Text } from '@chakra-ui/react';
 import { Scrollable } from './Scrollable';
 
 /**
- * A full-height section page: heading, optional description, an actions slot,
- * and a readable measure.
- *
- * The Launchpad's sections each hand-rolled this — the projects and users
- * pages carried duplicate `maxW="6xl"` blocks that had already drifted apart.
- * It lives in Platform rather than beside the Launchpad because feature-owned
- * pages need it too, and features may not import Workbench.
- *
- * `scroll` decides who owns the scrollbar:
- * - `page` (default) scrolls the whole page, header included. Right for
- *   ordinary content.
- * - `content` pins the header and hands `children` a flex box to fill. Right
- *   when the content virtualizes, since a virtualizer has to own and observe
- *   its own scroll element.
- *
- * Full-bleed views that own their layout and header (the model and node
- * managers) deliberately do not use this at all.
+ * Use scroll=page for whole-page scrolling; content pins the header and lets virtualized children own their scroll
+ * element. Full-bleed views provide their own shell.
  */
 
 const MEASURE_SX: SystemStyleObject = {
@@ -38,11 +23,7 @@ const CONTENT_SCROLL_HEADER_SX: SystemStyleObject = { ...MEASURE_SX, pb: 4, pt: 
 export interface PageShellProps {
   /** The section's visible heading. */
   title: string;
-  /**
-   * Accessible name for the scroll region when it differs from the heading —
-   * a greeting makes a warm heading but a poor landmark name. Ignored when
-   * `scroll` is `content`, where the child owns the scroll region.
-   */
+  /** Override the scroll region's accessible name; ignored for scroll=content, where children own the region. */
   regionLabel?: string;
   /** One line under the heading; omit when the section speaks for itself. */
   description?: string;

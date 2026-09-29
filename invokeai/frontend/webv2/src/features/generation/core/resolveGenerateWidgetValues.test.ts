@@ -32,8 +32,7 @@ const applySystemPatch = (
   systemPatch: Partial<GenerateWidgetValues>
 ): Record<string, unknown> => ({ ...storedValues, ...systemPatch });
 
-// The resolver fails closed without the backend's architecture table, so seed the registry with the
-// same fixture the backend pins. Reset afterwards so registry state cannot leak between files.
+// Seed backend fixtures and clean up the registry to isolate policy tests.
 beforeEach(() => {
   setArchitectureCapabilities(capabilitiesFixture as ArchitectureCapabilitiesRow[]);
 });
@@ -48,6 +47,26 @@ describe('resolveGenerateWidgetValues', () => {
         storedValues: {},
       })
     ).toBeNull();
+  });
+
+  it('never defaults to a model that cannot run on its own', () => {
+    // Default resolution excludes unconditional Ideogram branches that cannot generate independently.
+    const unconditional = createModel('ideogram4-uncond', {
+      base: 'ideogram-4',
+      branch: 'unconditional',
+      format: 'checkpoint',
+    });
+    const conditional = createModel('ideogram4-cond', {
+      base: 'ideogram-4',
+      branch: 'conditional',
+      format: 'checkpoint',
+    });
+
+    const result = resolveGenerateWidgetValues({ models: [unconditional, conditional], storedValues: {} });
+
+    expect(result?.values.model.key).toBe('ideogram4-cond');
+    // And with nothing else installed there is no default to fall back to at all.
+    expect(resolveGenerateWidgetValues({ models: [unconditional], storedValues: {} })).toBeNull();
   });
 
   it('creates canonical defaults for the first supported model', () => {
@@ -216,9 +235,7 @@ describe('resolveGenerateWidgetValues', () => {
 
 describe('without the backend capability table', () => {
   it('resolves nothing rather than falling back to generic defaults', () => {
-    // Its `systemPatch` is persisted into the project, so a fallback grid or step count would be
-    // written to disk. Returning null is already how "no usable models" is signalled, and every
-    // caller handles it.
+    // Return null before capabilities load rather than persist fallback defaults.
     resetArchitectureCapabilities();
 
     const model: MainModelConfig = { base: 'sdxl', key: 'model', name: 'model', type: 'main' };
@@ -231,9 +248,7 @@ describe('resolveGenerateWidgetValues and an architecture the table omits', () =
   const rows = capabilitiesFixture as ArchitectureCapabilitiesRow[];
 
   it('will not select a model whose architecture the backend did not describe', () => {
-    // The resolver's patch is persisted. Selecting a model with no row would write the fallback's
-    // grid, optimal size, step count and scheduler into the project file -- the same reason the
-    // whole resolver waits for the table in the first place, one level finer.
+    // Reject missing rows to protect persisted settings from generic defaults.
     setArchitectureCapabilities(rows.filter((row) => row.base !== 'cogview4'));
 
     expect(

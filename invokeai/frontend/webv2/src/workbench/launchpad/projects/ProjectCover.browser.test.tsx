@@ -6,13 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { ProjectCover } from './ProjectCover';
 
-/**
- * The three states a cover has: an image, no image, and an image the browser
- * could not load. The last is the one worth pinning — a cover names a server
- * image that may since have been deleted, and a broken `<img>` reads worse than
- * the glyph. All three reserve the same box, so a grid does not reflow as
- * covers resolve.
- */
+/** Image, absent-cover, and failed-load states reserve identical geometry; deleted images fall back to the glyph. */
 
 // A 1x1 transparent GIF, so the success path needs no network.
 const PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';

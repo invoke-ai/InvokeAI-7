@@ -38,9 +38,8 @@ afterEach(async () => {
 
 describe('useModelGridSize', () => {
   it('re-reads the grid when the capability table lands after mount', async () => {
-    // The real sequence for a saved project: the base is restored from disk and never changes, so
-    // an effect keyed on it alone never re-runs. Wan's denoise node enforces multiples of 16; the
-    // canvas used to keep snapping at 8 for the rest of the session.
+    // Capability arrival must update a restored unchanged base's snapping grid rather than retaining boot fallback
+    // 8.
     await render('wan');
     expect(grid()).toBe('8');
 

@@ -53,7 +53,10 @@ class ArchitectureFeatures(BaseModel):
     )
     guidance_label: str = Field(description="What to call the guidance slider: 'CFG' or 'Guidance'.")
     guidance_min: float = Field(
-        description="Lowest guidance value the denoise node accepts; a smaller one fails at enqueue."
+        description=(
+            "Lowest guidance value the slider offers: 1.0, which is no guidance, or the denoise node's own "
+            "floor where that is higher."
+        )
     )
     guidance_max: float | None = Field(
         default=None,

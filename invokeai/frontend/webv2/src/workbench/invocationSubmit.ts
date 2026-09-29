@@ -1,39 +1,42 @@
 /**
- * The single canvas-vs-generate submit decision, shared by the three Invoke
- * surfaces: the topbar Invoke button (`shell/topbar/InvokeControl`), the Invoke
- * hotkey command (`hotkeys/firstPartyCommands`), and the graph-preview dialog's
- * submit (`graph-preview/GraphPreviewDialog`).
- *
- * Both surfaces flush drafts, resolve the route, and gate on route validity +
- * backend connection themselves; this helper owns only what happens *after* that
- * gate — routing a `canvas` source through the async canvas pipeline
- * (`prepareCanvasInvocation`, honoring the resolved destination) versus
- * dispatching the reducer's `submitResolvedInvocationSnapshot` for every other
- * source. `prepareCanvasInvocation` is injected so the decision stays pure and
- * node-testable with a fake dispatch + a stubbed canvas pipeline.
+ * After callers flush drafts and validate route/connection, send Canvas through async preparation and other
+ * sources through reducer submission. Inject Canvas preparation to keep this decision independent of the engine.
  */
 
 import type { GenerateSettings } from '@features/generation/contracts';
 import type { ParseDynamicPromptsResponse } from '@features/generation/prompts';
 import type { ModelConfig } from '@features/models';
+import type { ProjectGraphState } from '@features/workflow/contracts';
+import type { WorkflowGeneratorResolutions, WorkflowPendingGenerator } from '@features/workflow/utility';
 import type { AccountScope } from '@platform/state/accountLifecycle';
 import type { ResolvedInvocationRoute } from '@workbench/invocationContracts';
 import type { Project } from '@workbench/projectContracts';
 
 import { resolveDynamicPrompts } from '@features/generation/prompts';
-import { getEffectivePrompts, hasDynamicPromptSyntax, normalizeGenerateSettings } from '@features/generation/settings';
+import {
+  getEffectivePrompts,
+  hasDynamicPromptSyntax,
+  normalizeGenerateSettings,
+  sanitizeBatchCount,
+} from '@features/generation/settings';
+import { getWorkflowBatchCapReason } from '@features/workflow/graph';
+import { getInvocationTemplatesSnapshot } from '@features/workflow/react';
+import { planWorkflowBatch } from '@features/workflow/utility';
 import { queryClient } from '@platform/query/client';
 import { isAccountScopeCurrent } from '@platform/state/accountLifecycle';
 
 import type { PrepareCanvasInvocationArgs } from './widgets/canvas/invoke/prepareCanvasInvocation';
 import type { WorkbenchCommands } from './workbenchStore';
 
+import { getActiveProjectWorkflow } from './projectWorkflows';
 import { readCanvasCompositingSettings } from './widgets/canvas/invoke/canvasCompositing';
 import { readCanvasDenoisingStrength } from './widgets/canvas/invoke/canvasStrength';
 import { getProjectWidgetValues } from './widgetState';
 
 /** Plain English, like the shell's other notices — this module has no i18n context. */
 const EXPANSION_FAILED_TITLE = 'The prompt could not be expanded';
+const GENERATOR_FAILED_TITLE = 'The batch generator could not be resolved';
+const BATCH_NOT_READY_TITLE = 'The batch is not ready';
 
 export interface SubmitResolvedInvocationDeps {
   /** The resolved route to submit — the caller has already checked it is valid. */
@@ -42,14 +45,17 @@ export interface SubmitResolvedInvocationDeps {
   project: Project;
   /** Loaded models (or `undefined` while loading), forwarded verbatim to both paths. */
   models: readonly ModelConfig[] | undefined;
+  /**
+   * The project workflow a workflow route submits. Captured with the project snapshot so a switch during
+   * generator resolution never submits another workflow; defaults to the snapshot's active workflow.
+   */
+  workflowId?: string;
   /** Identity lifetime that initiated this submission. */
   owner: AccountScope;
   commands: Pick<WorkbenchCommands, 'generation' | 'notifications'>;
   /**
-   * The async canvas-invoke entry point, injected for testability. The real
-   * implementation resolves after preparation has either queued the graph or
-   * reported a failure; a canvas source never dispatches
-   * `submitResolvedInvocationSnapshot`.
+   * Resolves after Canvas preparation queues or reports failure; Canvas never dispatches
+   * submitResolvedInvocationSnapshot.
    */
   prepareCanvasInvocation: (args: PrepareCanvasInvocationArgs) => Promise<void> | void;
   /** Localizes a control-layer rejection notice; defaults to the English validation sentence. */
@@ -57,14 +63,8 @@ export interface SubmitResolvedInvocationDeps {
 }
 
 /**
- * The GenerateSettings behind a route that expands `{a|b}`, or `null` when the
- * route submits its prompt literally (Upscale, Workflow) or has no such syntax.
- *
- * The returned settings carry the *merged* prompts, so both the gate and the
- * expansion below see what will actually generate. That matters in both
- * directions: an active template can introduce `{a|b}` a plain authored prompt
- * never had, and it always consumes its own `{prompt}` placeholder before the
- * expander could mistake it for a one-option group.
+ * Return merged Generate prompts only for dynamic routes; templates may introduce syntax and must consume their
+ * own placeholders before expansion.
  */
 const getExpandableSettings = (project: Project, route: ResolvedInvocationRoute): GenerateSettings | null => {
   if (route.sourceId === 'upscale' || route.sourceId === 'video' || route.sourceId === 'workflow') {
@@ -83,14 +83,8 @@ const getExpandableSettings = (project: Project, route: ResolvedInvocationRoute)
 };
 
 /**
- * Resolving the expansion here rather than inside Queue keeps Queue free of a
- * Generation import, which would close a `gallery -> queue -> generation`
- * dependency cycle. Reading the shared cache means invoking mid-edit still
- * submits the prompts the backend actually produces.
- *
- * `null` means the request itself failed. A response may still carry an `error`
- * alongside a usable-looking `prompts` — the route is deliberately soft so the
- * preview can show the message, but the submit path must not act on it.
+ * Expand here to avoid a gallery → queue → generation cycle. Treat null or response.error as failure even if
+ * prompts are present.
  */
 const resolveExpandedPrompts = async (settings: GenerateSettings): Promise<ParseDynamicPromptsResponse | null> => {
   try {
@@ -105,6 +99,76 @@ const resolveExpandedPrompts = async (settings: GenerateSettings): Promise<Parse
   }
 };
 
+const getSubmittedWorkflowDocument = (project: Project, workflowId: string | undefined): ProjectGraphState | null =>
+  workflowId
+    ? (project.workflows.entries.find((entry) => entry.document.id === workflowId)?.document ?? null)
+    : getActiveProjectWorkflow(project).document;
+
+/** The async generators (dynamic prompts, board listings) a workflow submission still has to resolve. */
+const getPendingWorkflowGenerators = (
+  document: ProjectGraphState | null,
+  route: ResolvedInvocationRoute
+): WorkflowPendingGenerator[] => {
+  const templatesSnapshot = getInvocationTemplatesSnapshot();
+
+  if (!document || route.sourceId !== 'workflow' || templatesSnapshot.status !== 'loaded') {
+    return [];
+  }
+
+  return planWorkflowBatch(document, templatesSnapshot.templates).pendingGenerators;
+};
+
+/**
+ * Resolves the pending generators, the only asynchronous step before the reducer; their outputs travel with the
+ * action and the planner re-checks them against the document it compiles.
+ */
+const resolveWorkflowGeneratorsForRoute = async (
+  project: Project,
+  document: ProjectGraphState,
+  pending: readonly WorkflowPendingGenerator[],
+  owner: AccountScope,
+  commands: Pick<WorkbenchCommands, 'notifications'>
+): Promise<WorkflowGeneratorResolutions | null> => {
+  const templatesSnapshot = getInvocationTemplatesSnapshot();
+
+  if (templatesSnapshot.status !== 'loaded') {
+    return null;
+  }
+
+  // Loaded on demand: the resolver and its gallery/prompt query dependencies stay out of the boot graph.
+  const { resolveWorkflowGenerators } = await import('@features/workflow/generators');
+  const { errors, resolutions } = await resolveWorkflowGenerators(queryClient, pending);
+
+  if (!isAccountScopeCurrent(owner)) {
+    return null;
+  }
+
+  if (errors.length > 0) {
+    commands.notifications.add({ kind: 'error', message: errors[0], title: GENERATOR_FAILED_TITLE });
+    return null;
+  }
+
+  // Sizes were unknown until now: an empty board or a mismatched group only shows once the lists exist.
+  const resolvedPlan = planWorkflowBatch(document, templatesSnapshot.templates, {
+    generators: resolutions,
+  });
+
+  const capReason =
+    resolvedPlan.batchSize === null
+      ? null
+      : getWorkflowBatchCapReason(
+          resolvedPlan.batchSize * sanitizeBatchCount(getProjectWidgetValues(project, 'workflow').batchCount)
+        );
+  const reason = resolvedPlan.reasons[0] ?? capReason;
+
+  if (reason) {
+    commands.notifications.add({ kind: 'error', message: reason, title: BATCH_NOT_READY_TITLE });
+    return null;
+  }
+
+  return resolutions;
+};
+
 export const submitResolvedInvocation = async ({
   commands,
   formatControlLayerError,
@@ -113,25 +177,49 @@ export const submitResolvedInvocation = async ({
   prepareCanvasInvocation,
   project,
   route,
+  workflowId,
 }: SubmitResolvedInvocationDeps): Promise<void> => {
   if (!isAccountScopeCurrent(owner)) {
     return;
   }
 
+  const workflowDocument = route.sourceId === 'workflow' ? getSubmittedWorkflowDocument(project, workflowId) : null;
+
+  if (route.sourceId === 'workflow' && !workflowDocument) {
+    return;
+  }
+
+  // Only a workflow with unresolved generators needs this round trip; every other route dispatches synchronously.
+  const pendingGenerators = getPendingWorkflowGenerators(workflowDocument, route);
+  let workflowGenerators: WorkflowGeneratorResolutions | undefined;
+
+  if (pendingGenerators.length > 0 && workflowDocument) {
+    const resolved = await resolveWorkflowGeneratorsForRoute(
+      project,
+      workflowDocument,
+      pendingGenerators,
+      owner,
+      commands
+    );
+
+    if (resolved === null) {
+      return;
+    }
+
+    workflowGenerators = resolved;
+  }
+
   const expandableSettings = getExpandableSettings(project, route);
 
-  // Only a prompt with dynamic syntax pays for a round trip; every other Invoke
-  // stays on the synchronous path it has always taken.
+  // Only dynamic prompts require a round trip.
   if (expandableSettings) {
     const expansion = await resolveExpandedPrompts(expandableSettings);
     if (!isAccountScopeCurrent(owner)) {
       return;
     }
 
-    // Submitting the authored text would put the literal `{a|b}` or `__name__`
-    // in front of the model, so a prompt that could not be expanded does not
-    // generate at all. The Invoke button gates on the same state; this covers
-    // the hotkey and graph-preview paths, which never see it.
+    // Reject failed expansions for hotkey and preview callers too, so literal dynamic syntax never reaches
+    // generation.
     if (expansion === null || expansion.error) {
       commands.notifications.add({
         kind: 'error',
@@ -142,15 +230,19 @@ export const submitResolvedInvocation = async ({
     }
 
     await dispatchResolvedInvocation(
-      { commands, formatControlLayerError, models, owner, prepareCanvasInvocation, project, route },
-      expansion.prompts.length > 0 ? expansion.prompts : undefined
+      { commands, formatControlLayerError, models, owner, prepareCanvasInvocation, project, route, workflowId },
+      expansion.prompts.length > 0 ? expansion.prompts : undefined,
+      workflowGenerators,
+      workflowDocument?.id
     );
     return;
   }
 
   await dispatchResolvedInvocation(
-    { commands, formatControlLayerError, models, owner, prepareCanvasInvocation, project, route },
-    undefined
+    { commands, formatControlLayerError, models, owner, prepareCanvasInvocation, project, route, workflowId },
+    undefined,
+    workflowGenerators,
+    workflowDocument?.id
   );
 };
 
@@ -164,15 +256,13 @@ const dispatchResolvedInvocation = async (
     project,
     route,
   }: SubmitResolvedInvocationDeps,
-  positivePrompts: string[] | undefined
+  positivePrompts: string[] | undefined,
+  workflowGenerators: WorkflowGeneratorResolutions | undefined,
+  workflowId: string | undefined
 ): Promise<void> => {
   if (route.sourceId === 'canvas') {
-    // The canvas graph is composited + compiled asynchronously outside the
-    // reducer. Awaiting it lets the active submission coordinator hold its
-    // immediate acknowledgement/duplicate guard through the whole preparation.
-    // The orchestrator records any failure notice and keeps its own guard for
-    // direct/preview callers. The resolved destination is threaded through so a
-    // Canvas source can still land its output in the Gallery.
+    // Await Canvas preparation to retain the submission guard until completion; pass the resolved destination so
+    // Canvas can output to Gallery.
     await prepareCanvasInvocation({
       compositing: readCanvasCompositingSettings(getProjectWidgetValues(project, 'canvas')),
       destination: route.destination,
@@ -194,6 +284,9 @@ const dispatchResolvedInvocation = async (
     backendSupportsCancellation: true,
     models,
     positivePrompts,
+    projectId: project.id,
     route,
+    ...(workflowGenerators ? { workflowGenerators } : {}),
+    ...(workflowId ? { workflowId } : {}),
   });
 };

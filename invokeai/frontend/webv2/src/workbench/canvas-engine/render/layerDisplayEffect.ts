@@ -1,23 +1,7 @@
 /**
- * The display-only effects a layer's pixels pass through on the way to screen:
- * the raster **adjustment stack** and the
- * control-layer **transparency effect** (lightness→alpha, so a dark control map
- * drops its background out).
- *
- * The compositor applies these to a layer's cache every frame through memoizing
- * caches. This module exists for the one case that has pixels of its own outside
- * that cache: a floating selection. Its pixels were cut from the layer, so they
- * must render exactly as the layer's own pixels do — otherwise floating a region
- * of a control map shows the raw, opaque black background the effect normally
- * removes.
- *
- * Both effects are strictly PER-PIXEL, so applying one to a cut-out region gives
- * exactly the same result as applying it to the whole layer and then cutting.
- * That is what lets the float bake its display copy ONCE at lift time rather
- * than re-deriving it every frame: nothing about its transform can change the
- * outcome, and a change to the layer's display properties cancels the float.
- *
- * Zero React, zero import-time side effects.
+ * Floating selections need the same raster adjustments/control transparency as their layer. These per-pixel
+ * effects commute with cutting, so bake a display copy once at lift. Transform changes do not affect it;
+ * appearance changes cancel the float.
  */
 
 import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
@@ -35,11 +19,7 @@ export const hasLayerDisplayEffect = (layer: CanvasLayerContract): boolean => {
   return layer.type === 'raster' && !isIdentityAdjustments(layer.adjustments);
 };
 
-/**
- * A copy of `source` with `layer`'s display effects baked in, or `null` when the
- * layer has none — the caller then draws `source` directly, which is the common
- * case and allocates nothing.
- */
+/** Returns an effect-baked copy, or null when drawing the source directly needs no allocation. */
 export const renderLayerDisplayEffect = (
   backend: RasterBackend,
   layer: CanvasLayerContract,

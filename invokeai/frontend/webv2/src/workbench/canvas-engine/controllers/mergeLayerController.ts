@@ -16,6 +16,7 @@ import { insertNodesAtAnchor } from '@workbench/canvas-engine/document/insertion
 import { haveSameStructure } from '@workbench/canvas-engine/document/layerStacks';
 import { mergeDownMatrix } from '@workbench/canvas-engine/document/mergeDown';
 import { canMergeSelectedRasters, getMergeVisibleRasterLeaves } from '@workbench/canvas-engine/document/mergeVisible';
+import { collectHistoryMediaRefs } from '@workbench/canvas-engine/history/history';
 import { isEmpty, roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
 import { applyAdjustments, isIdentityAdjustments } from '@workbench/canvas-engine/render/adjustments';
 import { blendToComposite } from '@workbench/canvas-engine/render/compositor';
@@ -228,8 +229,7 @@ export class MergeLayerController {
       const context = pixels.ctx;
       context.setTransform(1, 0, 0, 1, 0, 0);
       context.clearRect(0, 0, rect.width, rect.height);
-      // Merged pixels must reproduce the screen; a per-leaf bake cannot under
-      // member opacity/blending.
+      // Composite the group to preserve member opacity and blending in merged pixels.
       const drawMerged = (
         target: RasterSurface['ctx'],
         from: number,
@@ -304,6 +304,7 @@ export class MergeLayerController {
       apply();
       this.deps.ctx.history.push({
         bytes: rect.width * rect.height * 4 + 256,
+        heldAssetRefs: collectHistoryMediaRefs(contributors),
         label: 'Merge visible',
         redo: apply,
         replayFailureAtomic: true,
@@ -517,6 +518,7 @@ export class MergeLayerController {
         applyPrepared();
         this.deps.ctx.history.push({
           bytes: historyBytes,
+          heldAssetRefs: collectHistoryMediaRefs(rawSnapshots.map(({ layer }) => layer)),
           label: 'Merge selected layers',
           redo,
           replayFailureAtomic: true,

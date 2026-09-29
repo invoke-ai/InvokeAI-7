@@ -22,6 +22,7 @@ import {
 import { cloneSubtree, collectSubtreeLeaves } from '@workbench/canvas-engine/document/documentTree';
 import { insertNodesAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import { haveSameStructure } from '@workbench/canvas-engine/document/layerStacks';
+import { collectHistoryMediaRefs } from '@workbench/canvas-engine/history/history';
 
 export type CapturedLayerCache = { pixels: RasterSurface; rect: Rect } | null | 'not-ready';
 
@@ -171,12 +172,8 @@ export class LayerMutationController {
     if (!o.history.canRetain(historyBytes)) {
       return { status: 'over-budget' };
     }
-    // Durable layer sources are immutable, so their one prepared cache is used
-    // only for the initial insertion and can be reconstructed from the source
-    // on redo. Live paint/mask pixels that have not reached a durable source
-    // retain a separate immutable history capture and therefore need a second
-    // live cache. This makes the common path one full-size copy while keeping
-    // dirty pixels exact and every allocation inside the raster reservation.
+    // Immutable durable sources rebuild caches on redo, needing one insertion copy. Unpersisted paint/mask pixels
+    // need separate history and live copies; both remain within the raster reservation.
     const reservation = o.reserve(reserveBytes);
     if (reservation.status === 'over-budget') {
       return { status: 'over-budget' };
@@ -328,6 +325,7 @@ export class LayerMutationController {
       };
       o.history.push({
         bytes: historyBytes,
+        heldAssetRefs: collectHistoryMediaRefs(duplicates),
         dispose: () => detachedLease?.release(),
         label: duplicates.length === 1 ? 'Duplicate layer' : 'Duplicate layers',
         redo,
@@ -394,6 +392,7 @@ export class LayerMutationController {
     apply();
     o.history.push({
       bytes: captured ? captured.rect.width * captured.rect.height * 4 + 256 : 256,
+      heldAssetRefs: collectHistoryMediaRefs(layer),
       label,
       redo: apply,
       replayFailureAtomic: true,
@@ -457,6 +456,7 @@ export class LayerMutationController {
     apply(after);
     o.history.push({
       bytes: captured ? captured.rect.width * captured.rect.height * 4 + 256 : 256,
+      heldAssetRefs: collectHistoryMediaRefs(before, after),
       label,
       redo: () => apply(after),
       replayFailureAtomic: true,

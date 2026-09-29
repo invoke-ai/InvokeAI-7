@@ -7,11 +7,7 @@ import { patchWorkbenchPreferences, useWorkbenchPreferenceSelector } from '@work
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * Production binding of the feature-hints port. Platform may not read Workbench
- * preferences, so App supplies both the enabled flag and the write that the
- * card's "don't show me these" action needs.
- */
+/** App supplies preferences because Platform cannot import Workbench. */
 export const FeatureHintsAdapterProvider = ({ children }: { children: ReactNode }) => {
   const { t } = useTranslation();
   const enabled = useWorkbenchPreferenceSelector((preferences) => preferences.enableInformationalPopovers);

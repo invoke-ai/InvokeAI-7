@@ -82,9 +82,7 @@ export const GeneratePromptFields = ({
     [onCommitImmediate]
   );
 
-  // View mode is a way of reading one particular template, so it does not carry
-  // over to the next one. Left on, applying a template made the prompt box go
-  // read-only the instant it was picked, with no interaction to explain it.
+  // Reset view mode when the template changes so prompts do not become unexpectedly read-only.
   const applyPromptTemplate = useCallback(
     (promptTemplate: PromptTemplateSnapshot | null) =>
       onCommitImmediate({ promptTemplate, promptTemplateViewMode: false }),
@@ -181,8 +179,7 @@ export const GeneratePromptFields = ({
         onTemplateViewModeChange={setTemplateViewMode}
         onUsePrompt={usePromptHistoryItem}
       />
-      {/* Active prompt machinery surfaces as a dismissible chip instead of
-          hidden state that only shows once its panel is opened. */}
+
       {settings.promptTemplate ? (
         <HStack>
           <Tag.Root size="sm" variant="surface">

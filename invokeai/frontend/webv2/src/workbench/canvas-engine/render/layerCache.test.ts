@@ -128,9 +128,7 @@ describe('createLayerCacheStore', () => {
     store.invalidate('a');
     expect(first.version).toBe(2);
 
-    // Delete + recreate (undo→redo / transform bake / merge / evict→re-show): the
-    // fresh entry must start above 2 so version-keyed caches (adjusted surface,
-    // thumbnails) can't mistake its new pixels for a version they already hold.
+    // Recreated ids must exceed prior versions so adjusted surfaces and thumbnails cannot reuse stale pixels.
     store.delete('a');
     const recreated = store.getOrCreate('a', 10, 10);
     expect(recreated.version).toBeGreaterThan(2);
@@ -263,11 +261,7 @@ describe('growToRect (paint caches grow with strokes)', () => {
     expect(grown.surface.width).toBe(40);
     expect(grown.surface.height).toBe(40);
 
-    // The growth preserves the old pixels at their layer-local position within
-    // the grown surface: old origin (10,10) minus new origin (-10,-10) =
-    // surface (20,20). It must NOT go through a CPU round trip to do it — the
-    // whole point of `resizePreserving` is that the copy stays on the GPU, and
-    // a `getImageData` here would mean that regressed.
+    // Preserve local placement at new surface offset (20,20) using GPU blits, without getImageData readback.
     const log = (grown.surface as StubRasterSurface).callLog;
     expect(log.filter((e) => e.op === 'resizePreserving').map((e) => e.args)).toEqual([[40, 40, 20, 20]]);
     expect(log.map((e) => e.op)).not.toContain('getImageData');

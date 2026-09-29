@@ -11,27 +11,8 @@ import { useTranslation } from 'react-i18next';
 import { useVideoUiActions } from './VideoUiContext';
 
 /**
- * Plays a clip's trimmed window in the Preview widget, looping it — and, while that loop
- * is the one running, offers to stop it.
- *
- * The trim rows show two still frames, which answer where the window starts and ends but
- * not what is inside it — and for an audio reference, whose frames are a drawing of the
- * sound, nothing at all. This is the panel's only way to hear or watch the selection
- * before a generation is spent on it.
- *
- * The button is a pause control only for its own loop: the player reports under the token
- * of the request it honoured, so a sibling card playing the same clip, or a native play of
- * something else, leaves this one offering play. Pausing leaves the window armed in the
- * player (the native play control resumes the selection), but the NEXT press here is a
- * fresh request rather than a resume — the trim can have moved in between, and the press
- * has to play what the rows now show, from its start.
- *
- * Never gated on the panel's edit-disabled state: playing changes nothing, and a clip the
- * user can see is one they should be able to audition. The gallery record is resolved on
- * press rather than held on the reference, because the panel stores a clip (name,
- * dimensions, frame rate) while Preview needs the item itself — one small request against
- * something the user already has open, paid for by the press rather than by every card on
- * mount.
+ * Controls only its own playback token. Every play requests the current trim from its start; pausing leaves the
+ * loop armed for native resume. Playback remains available while editing is disabled.
  */
 
 export const PlayClipSpanButton = memo(function PlayClipSpanButton({ clip }: { clip: VideoSourceClip }) {
@@ -49,10 +30,7 @@ export const PlayClipSpanButton = memo(function PlayClipSpanButton({ clip }: { c
   const span = useMemo(() => videoClipSpanSeconds(clip), [clip]);
   const videoName = clip.video_name;
   const handlePress = useCallback(() => {
-    // `aria-disabled` rather than `disabled` while the lookup is in flight: disabling a
-    // focused button blurs it to <body>, dropping a keyboard user out of the card mid-
-    // gesture — the same hazard the reference list's move arrows carry a focus handoff
-    // for. So the press has to be refused here instead of by the DOM.
+    // Use aria-disabled plus this guard to retain keyboard focus during lookup.
     if (!span || isResolving) {
       return;
     }
@@ -71,8 +49,7 @@ export const PlayClipSpanButton = memo(function PlayClipSpanButton({ clip }: { c
         if (item.kind === 'video' && isAccountScopeCurrent(owner)) {
           const token = playVideoSpanInPreview({ ...span, item });
 
-          // A refusal (Preview could not be raised) asked nothing of the player, so the
-          // loop this button last started — paused, still armed — stays its own to stop.
+          // Preview refusal leaves the previous loop armed under this button's token.
           if (token !== null) {
             setRequestToken(token);
           }

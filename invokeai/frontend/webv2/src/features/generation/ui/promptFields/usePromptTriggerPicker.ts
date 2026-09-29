@@ -1,14 +1,4 @@
-/**
- * The `+` button's browsable trigger popover.
- *
- * Distinct from the caret autocomplete beside it: this one is opened
- * deliberately, takes focus, and browses every trigger there is. Both prompt
- * fields wire it up identically, so it lives here rather than twice.
- *
- * The popover is positioned by rect rather than by element so it can anchor to
- * the button that opened it, wherever that sits, without the field having to
- * hand its own DOM to a child.
- */
+/** Browsing takes focus; autocomplete does not. Anchor both to the supplied rectangle. */
 
 import type { PromptTextRange } from '@features/generation/ui/promptFields/promptFocus';
 import type { ReactNode } from 'react';

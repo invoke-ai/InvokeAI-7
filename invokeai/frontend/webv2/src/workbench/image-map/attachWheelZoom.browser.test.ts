@@ -4,11 +4,7 @@ import type { AxisRanges } from './imageMapViewport';
 
 import { attachWheelZoom } from './attachWheelZoom';
 
-/**
- * The gesture bookkeeping needs real pointer and touch events, so this runs in
- * the browser suite; the range arithmetic it drives is unit-tested against
- * `imageMapViewport` directly.
- */
+/** Browser events verify gesture bookkeeping; unit tests cover viewport arithmetic. */
 
 let detach: (() => void) | null = null;
 let host: HTMLElement | null = null;
@@ -27,11 +23,12 @@ const mountHost = (): HTMLElement => {
   return element;
 };
 
-const attach = (element: HTMLElement, ranges: AxisRanges): { current: AxisRanges } => {
-  const state = { current: ranges };
+const attach = (element: HTMLElement, ranges: AxisRanges): { applied: number; current: AxisRanges } => {
+  const state = { applied: 0, current: ranges };
 
   detach = attachWheelZoom(element, {
     applyRanges: (next) => {
+      state.applied += 1;
       state.current = next;
     },
     readRanges: () => state.current,
@@ -39,6 +36,16 @@ const attach = (element: HTMLElement, ranges: AxisRanges): { current: AxisRanges
 
   return state;
 };
+
+/**
+ * Zooms are coalesced into the next animation frame, so nothing is applied
+ * until one passes. Two frames, because the first only guarantees the
+ * callback has been scheduled by the dispatch above.
+ */
+const settleFrames = (): Promise<void> =>
+  new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
 
 const spanOf = (ranges: AxisRanges): number => ranges.x[1] - ranges.x[0];
 
@@ -57,7 +64,7 @@ afterEach(() => {
 });
 
 describe('attachWheelZoom pinch bookkeeping', () => {
-  it('re-baselines when a third finger lifts instead of jumping the viewport', () => {
+  it('re-baselines when a third finger lifts instead of jumping the viewport', async () => {
     const element = mountHost();
     const state = attach(element, { x: [0, 100], y: [0, 100] });
 
@@ -75,14 +82,21 @@ describe('attachWheelZoom pinch bookkeeping', () => {
     // Back to two fingers, now far apart. Measuring against the stale 100px
     // baseline would scale the view by ~1/3.8 in a single frame.
     dispatchTouch(element, 'touchend', [touchAt(element, 1, 10), touchAt(element, 2, 390)]);
+    await settleFrames();
     const spanBefore = spanOf(state.current);
 
-    dispatchTouch(element, 'touchmove', [touchAt(element, 1, 10), touchAt(element, 2, 390)]);
+    const appliedBefore = state.applied;
 
+    dispatchTouch(element, 'touchmove', [touchAt(element, 1, 10), touchAt(element, 2, 390)]);
+    await settleFrames();
+
+    // "Nothing moved" has to mean the gesture ran and correctly produced no
+    // movement — a zoom that never applied would satisfy the span check too.
+    expect(state.applied).toBe(appliedBefore);
     expect(spanOf(state.current)).toBeCloseTo(spanBefore, 6);
   });
 
-  it('still pinches normally after the interruption', () => {
+  it('still pinches normally after the interruption', async () => {
     const element = mountHost();
     const state = attach(element, { x: [0, 100], y: [0, 100] });
 
@@ -91,25 +105,66 @@ describe('attachWheelZoom pinch bookkeeping', () => {
 
     // Fingers apart by 2x zooms in, halving the visible span.
     dispatchTouch(element, 'touchmove', [touchAt(element, 1, 100), touchAt(element, 2, 300)]);
+    await settleFrames();
 
     expect(spanOf(state.current)).toBeCloseTo(spanBefore / 2, 6);
   });
 });
 
 describe('attachWheelZoom wheel deltas', () => {
-  it('zooms usefully for a line-mode wheel, as Firefox reports one', () => {
+  it('zooms usefully for a line-mode wheel, as Firefox reports one', async () => {
     const element = mountHost();
     const state = attach(element, { x: [0, 100], y: [0, 100] });
 
     element.dispatchEvent(
       new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: 200, clientY: 200, deltaMode: 1, deltaY: 3 })
     );
+    await settleFrames();
 
     // Read as pixels this would be a 0.3% change, which is no zoom at all.
     expect(spanOf(state.current)).toBeGreaterThan(102);
   });
 
-  it('does not let ctrl held over a real wheel jump the view', () => {
+  it('applies one zoom per frame however fast the wheel emits', async () => {
+    // A wheel outruns a frame by an order of magnitude, and each applied zoom
+    // is a plotly relayout over the whole scene: one per event queued
+    // relayouts behind the cursor on a large map.
+    const element = mountHost();
+    const state = attach(element, { x: [0, 100], y: [0, 100] });
+
+    for (let index = 0; index < 12; index++) {
+      element.dispatchEvent(
+        new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: 200, clientY: 200, deltaY: -100 })
+      );
+    }
+
+    expect(state.applied).toBe(0);
+
+    await settleFrames();
+
+    expect(state.applied).toBe(1);
+    // Coalesced, not dropped: twelve zoom-ins compose into one much larger
+    // step rather than collapsing to a single event's worth.
+    expect(spanOf(state.current)).toBeLessThan(50);
+  });
+
+  it('drops a queued zoom when the map goes away before the frame runs', async () => {
+    // The owning effect detaches and then purges the plotly div; a frame
+    // that survived the detach would relayout a purged container.
+    const element = mountHost();
+    const state = attach(element, { x: [0, 100], y: [0, 100] });
+
+    element.dispatchEvent(
+      new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: 200, clientY: 200, deltaY: -100 })
+    );
+    detach?.();
+    detach = null;
+    await settleFrames();
+
+    expect(state.applied).toBe(0);
+  });
+
+  it('does not let ctrl held over a real wheel jump the view', async () => {
     const element = mountHost();
     const state = attach(element, { x: [0, 100], y: [0, 100] });
 
@@ -123,7 +178,11 @@ describe('attachWheelZoom wheel deltas', () => {
         deltaY: 100,
       })
     );
+    await settleFrames();
 
+    // An unapplied zoom would also satisfy the bound below, so check the
+    // gesture actually landed before reading it.
+    expect(state.applied).toBe(1);
     // The trackpad-pinch gain on a mouse-sized delta would be ~2.7x.
     expect(spanOf(state.current)).toBeLessThan(125);
   });

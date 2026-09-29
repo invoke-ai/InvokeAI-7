@@ -1,5 +1,5 @@
 import type * as DndKitCoreModule from '@dnd-kit/core';
-import type { ProjectGraphState } from '@features/workflow/contracts';
+import type { InvocationTemplate, ProjectGraphState, WorkflowInvocationNode } from '@features/workflow/contracts';
 import type { WorkflowUiAdapter } from '@features/workflow/react';
 import type { ProjectGraphAction } from '@features/workflow/utility';
 
@@ -15,19 +15,81 @@ import { userEvent } from 'vitest/browser';
 
 import { formEdgeDroppableId } from './formBuilderDnd';
 import { FormBuilderTab } from './FormBuilderTab';
+import { LinearFormView } from './LinearFormView';
 import { PanelModeToggle } from './WorkflowLinearPanel';
+
+// Field controls name the project they render for; these harnesses hold one static project.
+const TEST_PROJECT_PORT = { getSnapshot: () => ({ id: 'project-1' }), subscribe: () => () => undefined };
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// The React Compiler auto-memoizes plain value computations, so a spy on a pure
-// helper a card renders through is not a reliable "did this render" probe — the
-// compiler can skip the call even when the component did run. Hooks can never be
-// skipped, so a passthrough spy on `useDroppable` is the reliable probe.
+// Probe renders through a passthrough hook spy; compiler memoization can skip pure helper calls independently of
+// component renders.
 vi.mock('@dnd-kit/core', async (importOriginal) => {
   const actual = await importOriginal<typeof DndKitCoreModule>();
 
   return { ...actual, useDroppable: vi.fn(actual.useDroppable) };
 });
+
+const entryInput = (
+  name: string,
+  title: string,
+  typeName: string,
+  required = true
+): InvocationTemplate['inputs'][string] => ({
+  default: undefined,
+  description: '',
+  exclusiveMaximum: null,
+  exclusiveMinimum: null,
+  fieldKind: 'input',
+  input: 'any',
+  maximum: null,
+  minimum: null,
+  multipleOf: null,
+  name,
+  options: null,
+  required,
+  title,
+  type: { batch: false, cardinality: 'SINGLE', name: typeName },
+  uiChoiceLabels: null,
+  uiComponent: null,
+  uiHidden: false,
+  uiModelBase: null,
+  uiModelFormat: null,
+  uiModelType: null,
+  uiOrder: null,
+});
+const entryTemplate: InvocationTemplate = {
+  category: 'test',
+  classification: 'stable',
+  description: '',
+  inputs: {
+    prompt: entryInput('prompt', 'Prompt', 'StringField'),
+    scale: entryInput('scale', 'Scale', 'FloatField', false),
+    sizes: {
+      ...entryInput('sizes', 'Sizes', 'IntegerField'),
+      minimum: 1,
+      type: { batch: false, cardinality: 'COLLECTION', name: 'IntegerField' },
+    },
+    steps: entryInput('steps', 'Steps', 'IntegerField'),
+    weight: entryInput('weight', 'Weight', 'FloatField'),
+  },
+  nodePack: 'invokeai',
+  outputType: 'test',
+  outputs: {},
+  tags: [],
+  title: 'Entry',
+  type: 'entry',
+  useCache: true,
+  version: '1.0.0',
+};
+
+// File-wide: every describe sees only the `entry` template as loaded; the builder fixtures expose no node fields.
+vi.mock('@features/workflow/react', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  useInvocationTemplatesSelector: (selector: (snapshot: unknown) => unknown) =>
+    selector({ error: null, status: 'loaded', templates: { entry: entryTemplate } }),
+}));
 
 describe('Workflow Linear panel mode toggle', () => {
   let host: HTMLDivElement;
@@ -93,12 +155,7 @@ describe('Workflow Linear panel mode toggle', () => {
   });
 });
 
-/**
- * Regression coverage for the native-DnD bug: a reparenting drop remounts the
- * card, so `dragend` (bound to the old node) never fired and every later drag
- * died. dnd-kit resolves in `onDragEnd` at the `DndContext` level, which fires
- * regardless of unmounts, so a second drag straight after must still work.
- */
+/** A second drag after reparenting verifies completion survives dragged-card remounts through DndContext ownership. */
 describe('Form builder drag and drop (dnd-kit)', () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -134,13 +191,8 @@ describe('Form builder drag and drop (dnd-kit)', () => {
     const adapter = useMemo(
       () =>
         ({
-          commands: {
-            bindLibraryWorkflow: () => undefined,
-            editGraph,
-            redo: () => undefined,
-            replace: () => undefined,
-            undo: () => undefined,
-          },
+          commands: { editGraph, redo: () => undefined, undo: () => undefined },
+          project: TEST_PROJECT_PORT,
           widgets: { open: () => undefined, patchValues: () => undefined },
         }) as unknown as WorkflowUiAdapter,
       [editGraph]
@@ -225,11 +277,7 @@ describe('Form builder drag and drop (dnd-kit)', () => {
     await interact(() => pointer('pointerup', handle.ownerDocument, x, y + 1));
   };
 
-  /**
-   * Keyboard drag: `Space` lifts, arrows step 25px toward the target, `Space`
-   * drops. Ends with a net-zero nudge — the keyboard analogue of `dragTo`'s
-   * settle move, for the same one-tick remeasure lag.
-   */
+  /** Keyboard drag uses Space/arrows/Space and a net-zero settle nudge for delayed measurement. */
   const dragToWithKeyboard = async (sourceTitle: string, targetCenterY: number): Promise<void> => {
     const handle = titleBarFor(sourceTitle);
     const startRect = handle.getBoundingClientRect();
@@ -250,8 +298,6 @@ describe('Form builder drag and drop (dnd-kit)', () => {
     await interact(() => key(handle, direction));
     await interact(() => key(handle, opposite));
 
-    // Space drops, resolving the move through the same `onDragEnd` ->
-    // `moveFormElementTo` path the pointer drag uses.
     await interact(() => key(handle, 'Space'));
   };
 
@@ -269,17 +315,12 @@ describe('Form builder drag and drop (dnd-kit)', () => {
 
     await dragTo('Heading', dropZoneRect.left + dropZoneRect.width / 2, dropZoneRect.top + dropZoneRect.height / 2);
 
-    // The container's card content now holds the heading card, and the
-    // empty-state hint is gone.
     const containerContent = cardContentFor('Container (column)');
 
     expect(containerContent.textContent).toContain('Heading');
     expect(containerContent.textContent).not.toContain('Empty container');
 
-    // Drag 2: THE REGRESSION ASSERTION. "Divider" (still at the root) drops
-    // onto the now-nested "Heading" card's lower edge. Under the old native
-    // DnD implementation, drag 1's reparent remount lost `dragend` and left
-    // `draggingElementId` stuck — this second drag would never start.
+    // Immediately drag again after reparenting to catch lost completion state from the remounted source.
     const headingCardRect = titleBarFor('Heading').parentElement!.getBoundingClientRect();
 
     await dragTo('Divider', headingCardRect.left + headingCardRect.width / 2, headingCardRect.bottom - 2);
@@ -296,17 +337,7 @@ describe('Form builder drag and drop (dnd-kit)', () => {
     expect(opacities).not.toContain('0.4');
   });
 
-  /**
-   * Regression coverage for the "keyboard drag" finding: the drag handle
-   * spreads dnd-kit's `attributes` (`role="button"`, `tabIndex=0`), which
-   * promises "press space to lift, arrows to move" — a promise only true
-   * once a `KeyboardSensor` is registered alongside the `PointerSensor`.
-   * There's no pointer during a keyboard drag, so `KeyboardSensor` moves the
-   * dragged card's tracked rect by a fixed 25px step per arrow press
-   * (dnd-kit's `defaultKeyboardCoordinateGetter`) and collision detection
-   * falls through to `rectIntersection` (`pointerWithin` needs real pointer
-   * coordinates, which a keyboard drag never has).
-   */
+  /** Exercise KeyboardSensor and rectangle collision fallback; keyboard drags have no pointer coordinates. */
   it('moves a form element into a container with the keyboard', async () => {
     await renderHarness();
 
@@ -326,16 +357,7 @@ describe('Form builder drag and drop (dnd-kit)', () => {
     expect(containerContent.textContent).not.toContain('Empty container');
   });
 
-  /**
-   * Coverage for the keyboard *edge* path specifically: the "into a
-   * container" case above never reaches `getFormDropEdge`'s card-center
-   * fallback (`handleDragMove` returns early for `into` targets before
-   * `referenceY` is even computed) — a keyboard drag has no
-   * `pointerCoordinates`, so this is the only path that exercises the
-   * fallback dnd-kit needs for a real "arrows move the card" keyboard drag.
-   * Moves "Divider" (root sibling, after "Heading") up onto the upper
-   * quarter of "Heading"'s card, landing 'above' it and reordering it first.
-   */
+  /** Test keyboard edge targeting separately from container drops to exercise the translated-card-center fallback. */
   it('reorders a form element above a sibling with the keyboard', async () => {
     await renderHarness();
 
@@ -355,16 +377,8 @@ describe('Form builder drag and drop (dnd-kit)', () => {
   });
 
   /**
-   * Perf isolation for `BuilderDropTargetContext`: `dropTarget` (per-move
-   * churn) lives apart from `BuilderDndContext`'s `activeElementId`/`form`
-   * (drag start/end only), and `BuilderElement` is memoized on props that
-   * don't change mid-drag — so a move that never targets "Divider" should
-   * never re-invoke its `BuilderCard`. Probed via the `useDroppable`
-   * passthrough spy (mocked at module scope above): `BuilderCard` calls it
-   * exactly once per render with `formEdgeDroppableId(element.id)`, and hook
-   * calls (unlike plain helper calls) can't be optimized away by the React
-   * Compiler, so a call carrying "Divider"'s edge-droppable id is direct,
-   * compiler-proof evidence its `BuilderCard` re-rendered.
+   * Count untouched card hook calls during pointer moves to verify drop-target context isolation despite compiler
+   * memoization.
    */
   it('does not re-render an unrelated card on a drag-move that only changes the drop target', async () => {
     const initialGraph = buildInitialGraph();
@@ -373,10 +387,7 @@ describe('Form builder drag and drop (dnd-kit)', () => {
 
     await renderHarness(initialGraph);
 
-    // The empty-container hint's rect, captured *before* the drag starts —
-    // once a drag is active this card's `canDrop` flips true and its own
-    // text changes from "Empty container..." to "Drop here", so the text
-    // selector below would no longer match if read mid-drag.
+    // Capture the empty hint's rect before drag changes its text to Drop here.
     const emptyHint = [...host.querySelectorAll<HTMLElement>('*')].find(
       (element) => element.textContent === 'Empty container — drag elements here'
     );
@@ -392,24 +403,14 @@ describe('Form builder drag and drop (dnd-kit)', () => {
     const startX = startRect.left + startRect.width / 2;
     const startY = startRect.top + startRect.height / 2;
 
-    // Arm the `PointerSensor` (>4px activation constraint), then settle onto
-    // the container's drop zone the same way `dragTo` does (a same-target
-    // no-op nudge — `MeasuringStrategy.Always`'s remeasure lands one tick
-    // after the move that triggered it, so a single move can still report a
-    // stale `over`). This establishes a real `into` `dropTarget`; only the
-    // moves *after* this point, which don't change the logical target, are
-    // under test.
+    // Activate the sensor and settle delayed measurement before testing moves within one logical target.
     await interact(() => pointer('pointerdown', handle, startX, startY));
     await interact(() => pointer('pointermove', handle.ownerDocument, startX + 8, startY));
     await interact(() => pointer('pointermove', handle.ownerDocument, midX, midY));
     await interact(() => pointer('pointermove', handle.ownerDocument, midX, midY + 1));
     vi.mocked(useDroppable).mockClear();
 
-    // Two more moves inside the same drop zone: `over` (and therefore the
-    // *logical* `dropTarget`) doesn't change, but `handleDragMove` still
-    // calls `setDropTarget` with a fresh object every time `onDragMove`
-    // fires — that per-frame churn, not touching "Divider" at all, is
-    // exactly what's under test.
+    // Move within the same target to exercise per-frame state churn without changing the intended drop.
     await interact(() => pointer('pointermove', handle.ownerDocument, midX, midY + 2));
     await interact(() => pointer('pointermove', handle.ownerDocument, midX, midY + 3));
 
@@ -421,5 +422,219 @@ describe('Form builder drag and drop (dnd-kit)', () => {
 
     // End the drag cleanly so it doesn't leak into other tests.
     await interact(() => pointer('pointerup', handle.ownerDocument, midX, midY + 3));
+  });
+});
+
+describe('Linear form field entry', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement('div');
+    host.style.width = '320px';
+    document.body.append(host);
+    root = createRoot(host);
+  });
+
+  afterEach(async () => {
+    await act(() => root.unmount());
+    host.remove();
+  });
+
+  const entryNode: WorkflowInvocationNode = {
+    data: {
+      inputs: {
+        prompt: { label: '', name: 'prompt', value: 'hello world' },
+        scale: { label: '', name: 'scale', value: 1.5 },
+        sizes: { label: '', name: 'sizes', value: [4, 8] },
+        steps: { label: '', name: 'steps', value: 20 },
+        weight: { label: '', name: 'weight', value: 0.5 },
+      },
+      isIntermediate: true,
+      isOpen: true,
+      label: '',
+      nodePack: 'invokeai',
+      notes: '',
+      type: 'entry',
+      useCache: true,
+      version: '1.0.0',
+    },
+    id: 'entry-node',
+    position: { x: 0, y: 0 },
+    type: 'invocation',
+  };
+
+  /** The entry node with every field exposed on the form. */
+  const buildGraph = (): ProjectGraphState => {
+    let doc = projectGraphReducer(createProjectGraph('linear-entry-test'), { node: entryNode, type: 'addNode' });
+
+    for (const fieldName of Object.keys(entryTemplate.inputs)) {
+      doc = projectGraphReducer(doc, { fieldIdentifier: { fieldName, nodeId: entryNode.id }, type: 'exposeField' });
+    }
+
+    return doc;
+  };
+
+  const renderForm = async () => {
+    let latest = buildGraph();
+    const Harness = () => {
+      const [projectGraph, setProjectGraph] = useState(latest);
+      const editGraph = useCallback((action: ProjectGraphAction) => {
+        setProjectGraph((current) => {
+          latest = projectGraphReducer(current, action);
+          return latest;
+        });
+      }, []);
+      const adapter = useMemo(
+        () =>
+          ({
+            commands: { editGraph, redo: vi.fn(), undo: vi.fn() },
+            project: TEST_PROJECT_PORT,
+            widgets: { open: vi.fn(), patchValues: vi.fn() },
+          }) as unknown as WorkflowUiAdapter,
+        [editGraph]
+      );
+
+      return (
+        <WorkflowUiProvider adapter={adapter}>
+          <LinearFormView projectGraph={projectGraph} />
+        </WorkflowUiProvider>
+      );
+    };
+
+    await act(() => {
+      root.render(
+        <ChakraProvider value={system}>
+          <Harness />
+        </ChakraProvider>
+      );
+    });
+
+    const field = (label: string) => host.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+    const value = (name: string) => {
+      const node = latest.nodes.find((candidate) => candidate.id === entryNode.id);
+      return node?.type === 'invocation' ? node.data.inputs[name]?.value : undefined;
+    };
+    const error = (input: HTMLInputElement) =>
+      input.closest('[data-scope="field"][data-part="root"]')?.querySelector('[data-part="error-text"]')?.textContent ??
+      null;
+
+    return { error, field, value };
+  };
+  const focusAtEnd = (input: HTMLInputElement) =>
+    act(async () => {
+      await userEvent.click(input);
+      await userEvent.keyboard('{End}');
+    });
+  const keys = (sequence: string) =>
+    act(async () => {
+      await userEvent.keyboard(sequence);
+    });
+
+  it('keeps the caret while editing an exposed text field through the project graph', async () => {
+    const { error, field, value } = await renderForm();
+    const prompt = field('Prompt');
+
+    await focusAtEnd(prompt);
+    await keys('{Home}{ArrowRight}{ArrowRight}XYZ');
+    expect(prompt.value).toBe('heXYZllo world');
+    expect([prompt.selectionStart, prompt.selectionEnd]).toEqual([5, 5]);
+    expect(value('prompt')).toBe('heXYZllo world');
+    expect(field('Prompt')).toBe(prompt);
+
+    await keys('{Control>}a{/Control}{Backspace}');
+    expect(prompt.value).toBe('');
+    expect(value('prompt')).toBe('');
+    expect(document.activeElement).toBe(prompt);
+    expect(error(prompt)).toBeNull();
+  });
+
+  it('commits numeric drafts as typed and reports required, invalid, and optional-empty states', async () => {
+    const { error, field, value } = await renderForm();
+    const weight = field('Weight');
+
+    await focusAtEnd(weight);
+    await keys('0');
+    expect(weight.value).toBe('0.50');
+    expect(value('weight')).toBe(0.5);
+    await act(() => weight.blur());
+    expect(weight.value).toBe('0.5');
+
+    await focusAtEnd(weight);
+    await keys('{Control>}a{/Control}{Backspace}');
+    expect(weight.value).toBe('');
+    expect(value('weight')).toBeUndefined();
+    expect(document.activeElement).toBe(weight);
+    expect(error(weight)).toBe('Required value.');
+
+    await keys('-');
+    await keys('2');
+    expect(weight.value).toBe('-2');
+    expect(value('weight')).toBe(-2);
+    expect(error(weight)).toBeNull();
+
+    const steps = field('Steps');
+
+    await focusAtEnd(steps);
+    await keys('.5');
+    expect(steps.value).toBe('20.5');
+    expect(value('steps')).toBe(20.5);
+    expect(steps.getAttribute('aria-invalid')).toBe('true');
+    expect(error(steps)).toBe('Invalid value.');
+    await keys('{Backspace}{Backspace}');
+    expect(value('steps')).toBe(20);
+    expect(error(steps)).toBeNull();
+
+    const scale = field('Scale');
+
+    await focusAtEnd(scale);
+    await keys('{Control>}a{/Control}{Delete}');
+    expect(scale.value).toBe('');
+    expect(value('scale')).toBeUndefined();
+    expect(error(scale)).toBeNull();
+    await act(() => scale.blur());
+    expect(scale.value).toBe('');
+    expect(scale.getAttribute('aria-invalid')).toBeNull();
+  });
+
+  it('edits an exposed scalar list row by row and reports the first empty entry', async () => {
+    const { value } = await renderForm();
+    // Raw i18n keys: every list row shares one accessible name, so rows are found by position.
+    const listRow = (index: number) =>
+      host.querySelectorAll<HTMLInputElement>('input[aria-label="nodes.collectionItemLabel"]')[index - 1]!;
+    // Each row scopes its own Field.Root; the reason text belongs to the host field around the list.
+    const listError = (input: HTMLInputElement) =>
+      input
+        .closest('[data-scope="field"][data-part="root"]')
+        ?.parentElement?.closest('[data-scope="field"][data-part="root"]')
+        ?.querySelector('[data-part="error-text"]')?.textContent ?? null;
+
+    expect(listRow(2).value).toBe('8');
+
+    const addItem = Array.from(host.querySelectorAll('button')).find(
+      (button) => button.textContent === 'nodes.addItem'
+    )!;
+
+    await act(async () => {
+      await userEvent.click(addItem);
+    });
+    expect(value('sizes')).toEqual([4, 8, 1]);
+
+    const third = listRow(3);
+
+    await focusAtEnd(third);
+    await keys('6');
+    expect(third.value).toBe('16');
+    expect(value('sizes')).toEqual([4, 8, 16]);
+    expect(listError(third)).toBeNull();
+
+    await keys('{Control>}a{/Control}{Backspace}');
+    expect(value('sizes')).toEqual([4, 8, null]);
+    expect(third.getAttribute('aria-invalid')).toBe('true');
+    expect(listError(third)).toBe('Item 3 is empty.');
+    // The host field is invalid as a whole, yet only the offending row carries the invalid state.
+    expect(listRow(1).getAttribute('aria-invalid')).toBeNull();
+    expect(listRow(1).getAttribute('data-invalid')).toBeNull();
+    expect(listRow(2).getAttribute('aria-invalid')).toBeNull();
   });
 });

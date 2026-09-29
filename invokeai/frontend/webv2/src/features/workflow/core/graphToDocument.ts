@@ -3,11 +3,7 @@ import type { InvocationTemplates, ProjectGraphState, WorkflowEdge, WorkflowInvo
 import { buildInvocationNode, createProjectGraph, createWorkflowId } from './document';
 import { getLayeredPositions } from './graphLayout';
 
-/**
- * Structural shape of the read-only preview graph (Task 1's contract graph,
- * as rendered by `GraphPreviewFlow.tsx`). Kept structural rather than
- * importing the ui contract so this module stays a pure `core` dependency.
- */
+/** Use a structural preview shape so core does not import UI contracts. */
 export interface PreviewGraphLike {
   label?: string;
   nodes: Array<{ id: string; type: string; inputs: Record<string, unknown> }>;
@@ -33,9 +29,7 @@ export const previewGraphToDocument = (
 ): PreviewGraphDocumentResult => {
   const skippedNodeTypes: string[] = [];
   const seenSkippedTypes = new Set<string>();
-  // Positions are derived from the full graph (skipped nodes still occupy a
-  // depth/row), matching Task 6's documented behavior rather than inventing
-  // a hint mechanism to exclude them.
+  // Lay out the full graph, including positions reserved by skipped nodes.
   const positions = getLayeredPositions(
     graph.nodes.map((node) => ({ id: node.id })),
     graph.edges.map((edge) => ({ sourceNodeId: edge.sourceNodeId, targetNodeId: edge.targetNodeId }))

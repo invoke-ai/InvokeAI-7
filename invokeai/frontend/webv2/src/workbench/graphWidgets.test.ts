@@ -31,9 +31,7 @@ describe('graph widget sources', () => {
     expect(getWidgetTypeIdForSourceId('upscale')).toBe('upscale');
   });
 
-  // Every source stays pickable. Hiding the ones the layout does not happen to
-  // be showing turns the menu into a dead end: the user can see that Workflow
-  // exists but has no way to route to it without rearranging the dock first.
+  // Keep unplaced sources selectable so switching sources does not require manual layout changes.
   it('offers every graph widget as a source', () => {
     expect(graphWidgetSources.map((source) => source.sourceId)).toEqual([
       'generate',
@@ -51,15 +49,11 @@ describe('graph widget sources', () => {
     expect([...getVisibleWidgetTypeIds(project)]).toEqual(expect.arrayContaining(['generate', 'canvas']));
     expect(getVisibleWidgetTypeIds(project).has('workflow')).toBe(false);
 
-    // ...while Upscale is still placed second in the left rail, so routing to
-    // it needs no new placement, only revealing. Workflow belongs to Automate.
     expect([...getPlacedWidgetTypeIds(project)]).toEqual(expect.arrayContaining(['generate', 'canvas', 'upscale']));
     expect(getPlacedWidgetTypeIds(project).has('workflow')).toBe(false);
   });
 
   it('counts a floated widget as both visible and placed', () => {
-    // A widget in a window is on screen; reading only the rails would drop the
-    // first graph-bearing widget that floats out of the invoke-source list.
     let state = workbenchReducer(createInitialWorkbenchState(), { presetId: 'edit', type: 'applyPreset' });
     state = workbenchReducer(state, { instanceId: 'upscale', type: 'floatWidget' });
     const project = state.projects.find((candidate) => candidate.id === state.activeProjectId)!;

@@ -7,7 +7,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, expect, it, vi } from 'vitest';
-import { page } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
 
 import { SettingsDialogHost } from './SettingsDialogHost';
 import { openWorkbenchSettings, settingsDialogStore } from './settingsDialogStore';
@@ -37,7 +37,8 @@ vi.mock('./dialogResource', async () => {
         default: () => (
           <Dialog.Body>
             <Dialog.Title>Settings: Behavior</Dialog.Title>
-            <input aria-label="Search settings" />
+            <input aria-label="Search settings" data-settings-search />
+            <button type="button">Reset all</button>
           </Dialog.Body>
         ),
       }));
@@ -106,8 +107,12 @@ it('keeps a named modal through loading, failure, retry, and closing before rest
   await expect.element(page.getByRole('dialog', { name: 'Settings: Behavior', exact: true })).toBeVisible();
   await expect.element(page.getByRole('alert')).not.toBeInTheDocument();
   expect(isHotkeyModalLayerActive()).toBe(true);
-  await page.getByRole('textbox', { name: 'Search settings', exact: true }).click();
+  // `/` from a control inside the dialog jumps to search; inside the search it types.
+  await page.getByRole('button', { name: 'Reset all', exact: true }).click();
+  await userEvent.keyboard('/');
   await expect.element(page.getByRole('textbox', { name: 'Search settings', exact: true })).toHaveFocus();
+  await userEvent.keyboard('/');
+  await expect.element(page.getByRole('textbox', { name: 'Search settings', exact: true })).toHaveValue('/');
   await act(() =>
     document.querySelector<HTMLButtonElement>('[data-scope="dialog"][data-part="close-trigger"]')!.click()
   );

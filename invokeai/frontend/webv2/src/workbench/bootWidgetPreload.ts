@@ -5,17 +5,8 @@ import { getLayoutWidgetTypeIds } from './layoutWidgetSet';
 import { getWidgetHosts, warmWidgets } from './widgetRegistry';
 
 /**
- * The widget implementations a boot will render are only knowable for certain
- * after the project has hydrated from the backend — but that hydration fetch
- * is exactly the window the network sits idle. This hint records the active
- * layout's widget set so the next boot can start those chunk downloads in
- * parallel with hydration instead of after it.
- *
- * Dedicated hint key rather than the workbench snapshot for the same reason as
- * the theme hint: the snapshot is per-user on multi-user backends, and a
- * preload is harmless when the signed-in user turns out to differ — unknown or
- * disabled type ids are ignored, and a stale set merely warms chunks the boot
- * would have fetched moments later.
+ * Remember widget types in a separate boot hint so chunk downloads overlap hydration. Unknown or disabled types
+ * are ignored; stale or cross-account hints only preload unused chunks.
  */
 const BOOT_WIDGET_HINT_STORAGE_KEY = 'invokeai:v7:webv2:boot-widgets';
 
@@ -53,12 +44,8 @@ export const writeBootWidgetHint = (typeIds: readonly WidgetTypeId[]): void => {
 };
 
 /**
- * Starts the widget chunk downloads a boot will need, called when the editor
- * route mounts — while project hydration is still in flight. Host widgets are
- * known statically from the registry; panel widgets come from the last boot's
- * hint, falling back to the default layout for a first run. Loads are cached
- * by the implementation resource, so a wrong guess costs one idle download and
- * a right one lets the shell mount without ever suspending.
+ * Preload registry hosts and the hinted panel types during hydration, falling back to the default layout. The
+ * implementation resource caches loads.
  */
 export const preloadBootWidgets = (): void => {
   for (const widget of getWidgetHosts()) {

@@ -1,16 +1,6 @@
 /**
- * Pure geometry for the bbox (generation-frame) tool: handle layout, screen-space
- * hit-testing, and resize/move math.
- *
- * The bbox is an axis-aligned document-space rectangle. Its eight resize handles
- * (four corners + four edge midpoints) are hit-tested in SCREEN space so their
- * grab areas stay a constant pixel size regardless of zoom — callers project the
- * bbox to screen coordinates first. Resize math runs in DOCUMENT space: the edge
- * opposite the grabbed handle stays fixed (or the center, under `symmetric`),
- * the moved edge(s) follow a pointer delta, then snapping, min-size clamping,
- * and (optionally) an aspect constraint are applied.
- *
- * Zero React, zero import-time side effects.
+ * Bbox handles hit-test in screen space for fixed grab sizes; move/resize math uses document space. Keep opposite
+ * edges, or symmetric center, anchored while applying snapping, minimum sizes and aspect constraints.
  */
 
 import type { Rect, Vec2 } from '@workbench/canvas-engine/types';
@@ -78,11 +68,7 @@ export const bboxHandleAt = (
   return null;
 };
 
-/**
- * What a screen-space `point` targets on the bbox: a resize handle (grab area
- * first), the interior (`'move'`), or `null` (outside — the bbox is never
- * deselected).
- */
+/** Hit-test handles before interior move; outside returns null without deselecting bbox. */
 export const bboxTargetAt = (
   screenRect: Rect,
   point: Vec2,
@@ -122,11 +108,7 @@ export interface ResizeBboxParams {
   constrain: boolean;
   /** Target width / height ratio, used when `constrain`. */
   ratio: number;
-  /**
-   * Mirror the drag across the frame's center (ctrl/⌘): the opposite edge moves
-   * by the same amount in the opposite direction and the center stays put,
-   * instead of the opposite edge staying fixed.
-   */
+  /** Ctrl/Command mirrors edge movement across a fixed center. */
   symmetric: boolean;
 }
 
@@ -367,16 +349,8 @@ const pixelAlignResize = (rect: Rect, p: ResizeBboxParams): Rect => {
 };
 
 /**
- * Resizes `start` for a handle drag. Applies (in order) the delta to the moved
- * edge(s), grid snapping (unless bypassed), min-size clamping, and — when
- * `constrain` — an aspect-ratio constraint anchored at the opposite corner
- * (corners) or the center (edges).
- *
- * Under `symmetric` the frame mirrors across its center instead: both sides move
- * by the drag, so the frame grows/shrinks twice as fast and the center stays
- * put. That is exactly the anchored resize of a doubled delta re-centered on the
- * start center — the grabbed edge still lands under the pointer, and snapping,
- * min-size clamping and the aspect constraint all keep applying unchanged.
+ * Apply drag delta, grid snap, minimum size and optional aspect constraint. Symmetric resize doubles the anchored
+ * delta then recenters, preserving pointer alignment and the same constraints.
  */
 export const resizeBbox = (p: ResizeBboxParams): Rect => {
   const resized = p.symmetric

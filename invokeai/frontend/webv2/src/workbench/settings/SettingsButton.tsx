@@ -8,9 +8,8 @@ import { openWorkbenchSettings } from './settingsDialogStore';
 const handleOpen = () => openWorkbenchSettings();
 
 /**
- * The Launchpad's settings entry point, kept deliberately thin. The workbench
- * shell opens settings from its app menu instead and mounts
- * {@link SettingsDialogHost} on its own.
+ * Launchpad settings entry; the workbench opens settings from its app menu and hosts {@link SettingsDialogHost}
+ * separately.
  */
 export const SettingsButton = () => {
   return (

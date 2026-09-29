@@ -1,14 +1,3 @@
-/**
- * Source rasterizer dispatch.
- *
- * Given a layer `source`, produces a {@link RasterSurface} holding its
- * rasterized pixels. `image`, `paint`, `shape`, `gradient`, and `text` are
- * implemented. A `polygon` shape (no points-editing UX yet) throws — the
- * dispatch only routes parametric (non-polygon).
- *
- * Zero React, zero import-time side effects.
- */
-
 import type { CanvasLayerSourceContract } from '@workbench/canvas-engine/contracts';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 
@@ -29,10 +18,6 @@ export { rasterizePaintSource } from './paintRasterizer';
 export { rasterizeShapeSource } from './shapeRasterizer';
 export { rasterizeTextSource, textFontString, textFontVariationSettings } from './textRasterizer';
 
-/**
- * Rasterizes any supported layer source into a surface. Throws only for the
- * deferred `polygon` shape kind (no rasterizer yet).
- */
 export const rasterizeSource = (
   source: CanvasLayerSourceContract,
   deps: RasterizeDeps,

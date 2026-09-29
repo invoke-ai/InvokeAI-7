@@ -15,37 +15,19 @@ import { getApiErrorMessage } from '@platform/transport/http';
 
 import { getArchitectureCapabilities } from './architectureCapabilitiesApi';
 
-/**
- * Load state for the architecture capability table.
- *
- * The rows themselves live in the core registry, not in this snapshot: generation policy is read
- * from synchronous accessors all over the app, including from graph builders at enqueue time, so
- * there must be exactly one place holding the table. This store owns only *whether* it is there.
- *
- * Fetched once. The table is static per backend build -- it is derived from
- * `invokeai/backend/architectures/defs/`, not from installed models -- so nothing revalidates it.
- */
+/** Fetch status is separate from authoritative core rows; the table is static per backend build. */
 
 export interface ArchitectureCapabilitiesSnapshot {
   status: 'idle' | 'loading' | 'loaded' | 'error';
   error: string | null;
-  /**
-   * Identity of the table in the core registry; `0` while there is none.
-   *
-   * This is the whole subscription contract for the many readers that call the synchronous policy
-   * accessors during render or at enqueue time: subscribe to this, and re-read when it changes.
-   * `status` cannot serve that purpose -- it describes this store's request, not the registry, and
-   * a reader gated on it would miss a table seeded by anything but a fetch.
-   */
+  /** Revision zero means absent; observe registry identity rather than request status. */
   revision: number;
 }
 
 const EMPTY_SNAPSHOT: ArchitectureCapabilitiesSnapshot = { error: null, revision: 0, status: 'idle' };
 const store = createExternalStore<ArchitectureCapabilitiesSnapshot>(EMPTY_SNAPSHOT);
 
-// The registry is the authority; this store publishes it. Mirroring here rather than alongside each
-// write means every path that fills or drops the table reaches subscribers, including tests that
-// seed it directly.
+// Publish from registry changes so direct seeds and clears also notify subscribers.
 onArchitectureCapabilitiesChanged(() => store.patchSnapshot({ revision: getArchitectureCapabilitiesRevision() }));
 
 const refreshFlight = createTrailingSingleFlight();
@@ -56,16 +38,11 @@ let isRequested = false;
 registerAccountOwnedResource({
   clear: () => {
     refreshFlight.reset();
-    // The registry is module state outside this store, so clearing the snapshot alone would leave
-    // the previous account's table readable behind a status that says nothing is loaded. Dropped
-    // before the snapshot, so no subscriber is ever woken to read the old table at revision 0.
+    // Clear the registry before publishing revision zero to prevent old-account reads.
     resetArchitectureCapabilities();
     store.setSnapshot(EMPTY_SNAPSHOT);
 
-    // `activate` rotates the scope *before* clearing, so the incoming account is already current
-    // here. Re-arm rather than wait to be asked again: the app kicks the fetch once, at boot, from
-    // a mount effect that does not re-run, and the long-lived subscribers below never re-subscribe.
-    // A boot-time load that raced sign-in was aborted by that rotation; this is what replaces it.
+    // Refetch after account rotation; the one-time boot mount cannot replace aborted work.
     if (isRequested && captureAccountScope().accountId !== null) {
       void refreshArchitectureCapabilities();
     }
@@ -99,10 +76,7 @@ export const refreshArchitectureCapabilities = (): Promise<void> =>
       });
   });
 
-/**
- * Fetch on first use or retry after an error, so one failed load never sticks. Settles when the load
- * it started or joined does; it never rejects -- the outcome is the snapshot's status.
- */
+/** This promise never rejects; inspect snapshot status after the joined or started load settles. */
 export const ensureArchitectureCapabilitiesLoaded = (): Promise<void> => {
   isRequested = true;
 

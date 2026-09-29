@@ -114,8 +114,7 @@ describe('SeedInput', () => {
   });
 
   it('shows the rolled seed under a host-supplied id too', async () => {
-    // A host id must reach the element through zag's id map; overriding the attribute
-    // would leave the DOM value stale after an external change.
+    // Host IDs must use Zag's ID map or external changes leave the DOM value stale.
     const onCommit = await renderHost('fixed', 42, 'node-1-seed');
 
     expect(seedInput()?.id).toBe('node-1-seed');
@@ -146,8 +145,7 @@ describe('SeedInput', () => {
     const onCommit = await renderHost('fixed', 42);
     const input = seedInput() as HTMLInputElement;
 
-    // A pasted fraction arrives whole; a typed one is rounded at every keystroke, so the
-    // decimal point never survives either way.
+    // Paste fractions as a whole; per-keystroke rounding removes a typed decimal point.
     await act(async () => {
       await userEvent.fill(input, '1.5');
       await new Promise<void>((resolve) => {

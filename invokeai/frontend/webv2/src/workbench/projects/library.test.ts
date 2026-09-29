@@ -7,12 +7,6 @@ import type * as libraryModule from './library';
 import type { ProjectPushOutcome } from './projectFlush';
 import type * as syncStoreModule from './syncStore';
 
-/**
- * The project library store: summaries normalized at the boundary, sorted by
- * recency, and the explicit mutations (delete, rename, duplicate) that are
- * the only paths off the server.
- */
-
 const api = vi.hoisted(() => ({
   createProject: vi.fn(),
   deleteProject: vi.fn(),
@@ -241,11 +235,7 @@ describe('library mutations', () => {
     expect(library.getProjectLibrary().summaries[0]?.name).toBe('New name');
   });
 
-  /**
-   * The invariant: a project the workbench holds is mutated through the sync engine, everything
-   * else over HTTP. A library PUT beside an open project's revision chain used to fork it into a
-   * conflict copy, and would now rename its board from outside the transaction that owns both.
-   */
+  /** Route open-project mutations through sync ownership; use HTTP for closed projects. */
   it('renames an open project through the editor rather than over HTTP', async () => {
     api.listProjects.mockResolvedValue([summaryDto('open', 'Old name', '2026-06-10 10:00:00.000')]);
     await library.refreshProjectLibrary();
@@ -260,12 +250,7 @@ describe('library mutations', () => {
     expect(library.getProjectLibrary().summaries[0]?.name).toBe('New name');
   });
 
-  /**
-   * The DELETE goes through the sync engine's own queue, not beside it. Marking the project stops a
-   * save that has not begun, but a PUT already on the wire is past every check the engine has — it
-   * returns 404 once the DELETE commits, and the engine answers a 404 by forking the local document
-   * into a *new* server project. Queueing is what makes that unreachable rather than unlikely.
-   */
+  /** Serialize deletion after in-flight saves; marking cannot stop an already-sent PUT. */
   it('deletes an open project through the sync engine, then closes the tab', async () => {
     const { calls } = openProject('open');
 
@@ -308,10 +293,7 @@ describe('library mutations', () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  /**
-   * A project left marked deleted never autosaves again for the rest of the session, and nothing
-   * says so. Unmarking belongs with the mark, inside the handle, rather than in each caller's catch.
-   */
+  /** Unmark failed deletes only with mark ownership so autosave resumes safely. */
   it('surfaces a failed deletion of an open project to its caller', async () => {
     const { calls, handle } = openProject('open');
 
@@ -373,11 +355,7 @@ describe('library mutations', () => {
     expect(calls).toEqual(['flush', 'get']);
   });
 
-  /**
-   * The GET below returns the last *acknowledged* document, which is exactly what the flush exists
-   * to move past. A flush that resolved without landing therefore reads as success and copies stale
-   * bytes, under a clean toast — so an unacknowledged push has to end the operation instead.
-   */
+  /** An unacknowledged flush must abort duplication rather than copy stale server bytes. */
   it('refuses to duplicate a project whose flush never reached the server', async () => {
     const { calls, handle } = openProject('source');
 
@@ -423,8 +401,7 @@ describe('library mutations', () => {
 
     const duplicated = await library.duplicateLibraryProject('source');
 
-    // The board is enumerated before anything is created: a copy whose board came back silently
-    // empty would look like a faithful duplication of a project that had produced nothing.
+    // Enumerate the board successfully before creating copy resources.
     expect(api.getProjectBoardSnapshot).toHaveBeenCalledWith('source', expect.any(AbortSignal));
     expect(duplication.duplicateProjectRecord.mock.calls[0]?.[0]).toMatchObject({
       boardItems: [{ name: 'on-board.png' }],

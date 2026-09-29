@@ -33,6 +33,7 @@ from invokeai.app.invocations.fields import (
 from invokeai.app.invocations.model import MiniMaxH3TransformerField
 from invokeai.app.services.session_processor.session_processor_common import CanceledException
 from invokeai.app.services.shared.invocation_context import InvocationContext
+from invokeai.backend.minimax_h3.adaln_overlay import MiniMaxH3AdaLNOverlay, apply_minimax_h3_adaln_overlay
 from invokeai.backend.minimax_h3.denoise import denoise
 from invokeai.backend.minimax_h3.packing import (
     MINIMAX_H3_CANVAS_MULTIPLE,
@@ -63,8 +64,9 @@ from invokeai.backend.minimax_h3.sampling import (
 from invokeai.backend.minimax_h3.taehv_decoder import TAEH3_PREVIEW_MODEL_URL, TAEH3Decoder
 from invokeai.backend.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from invokeai.backend.minimax_h3.transformer_minimax_h3_pruned import MiniMaxH3PrunedTransformer3DModel
+from invokeai.backend.model_manager.configs.main import Main_Checkpoint_MiniMaxH3_Config
 from invokeai.backend.model_manager.load.load_base import LoadedModelWithoutConfig
-from invokeai.backend.model_manager.taxonomy import BaseModelType
+from invokeai.backend.model_manager.taxonomy import AnyModel, BaseModelType
 from invokeai.backend.patches.layer_patcher import LayerPatcher, PatchSpec
 from invokeai.backend.patches.layers.lora_layer import LoRALayer
 from invokeai.backend.patches.lora_conversions.minimax_h3_lora_constants import (
@@ -74,10 +76,7 @@ from invokeai.backend.patches.lora_conversions.minimax_h3_lora_conversion_utils 
     is_minimax_h3_adaln_layer_path,
 )
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
-from invokeai.backend.quantization.int8_convrot import (
-    peak_int8_dequant_transient_bytes,
-    requires_sidecar_patching,
-)
+from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes, requires_sidecar_patching
 from invokeai.backend.stable_diffusion.diffusers_pipeline import PipelineIntermediateState
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import MiniMaxH3ConditioningInfo
 from invokeai.backend.util.devices import TorchDevice
@@ -477,7 +476,11 @@ class MiniMaxH3DenoiseInvocation(BaseInvocation):
         # Added to the activation estimate rather than compared against it: the transient is alive
         # inside the same forward. Zero on a bf16 build. Read from the unlocked model, before the
         # VRAM lock the reservation applies to.
-        estimated_working_memory += peak_int8_dequant_transient_bytes(transformer_info.model, torch.bfloat16)
+        estimated_working_memory += peak_dequant_transient_bytes(transformer_info.model, torch.bfloat16)
+
+        # The hybrid AdaLN overlay (RAM cache, AdaLN tensors only) is materialized after the
+        # transformer's RAM load for the same reason as the LoRA patches below.
+        adaln_overlay = self._materialize_adaln_overlay(context, transformer_info.model)
 
         # LoRA patches are materialized (RAM cache) before any VRAM locks. On the AdaLN-pruned
         # transformer the AdaLN layers cannot be weight patches (their 2688-dim input space was
@@ -528,10 +531,22 @@ class MiniMaxH3DenoiseInvocation(BaseInvocation):
                 assert isinstance(grid_model, MiniMaxH3SiluTembGrid)
                 silu_temb_grid = grid_model.grid
 
+            # Pinned in RAM (never moved as a whole): each selected tensor is copied to its
+            # target parameter's device when the overlay is applied.
+            overlay_params: dict[str, torch.Tensor] | None = None
+            if adaln_overlay is not None:
+                overlay_info, overlay_params = adaln_overlay
+                stack.enter_context(overlay_info.model_in_ram())
+
             (cached_weights, transformer) = stack.enter_context(
                 transformer_info.model_on_device(working_mem_bytes=estimated_working_memory)
             )
             assert isinstance(transformer, MiniMaxH3Transformer3DModel)
+
+            if overlay_params is not None:
+                # Entered before the LoRA patches: LoRA deltas then land on the hybrid weights, and
+                # on exit they unwind first, leaving the overlay to restore the base tensors last.
+                stack.enter_context(apply_minimax_h3_adaln_overlay(transformer, overlay_params, cached_weights))
 
             if lora_patch_specs or adaln_patches:
                 # Quantized (int8-convrot) layers cannot take direct weight patches; route every
@@ -595,6 +610,42 @@ class MiniMaxH3DenoiseInvocation(BaseInvocation):
             height=self.height,
             num_frames=num_frames,
         )
+
+    def _materialize_adaln_overlay(
+        self, context: InvocationContext, transformer: AnyModel
+    ) -> tuple[LoadedModelWithoutConfig, dict[str, torch.Tensor]] | None:
+        """Load the hybrid AdaLN overlay's selected tensors (RAM cache) for ``transformer``.
+
+        Returns ``(overlay_info, parameter path -> tensor)``, or ``None`` when the transformer
+        carries no overlay. The loader checks the selection against the overlay file's real block
+        count; the node validates the range against the released 50-block layout only.
+        """
+        spec = self.transformer.adaln_overlay
+        if spec is None:
+            return None
+        if not context.models.exists(spec.overlay.key):
+            raise ValueError(f"Unknown AdaLN overlay model: {spec.overlay.key}")
+        # Only the resolved config is authoritative (the field is graph data); the overlay is read
+        # straight from the file, so anything but an H3 single-file transformer is refused here.
+        overlay_config = context.models.get_config(spec.overlay.key)
+        if not isinstance(overlay_config, Main_Checkpoint_MiniMaxH3_Config):
+            raise ValueError(
+                f"AdaLN overlay model '{spec.overlay.key}' is not a MiniMax H3 single-file transformer checkpoint."
+            )
+        overlay_info = context.models.load_local_model(
+            MiniMaxH3AdaLNOverlay.selection_path(
+                context.models.get_absolute_path(overlay_config),
+                spec.start_block,
+                spec.end_block,
+                spec.include_final_layer,
+            ),
+            MiniMaxH3AdaLNOverlay.load_model,
+        )
+        overlay = overlay_info.model
+        if not isinstance(overlay, MiniMaxH3AdaLNOverlay):
+            raise TypeError(f"Expected MiniMaxH3AdaLNOverlay for '{spec.overlay.key}', got {type(overlay).__name__}.")
+        # The pruned transformer's curve table is the basis its AdaLN coefficients are expressed in.
+        return overlay_info, overlay.tensors_for(getattr(transformer, "adaln_t_table", None))
 
     def _materialize_lora_patches(self, context: InvocationContext) -> list[PatchSpec]:
         """Load every LoRA on the transformer field into (patch, weight, cache-pin) specs."""

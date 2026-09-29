@@ -27,9 +27,7 @@ import { useTranslation } from 'react-i18next';
 
 /** One value per line: the same shape the user is editing a variant in. */
 const toValuesText = (values: string[]): string => values.join('\n');
-// Normalized on the way in, so what is stored is what an export writes and a
-// re-import reads back. A stray blank line used to survive into the catalog and
-// then vanish on the next round trip.
+// Normalize ingress so export and reimport preserve values.
 const fromValuesText = (text: string): string[] => normalizeWildcardValues(text.split('\n'));
 
 const VALUES_ERROR_KEY = {
@@ -70,16 +68,13 @@ export const WildcardsPanel = ({
     () => groupWildcardsByPrefix(filterWildcards(catalog.wildcards, searchTerm)),
     [catalog.wildcards, searchTerm]
   );
-  // Renaming to your own current name is not a clash, so the wildcard being
-  // edited is excluded from the taken-names set.
+  // Exclude the current wildcard from rename collision checks.
   const nameError = draft
     ? getWildcardNameError(draft.name, new Set(catalog.wildcards.filter((w) => w.id !== draft.id).map((w) => w.name)))
     : null;
-  // Pre-flighted here as well as on the import path, which is where these bounds
-  // used to live — the editor discovered them as a raw error from the server.
+  // Keep editor and import bounds consistent.
   const valuesError = draft ? getWildcardValuesError(fromValuesText(draft.valuesText)) : null;
-  // The server's own explanation wins when there is one; otherwise say which
-  // bound the draft is over before it is sent.
+  // Prefer the server explanation over local bound errors.
   const draftError = error ?? (valuesError ? t(VALUES_ERROR_KEY[valuesError]) : null);
 
   const startCreate = useCallback(() => {
@@ -113,8 +108,7 @@ export const WildcardsPanel = ({
       setDraft(null);
       setError(null);
     } catch (caught) {
-      // `ApiError.message` is the raw response body, so the backend's own
-      // explanation only reads properly once it is unwrapped.
+      // Unwrap raw ApiError bodies before display.
       setError(getApiErrorMessage(caught, t('widgets.generate.dynamicPrompts.couldNotSaveWildcard')));
     }
   }, [catalog, draft, t]);
@@ -126,10 +120,7 @@ export const WildcardsPanel = ({
 
   const closeDeleteDialog = useCallback(() => setPendingDelete(null), []);
 
-  /**
-   * The dialog closes whether or not this throws, so a failure has nowhere inline
-   * to land — it goes to the notification centre like the other Generation errors.
-   */
+  /** Notify on failure because the confirmation dialog closes. */
   const confirmDelete = useCallback(async () => {
     if (!pendingDelete) {
       return;
@@ -156,8 +147,7 @@ export const WildcardsPanel = ({
               : t('widgets.generate.dynamicPrompts.editWildcard')
           }
         />
-        {/* An empty name is the starting state rather than a mistake, so it
-            disables Save without being called out. */}
+        {/* Empty initial names disable save without premature validation errors. */}
         <Field
           error={nameError === null || nameError === 'empty' ? null : t(NAME_ERROR_KEY[nameError])}
           id={nameFieldId}
@@ -171,9 +161,7 @@ export const WildcardsPanel = ({
             onChange={(event: ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, name: event.currentTarget.value })}
           />
         </Field>
-        {/* Values are expanded by dynamicprompts too, so a nested `{a|b}` or
-            `__other__` is live syntax here and is coloured as such. The gutter
-            numbers the values, which is what a line means in this editor. */}
+        {/* Wildcard values may contain nested dynamic syntax. */}
         <PromptTextarea
           aria-label={t('widgets.generate.dynamicPrompts.wildcardValues')}
           defaultHeightPx={144}
@@ -220,8 +208,6 @@ export const WildcardsPanel = ({
         </Button>
       </PromptPanelHeader>
 
-      {/* Searching an empty catalog would only offer a way to find nothing, so
-          the input appears once there is something to search. */}
       {catalog.wildcards.length > 0 ? (
         <>
           <Input
@@ -252,9 +238,7 @@ export const WildcardsPanel = ({
                   </Text>
                 )}
                 {group.wildcards.map((wildcard) => (
-                  // The row shows the whole `__animals/dogs__`, header or not:
-                  // it is the exact text you would type, so trimming the prefix
-                  // to match the header above would make it a lie.
+                  // Show full wildcard paths because rows display exact insertion syntax.
                   <WildcardRow
                     key={wildcard.id}
                     wildcard={wildcard}
@@ -272,8 +256,7 @@ export const WildcardsPanel = ({
       <Separator />
       <WildcardTransferActions catalog={catalog} />
 
-      {/* A wildcard's values are typed by hand and there is no undo, so deleting
-          one asks first — as every other destructive action here does. */}
+      {/* Confirm irreversible deletion of handwritten values. */}
       <ConfirmDialog
         body={t('widgets.generate.dynamicPrompts.deleteWildcardBody', { name: pendingDelete?.name ?? '' })}
         confirmLabel={t('common.delete')}

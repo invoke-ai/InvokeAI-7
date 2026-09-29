@@ -1,3 +1,5 @@
+/** The file input `accept` list picker surfaces and their hosts share. */
+export { getGalleryUploadAccept } from './core/items';
 export {
   type GalleryPickerAccept,
   type GalleryPickerSelection,

@@ -19,7 +19,7 @@ import type {
   GalleryView,
 } from '@features/gallery/core/types';
 
-import { parseGalleryItemKey } from '@features/gallery/core/items';
+import { DATE_BOARD_ID_PREFIX, isDateBoardId, parseGalleryItemKey } from '@features/gallery/core/items';
 import { getExternalImageFile, getImageCluster } from '@features/gallery/core/semanticImageQuery';
 import { isTimestampInRange } from '@platform/search/dateTokens';
 import {
@@ -67,79 +67,14 @@ interface BackendBoardDTO {
  * unassigned images (board_id 'none'); 'date' is a read-only virtual board
  * grouping images by creation date (id 'by_date:YYYY-MM-DD').
  */
-const DATE_BOARD_ID_PREFIX = 'by_date:';
 export const ALL_READABLE_BOARDS_ID = 'all';
 
-export const isDateBoardId = (boardId: string): boolean => boardId.startsWith(DATE_BOARD_ID_PREFIX);
+export { isDateBoardId };
 
 const getDateFromBoardId = (boardId: string): string => boardId.slice(DATE_BOARD_ID_PREFIX.length);
 
 const getUploadBoardId = (boardId: string): string | undefined =>
   boardId === 'none' || boardId === ALL_READABLE_BOARDS_ID || isDateBoardId(boardId) ? undefined : boardId;
-
-export type GalleryUploadKind = 'image' | 'video';
-
-const GALLERY_UPLOAD_KIND_BY_MIME = new Map<string, GalleryUploadKind>([
-  ['image/jpeg', 'image'],
-  ['image/jpg', 'image'],
-  ['image/png', 'image'],
-  ['image/webp', 'image'],
-]);
-
-// The server normalizes every accepted upload to H.264 MP4 at ingest — foreign
-// containers/codecs (.mov, HEVC, …) are remuxed or transcoded, and audio files are
-// wrapped into waveform videos — so both video/* and audio/* upload as 'video'.
-const GALLERY_UPLOAD_KIND_BY_EXTENSION = new Map<string, GalleryUploadKind>([
-  ['.jpeg', 'image'],
-  ['.jpg', 'image'],
-  ['.png', 'image'],
-  ['.webp', 'image'],
-  ['.mp4', 'video'],
-  ['.mov', 'video'],
-  ['.m4v', 'video'],
-  ['.webm', 'video'],
-  ['.mkv', 'video'],
-  ['.avi', 'video'],
-  ['.mpg', 'video'],
-  ['.mpeg', 'video'],
-  ['.3gp', 'video'],
-  ['.wmv', 'video'],
-  ['.asf', 'video'],
-  ['.mp3', 'video'],
-  ['.m4a', 'video'],
-  ['.aac', 'video'],
-  ['.wav', 'video'],
-  ['.flac', 'video'],
-  ['.ogg', 'video'],
-  ['.oga', 'video'],
-  ['.opus', 'video'],
-  ['.aiff', 'video'],
-  ['.aif', 'video'],
-  ['.wma', 'video'],
-]);
-
-export const classifyGalleryUpload = (file: Pick<File, 'name' | 'type'>): { kind: GalleryUploadKind } | null => {
-  const mimeType = file.type.toLowerCase();
-  const mimeKind = GALLERY_UPLOAD_KIND_BY_MIME.get(mimeType);
-
-  if (mimeKind) {
-    return { kind: mimeKind };
-  }
-
-  if (mimeType.startsWith('video/') || mimeType.startsWith('audio/')) {
-    return { kind: 'video' };
-  }
-
-  const lowerName = file.name.toLowerCase();
-
-  for (const [extension, kind] of GALLERY_UPLOAD_KIND_BY_EXTENSION) {
-    if (lowerName.endsWith(extension)) {
-      return { kind };
-    }
-  }
-
-  return null;
-};
 
 interface BackendImageDTO {
   image_name: string;
@@ -152,6 +87,7 @@ interface BackendImageDTO {
   is_intermediate: boolean;
   starred?: boolean;
   board_id?: string | null;
+  has_workflow?: boolean;
 }
 
 export interface BackendGalleryItemDTO {
@@ -194,12 +130,7 @@ interface ListImagesResponse {
   total: number;
 }
 
-/**
- * Mirrors the backend's `IMAGE_CATEGORIES` / `ASSETS_CATEGORIES`
- * (`image_records_common.py`). `'other'` is in neither: it is the private
- * category for images a canvas layer owns, which are layer pixels rather than
- * gallery content and so belong to neither view.
- */
+/** Mirror backend gallery categories; canvas-owned `other` pixels belong to neither Images nor Assets. */
 const imageCategories = ['general'];
 const assetCategories = ['control', 'mask', 'user'];
 
@@ -277,11 +208,7 @@ const getGalleryTotal = async ({
   return body.total;
 };
 
-/**
- * Counts non-intermediate videos on a board, optionally restricted to a category set —
- * the same general/asset split the images use (uploaded videos are 'user', generated
- * are 'general').
- */
+/** Count non-intermediate videos with the same general/asset category split as images. */
 const getGalleryVideoTotal = async ({
   boardId,
   categories,
@@ -300,6 +227,7 @@ const getGalleryVideoTotal = async ({
 const mapImage = (image: BackendImageDTO): GalleryImage => ({
   boardId: image.board_id ?? 'none',
   createdAt: image.created_at,
+  hasWorkflow: image.has_workflow,
   height: image.height,
   imageCategory: image.image_category,
   imageName: image.image_name,
@@ -311,11 +239,7 @@ const mapImage = (image: BackendImageDTO): GalleryImage => ({
   width: image.width,
 });
 
-/**
- * The `media_origin` marker as a string, or absent. The server coerces this, but the mapper
- * validates what it is handed here the same way it validates `duration` -- a marker of any
- * other shape means the same thing as no marker.
- */
+/** Treat non-string media_origin markers as absent. */
 const mediaOriginOf = (value: string | null | undefined): { mediaOrigin?: string } =>
   typeof value === 'string' && value ? { mediaOrigin: value } : {};
 
@@ -453,10 +377,7 @@ export const listGalleryBoards = async ({
   ];
 };
 
-/**
- * Date boards are now derived from the polymorphic gallery service, so a date can exist
- * because of videos alone — its `image_count` may be 0 while the board is non-empty.
- */
+/** Date boards can contain only videos; zero image_count does not imply an empty board. */
 interface VirtualDateBoardDTO {
   virtual_board_id: string;
   board_name: string;
@@ -562,13 +483,17 @@ export const getGalleryVideoMetadata = async (
   return body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : null;
 };
 
-export interface GalleryVideoWorkflow {
+/** The workflow and graph a piece of media embeds, each as stringified JSON, when it has them. */
+export interface GalleryMediaWorkflow {
   graph: string | null;
   workflow: string | null;
 }
 
-export const getGalleryVideoWorkflow = (videoName: string, signal?: AbortSignal): Promise<GalleryVideoWorkflow> =>
-  apiFetchJson<GalleryVideoWorkflow>(`/api/v1/videos/i/${encodeURIComponent(videoName)}/workflow`, { signal });
+export const getGalleryVideoWorkflow = (videoName: string, signal?: AbortSignal): Promise<GalleryMediaWorkflow> =>
+  apiFetchJson<GalleryMediaWorkflow>(`/api/v1/videos/i/${encodeURIComponent(videoName)}/workflow`, { signal });
+
+export const getGalleryImageWorkflow = (imageName: string, signal?: AbortSignal): Promise<GalleryMediaWorkflow> =>
+  apiFetchJson<GalleryMediaWorkflow>(`/api/v1/images/i/${encodeURIComponent(imageName)}/workflow`, { signal });
 
 interface PaletteDateBoardImageNames {
   imageNames: string[];
@@ -597,8 +522,7 @@ const listPaletteDateBoardImageNames = async ({
   searchTerm: string;
   signal?: AbortSignal;
 }): Promise<PaletteDateBoardImageNames> => {
-  // Palette results remain intentionally image-only, but derive from the
-  // polymorphic item_names endpoint so no webv2 path regresses to image_names.
+  // Keep palette results image-only while using the polymorphic item_names endpoint.
   const result = await listGalleryDateBoardItemNames({
     boardId,
     createdFrom,
@@ -844,23 +768,16 @@ export interface GallerySemanticResult {
 type SemanticSearchBody = { results: { image_name: string; kind?: string; score: number }[] };
 
 const toSemanticResults = (body: SemanticSearchBody): GallerySemanticResult[] =>
-  // `image_name` carries the name whatever the kind is; `kind` says which
-  // namespace it belongs to. Only `video` names the other namespace — anything
-  // else reads as an image, which is the kind every hit used to be.
+  // `image_name` serves both namespaces; only kind `video` selects videos, preserving image fallback for other
+  // values.
   body.results.map((result) => ({
     ref: { kind: result.kind === 'video' ? 'video' : 'image', name: result.image_name },
     score: result.score,
   }));
 
 /**
- * Ranks the caller's accessible gallery items by similarity to the query. Text
- * and gallery-image queries hit the GET endpoint; URLs and dropped files POST
- * to the by-image endpoint (the file as multipart from the external-image
- * registry).
- *
- * `include_videos` is what opts this client into video results: the backend
- * indexes them either way and serves them only to clients that say they can
- * resolve each hit through the endpoint its kind names, which this one does.
+ * Text and gallery-image searches use GET; URLs and registered files use POST. include_videos opts into kind-aware
+ * result hydration.
  */
 export const searchGallerySemantic = async (
   query: Exclude<GallerySemanticQuery, { kind: 'cluster' }>,
@@ -909,12 +826,34 @@ export const searchGallerySemantic = async (
   return toSemanticResults(await apiFetchJson<SemanticSearchBody>(`/api/v1/image_map/search?${params}`, { signal }));
 };
 
+export interface ImageIndexAvailability {
+  state: 'disabled' | 'model_missing' | 'ready';
+  /** The configured embedding model's name; set only while it is missing. */
+  modelName: string | null;
+}
+
+interface ImageIndexStatusBody {
+  enabled: boolean;
+  model_name?: string | null;
+}
+
 /**
- * The ranked result set as item refs, in relevance order. Pages hydrate
- * slices of this list (`hydrateGalleryDateBoardItemPage`), and range
- * selection / deletion neighbors read it directly. Results carry both media
- * kinds: an indexed gallery is its images plus its videos.
+ * Search requires indexed embeddings and their model, not map projection. model_name distinguishes a missing
+ * configured model from a disabled index.
  */
+export const fetchImageIndexAvailability = async (signal: AbortSignal): Promise<ImageIndexAvailability> => {
+  const body = await apiFetchJson<ImageIndexStatusBody>('/api/v1/image_map/status', { signal });
+
+  if (body.enabled) {
+    return { modelName: null, state: 'ready' };
+  }
+
+  return body.model_name
+    ? { modelName: body.model_name, state: 'model_missing' }
+    : { modelName: null, state: 'disabled' };
+};
+
+/** Kind-qualified refs retain relevance order for page hydration, range selection, and deletion neighbors. */
 export const listSemanticGalleryItemNames = async ({
   query,
   signal,
@@ -991,11 +930,8 @@ export const listPaletteImages = async ({
 };
 
 /**
- * The `ImageRecordChanges` body that promotes a staged canvas candidate (an
- * intermediate image) into a durable, gallery-visible image: clearing
- * `is_intermediate` stops it being garbage-collected, and `image_category:
- * 'general'` surfaces it in the gallery's images view. Pure so the request
- * shape can be unit-tested without a fetch.
+ * Promote staged candidates by clearing is_intermediate and setting category general, making them durable and
+ * gallery-visible.
  */
 export const imageSaveToGalleryChanges = (): { is_intermediate: false; image_category: 'general' } => ({
   image_category: 'general',
@@ -1003,30 +939,16 @@ export const imageSaveToGalleryChanges = (): { is_intermediate: false; image_cat
 });
 
 /**
- * The `ImageRecordChanges` body that makes an intermediate image durable without
- * changing its category. Clearing `is_intermediate` stops garbage collection;
- * where the image appears is determined by its existing category.
- *
- * NOT for adopting a graph result as canvas pixels — a node's output is
- * `general`, so this alone publishes it to the gallery's Images view. Use
- * {@link imageMakeCanvasAssetChanges} there.
+ * Clear is_intermediate without changing category. Canvas adoption must use {@link imageMakeCanvasAssetChanges} to
+ * avoid publishing general outputs.
  */
 export const imageMakeDurableChanges = (): { is_intermediate: false } => ({
   is_intermediate: false,
 });
 
 /**
- * The `ImageRecordChanges` body that adopts a utility result as CANVAS-OWNED
- * pixels: durable (so it is not garbage-collected out from under the layer that
- * now points at it) and `image_category: 'other'`, the category the canvas
- * already uploads its own paint bitmaps under.
- *
- * A node's output is `general` by default, which is exactly what the gallery's
- * Images view lists — so promoting a control-layer filter result with
- * {@link imageMakeDurableChanges} alone published every ControlNet preprocess
- * into the user's gallery. These are layer pixels, not gallery images, and
- * `'other'` belongs to neither {@link imageCategories} nor
- * {@link assetCategories}, so they surface in neither view.
+ * Adopt utility results as durable `other` pixels, excluded from both gallery views; durability alone leaves
+ * general outputs visible.
  */
 export const imageMakeCanvasAssetChanges = (): { is_intermediate: false; image_category: 'other' } => ({
   image_category: 'other',
@@ -1034,10 +956,8 @@ export const imageMakeCanvasAssetChanges = (): { is_intermediate: false; image_c
 });
 
 /**
- * Makes a single intermediate image durable (survives GC) without changing its
- * category, via `PATCH /api/v1/images/i/{image_name}`. Resolves once the PATCH
- * succeeds; the caller commits the layer-source swap only after this settles so a
- * failed PATCH never strands the layer pointing at a soon-to-be-collected image.
+ * Await the durability PATCH before committing a layer-source swap; failed promotion must not leave a layer
+ * referencing collectible pixels.
  */
 export const makeImageDurable = async (imageName: string): Promise<void> => {
   await apiFetchJson<BackendImageDTO>(`/api/v1/images/i/${encodeURIComponent(imageName)}`, {
@@ -1047,10 +967,8 @@ export const makeImageDurable = async (imageName: string): Promise<void> => {
 };
 
 /**
- * Adopts a utility result as canvas-owned pixels — durable AND out of the
- * gallery's Images view. Used wherever a graph result becomes a layer's
- * persisted source; {@link makeImageDurable} remains for callers that must keep
- * whatever category the image already had.
+ * Adopt graph results as durable canvas pixels outside Images; {@link makeImageDurable} instead preserves the
+ * current category.
  */
 export const makeImageCanvasAsset = async (imageName: string): Promise<void> => {
   await apiFetchJson<BackendImageDTO>(`/api/v1/images/i/${encodeURIComponent(imageName)}`, {
@@ -1059,10 +977,7 @@ export const makeImageCanvasAsset = async (imageName: string): Promise<void> => 
   });
 };
 
-/**
- * Promotes a single image (e.g. a staged canvas candidate) into the gallery via
- * `PATCH /api/v1/images/i/{image_name}` and returns the updated {@link GalleryImage}.
- */
+/** Promote an image into the gallery and return its updated {@link GalleryImage}. */
 export const saveImageToGallery = async (imageName: string): Promise<GalleryImage> => {
   const body = await apiFetchJson<BackendImageDTO>(`/api/v1/images/i/${encodeURIComponent(imageName)}`, {
     body: JSON.stringify(imageSaveToGalleryChanges()),
@@ -1292,14 +1207,7 @@ export const deleteGalleryImageItems = async (
   };
 };
 
-/**
- * Deletes images and reports the outcome per name.
- *
- * The backend deletes each name independently and no longer aborts the batch on the first
- * failure, so a request can partly succeed. Callers must evict only `deletedImageNames` from
- * their caches — treating the whole request as successful would hide a still-present image
- * until the next full refresh.
- */
+/** Deletion can partially succeed. Evict only deletedImageNames; other names may still exist on the server. */
 export const deleteGalleryImages = async (
   imageNames: string[],
   signal?: AbortSignal
@@ -1466,11 +1374,7 @@ export const moveGalleryVideoItemsToBoard = async (
 const BULK_DOWNLOAD_POLL_INTERVAL_MS = 2000;
 const BULK_DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 
-/**
- * Starts a bulk download (a zip prepared in a backend background task) and
- * polls the artifact endpoint until it exists. Returns the archive blob and
- * its file name.
- */
+/** Poll the background bulk-download artifact until ready, then return its blob and filename. */
 export const downloadGalleryArchive = async ({
   boardId,
   imageNames,

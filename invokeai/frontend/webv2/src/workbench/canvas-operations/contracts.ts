@@ -402,7 +402,7 @@ export interface CanvasApplicationPort {
   }): Promise<CanvasUtilityGraphResult>;
   uploadImage(
     blob: Blob,
-    options?: { isIntermediate?: boolean; signal?: AbortSignal }
+    options?: { isIntermediate?: boolean; projectId?: string; signal?: AbortSignal }
   ): Promise<{ height: number; imageName: string; width: number }>;
   getSelectedModelBase(state: WorkbenchState, projectId: string): string | null;
 }

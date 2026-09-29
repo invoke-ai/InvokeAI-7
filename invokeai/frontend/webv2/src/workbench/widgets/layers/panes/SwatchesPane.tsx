@@ -19,11 +19,7 @@ import { PlusIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * The swatches pane: the workbench defaults, the account's recent colors, and
- * the project palette. A pick writes the active foreground/background target —
- * the shelves share the Color pane's one persisted pair and own nothing.
- */
+/** Share default, account-recent, and project swatches; picks update the same active pair as Color. */
 export const SwatchesPane = () => {
   const { t } = useTranslation();
   const engine = useCanvasEngine();

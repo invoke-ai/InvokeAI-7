@@ -38,11 +38,7 @@ const noise = (seed: number): (() => number) => {
   };
 };
 
-/**
- * A slow, near-straight drag advancing `speed` document units per sample. Below
- * ~0.5 units/sample the jitter dominates the direction vector — the regime that
- * used to fill the outline with spurious full-radius corner caps.
- */
+/** Near-straight samples below roughly 0.5 units per step expose jitter-driven false corner caps. */
 const slowDrag = (speed: number, jitter: number): StrokeSamplePoint[] => {
   const rand = noise(7);
   return Array.from({ length: 400 }, (_, i) => ({
@@ -63,11 +59,8 @@ const arc = (radius: number, sweep: number): StrokeSamplePoint[] => {
 };
 
 /**
- * The edge lengths along the body of a stroke outline — how coarsely it
- * approximates the offset curve, which under any serialization is the visible
- * faceting. Edges within `size` of either end are excluded: the caps are drawn
- * with a fixed segment count rather than by the vertex cull, so they say nothing
- * about body density.
+ * Measure body-edge lengths as visible faceting; exclude end caps within `size`, whose fixed segmentation is
+ * independent of vertex culling.
  */
 const bodyEdgeLengths = (polygon: readonly Vec2[], points: readonly StrokeSamplePoint[], size: number): number[] => {
   const ends = [points[0]!, points[points.length - 1]!];
@@ -206,8 +199,7 @@ describe('outlineSmoothing', () => {
 
 describe('stroke quality at large brush sizes', () => {
   it('does not let pointer jitter inflate the outline (spurious corner caps)', () => {
-    // Each >90° direction reversal splices a cap of the CURRENT radius into the
-    // outline, so jitter used to add hundreds of full-size lumps to a big brush.
+    // Sharp jitter reversals insert current-radius caps, producing large brush lumps.
     const jittery = slowDrag(0.2, 1);
     const clean = slowDrag(0.2, 0);
     for (const size of [20, 100, 400, 1000, 2000]) {
@@ -218,9 +210,7 @@ describe('stroke quality at large brush sizes', () => {
   });
 
   it('keeps outline vertex spacing bounded independently of brush size', () => {
-    // The library culls outline vertices closer than (size × smoothing), so a
-    // constant smoothing lets spacing — and with it the faceting — grow with the
-    // brush. On this arc a 400px brush used to reach 200-unit edges.
+    // Constant smoothing scales vertex spacing with brush size; a 400px brush previously produced 200-unit edges.
     const curve = arc(1000, Math.PI / 2);
     for (const size of [50, 200, 400]) {
       const polygon = strokeOutlinePolygon(curve, { size, thinning: 0 });
@@ -231,10 +221,8 @@ describe('stroke quality at large brush sizes', () => {
   });
 
   it('tracks pressure from the start of a large-brush stroke', () => {
-    // The library's start-of-stroke noise gate drops every intermediate point —
-    // and so every pressure reading — until the running length reaches `size`.
-    // Sized in document units instead of brush diameters, it no longer flattens
-    // the pressure ramp across the first 1000 units of a 1000px brush.
+    // Gate stroke starts in document units so large brushes preserve early pressure samples instead of flattening
+    // a diameter-long ramp.
     const size = 1000;
     const rampLength = 300;
     const stroke: StrokeSamplePoint[] = [];
@@ -269,10 +257,6 @@ describe('polygonToSvgPath', () => {
   });
 });
 
-/**
- * A node-safe `Path2D` double that records the commands traced onto it, so the
- * curve can be asserted without a DOM.
- */
 const recordingPath = () => {
   const commands: string[] = [];
   const points: Vec2[] = [];

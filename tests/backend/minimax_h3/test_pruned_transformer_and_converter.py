@@ -214,28 +214,6 @@ def test_converted_keys_match_full_model_exactly() -> None:
     model.load_state_dict(converted, strict=True, assign=True)
 
 
-def test_read_comfy_quant_markers_from_header_only(tmp_path) -> None:
-    from safetensors.torch import save_file
-
-    from invokeai.backend.model_manager.load.model_loaders.minimax_h3_state_dict_utils import (
-        read_comfy_quant_markers,
-    )
-
-    marker_json = b'{"format": "fp8_scaled", "convrot": false}'
-    path = tmp_path / "tiny.safetensors"
-    save_file(
-        {
-            "blocks.0.mlp.fc2.weight": torch.zeros(2, 2),
-            "blocks.0.mlp.fc2.comfy_quant": torch.frombuffer(marker_json, dtype=torch.uint8).clone(),
-            "unrelated.weight": torch.zeros(1),
-        },
-        str(path),
-    )
-
-    markers = read_comfy_quant_markers(path)
-    assert markers == {"blocks.0.mlp.fc2": {"format": "fp8_scaled", "convrot": False}}
-
-
 def test_converter_swaps_fused_swiglu_halves() -> None:
     """The remote-code fused fc1 stores [gate; value]; diffusers SwiGLU expects [value; gate]
     (silu on the SECOND half). Verified bit-exactly against the diffusers folder release:

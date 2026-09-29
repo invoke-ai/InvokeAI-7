@@ -1,4 +1,5 @@
 import type { GenerateWidgetValues } from '@features/generation/contracts';
+import type * as GenerationPreview from '@features/generation/preview';
 import type { ModelConfig } from '@features/models';
 import type { InvocationTemplatesSnapshot } from '@features/workflow/react';
 import type { GraphContract } from '@workbench/graphContracts';
@@ -11,9 +12,19 @@ import { canvasWidgetManifest } from '@workbench/widgets/canvas/manifest';
 import { generateWidgetManifest } from '@workbench/widgets/generate/manifest';
 import { workflowWidgetManifest } from '@workbench/widgets/workflow/manifest';
 import { createInitialWorkbenchState, workbenchReducer } from '@workbench/workbenchState.testing';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { buildGraphPreviewSource } from './graphPreviewSource';
+
+const compileGeneratePreviewGraph = vi.hoisted(() => vi.fn());
+
+vi.mock('@features/generation/preview', async (importOriginal) => {
+  const original = await importOriginal<typeof GenerationPreview>();
+
+  compileGeneratePreviewGraph.mockImplementation(original.compileGeneratePreviewGraph);
+
+  return { ...original, compileGeneratePreviewGraph };
+});
 
 const t = ((key: string) => key) as TFunction;
 
@@ -85,6 +96,18 @@ describe('buildGraphPreviewSource', () => {
 
     expect(source.graph).toBeNull();
     expect(source.invalidReasons.length).toBeGreaterThan(0);
+    expect(source.isLive).toBe(true);
+  });
+
+  it('reports a compile that throws as an invalid reason instead of propagating', () => {
+    compileGeneratePreviewGraph.mockImplementationOnce(() => {
+      throw new Error('unsupported sampler combination');
+    });
+
+    const source = buildGraphPreviewSource({ models, project, surface: generateSurface, t, templates: idleTemplates });
+
+    expect(source.graph).toBeNull();
+    expect(source.invalidReasons).toEqual(['unsupported sampler combination']);
     expect(source.isLive).toBe(true);
   });
 

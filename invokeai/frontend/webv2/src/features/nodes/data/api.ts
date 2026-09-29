@@ -43,11 +43,8 @@ export const reloadCustomNodes = (signal?: AbortSignal): Promise<{ status: strin
   requestJson<{ status: string }>(`${CUSTOM_NODES_BASE}/reload`, { method: 'POST', signal });
 
 /**
- * Workflows imported by a pack, counted by its `node-pack:<name>` tag. A
- * best-effort number for the uninstall confirmation: uninstall deletes by the
- * manifest-recorded IDs, while this counts by tag, so retagged workflows can
- * make the two diverge slightly. (Calling the workflows router from here
- * follows the models feature's relationshipsApi precedent.)
+ * Estimate imported workflows by pack tag for confirmation; uninstall uses manifest IDs, so retagging can change
+ * the count.
  */
 export const getPackWorkflowCount = async (packName: string, signal?: AbortSignal): Promise<number> => {
   const tag = `node-pack:${packName}`;

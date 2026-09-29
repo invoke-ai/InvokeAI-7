@@ -2,18 +2,11 @@ import type { ElementType } from 'react';
 
 import { chakra, HStack, Icon, Menu, Portal, Text } from '@chakra-ui/react';
 import { APP_VERSION } from '@platform/runtime/appMetadata';
-import { DiscordIcon, GithubIcon } from '@platform/ui/BrandIcon';
 import { Button } from '@platform/ui/Button';
 import { MenuContent } from '@platform/ui/Menu';
+import { DiscordIcon, GithubIcon } from '@platform/ui/VendoredIcon';
 import { BookOpenTextIcon, ChevronRightIcon, ClapperboardIcon, CircleQuestionMarkIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-
-/**
- * Docs and community, pinned to the bottom of the Launchpad rail. This used to
- * be two outlined cards — the only card-styled objects on the surface, and
- * visually heavier than the section nav above them. One menu button says the
- * same thing without competing with the navigation for attention.
- */
 
 const MENU_POSITIONING = { placement: 'right-end' } as const;
 const GROUP_LABEL_PROPS = { color: 'fg.subtle', fontSize: '2xs', textTransform: 'uppercase' } as const;

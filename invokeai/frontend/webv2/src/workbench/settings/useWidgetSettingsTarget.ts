@@ -7,7 +7,7 @@ import { useActiveProjectSelector, useWorkbenchCommands, useWorkbenchQueries } f
 import { useCallback, useState } from 'react';
 
 /** Selects only one field and fences writes against removed instances and project/account changes. */
-export const useWidgetSettingsTarget = <Value extends boolean | string | number>(
+export const useWidgetSettingsTarget = <Value extends boolean | string | number | null>(
   widgetId: WidgetTypeId,
   target: SettingsTarget | undefined,
   read: (values: Record<string, unknown>) => Value

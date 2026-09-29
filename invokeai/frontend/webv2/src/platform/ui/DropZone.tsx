@@ -16,27 +16,12 @@ export interface DropZoneProps extends BoxProps {
   isOver?: boolean;
   /** Forwarded to the underlying element (e.g. dnd-kit's `setNodeRef`). */
   ref?: Ref<HTMLDivElement>;
-  /**
-   * `inline` — a persistent, usually clickable upload box inside a form.
-   * `overlay` — a drag-time overlay floated above existing content; heavier
-   * border and a surface tint so it reads against arbitrary backdrops.
-   */
+  /** inline is a persistent upload surface; overlay floats above content during dragging. */
   variant?: 'inline' | 'overlay';
 }
 
-/**
- * The workbench drop-target look: dashed `border.emphasized` at rest, an
- * accent border on pointer hover previewing the drop treatment, and an
- * `accent.solid` border over an `accent.muted` tint while a compatible drag
- * hovers. Every drop zone and upload area composes this so drag affordances
- * stay identical across the app; callers add their own icon/hint content,
- * interaction handlers, and layout props.
- */
 export const DropZone = ({ children, isDisabled, isOver, variant = 'inline', _hover, ...boxProps }: DropZoneProps) => {
-  // Merged here rather than spread: `:hover` stays live during a drag, so a
-  // consumer hover fill would otherwise paint over the drag-over treatment.
-  // The accent preview is for persistent inline zones only — overlays exist
-  // mid-drag, where dnd-kit's own `isOver` is the signal.
+  // Merge hover styles so they cannot override drag-over fills; overlays use isOver instead of pointer hover.
   const hoverProps = useMemo(
     () => ({
       ...(variant === 'inline' && !isDisabled ? { borderColor: 'accent.solid' } : null),

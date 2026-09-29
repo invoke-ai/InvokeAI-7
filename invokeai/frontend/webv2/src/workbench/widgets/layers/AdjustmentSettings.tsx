@@ -26,11 +26,8 @@ import {
 import { applyStructuralPreview } from './layerOps';
 
 /**
- * The dedicated Properties editors of a raster layer's adjustment entries —
- * the views their tree sub-selections open. Every edit replaces the layer's
- * whole `adjustments` stack through one `patch-config`; a gesture previews
- * live and lands exactly one history entry. Enable/remove/reorder live on the
- * tree row, never here.
+ * Edit adjustment subrows through whole-stack patch-config. Preview gestures live and commit once; tree rows own
+ * enable/remove/reorder.
  */
 
 export type AdjustmentsEngine = CanvasStructuralEngine & CanvasPreparedEngine;

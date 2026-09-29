@@ -2,7 +2,7 @@ import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contract
 import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/render/layerCache';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
-import { createHistory } from '@workbench/canvas-engine/history/history';
+import { createHistory, NO_HELD_ASSET_REFS } from '@workbench/canvas-engine/history/history';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createCanvasMutationContext, type CanvasMutationContextDeps } from './mutationContext';
@@ -161,6 +161,7 @@ describe('createCanvasMutationContext', () => {
       );
       history.push({
         bytes: 1,
+        heldAssetRefs: NO_HELD_ASSET_REFS,
         label: 'Replay',
         redo: () => undefined,
         undo: () =>

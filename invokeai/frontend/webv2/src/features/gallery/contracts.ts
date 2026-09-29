@@ -9,14 +9,17 @@ export type {
   GalleryOrderDir,
   GalleryView,
   GeneratedImageContract,
+  GeneratedVideoContract,
 } from './core/types';
 export { getGalleryBoardLabel, type GalleryBoardTranslate } from './core/boardLabels';
 export { normalizeGalleryImage } from './core/image';
 export {
   assertNeverGalleryItem,
+  classifyGalleryUpload,
   compareGalleryItems,
   formatGalleryVideoDuration,
   galleryImageItemToGalleryImage,
+  generatedVideoToGalleryItem,
   isGalleryImageItem,
   legacyGeneratedImageToGalleryItem,
   parseGalleryItemKey,
@@ -42,6 +45,7 @@ export {
   stripSessionScopedGallerySearch,
   stripUnresolvableGallerySearch,
   registerImageCluster,
+  toGallerySemanticTextReference,
   type GallerySemanticReference,
 } from './core/semanticImageQuery';
 export {
@@ -53,18 +57,25 @@ export {
 } from './core/settings';
 export {
   getGalleryCompareImage,
+  getGalleryDestinationBoardId,
   getGalleryPage,
+  getGallerySelectedBoardId,
   getGallerySelectedImagePage,
   getGallerySelectedImageQuery,
   getGallerySemanticImageQuery,
+  getGalleryView,
   type GallerySelectedImageQuery,
 } from './ui/galleryStateView';
 export {
   claimGalleryNavigationSequence,
   getGalleryDeletionSuccessor,
+  getGalleryNavigationStep,
+  getGallerySessionNavigationKey,
   getPersistedSelectedGalleryItemKeys,
   getSelectedGalleryImageFromValues,
   getSelectedGalleryItemFromValues,
   isGalleryNavigationCurrent,
   requestGalleryItemReveal,
+  type GalleryNavigationDirection,
+  type GalleryNavigationEntry,
 } from './core/selection';

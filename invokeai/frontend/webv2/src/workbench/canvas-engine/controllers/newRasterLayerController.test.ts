@@ -98,8 +98,7 @@ const createHarness = (options: HarnessOptions = {}) => {
     createLayerId: () => `new-${(nextId += 1)}`,
     dispatchPrepared: (action) => {
       dispatched.push(action);
-      // Mirror the reducer: apply the stack mutation to the local document so
-      // the controller's postconditions and later reads see the new layer.
+      // Apply the local stack mutation so controller postconditions see the inserted layer.
       if (action.type === 'applyCanvasLayerStackMutation' && document) {
         let next = document.stacks;
         for (const insertion of action.add ?? []) {

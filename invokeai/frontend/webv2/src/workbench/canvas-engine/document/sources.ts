@@ -1,15 +1,6 @@
 /**
- * Small pure helpers over canvas layers and their sources, shared by the engine
- * (cache sizing, culling, fit-to-content) and the rasterizers.
- *
- * `getSourceBounds` returns a layer's axis-aligned bounds in **document space**
- * (used for culling / fit-to-content), while `getSourcePixelSize` returns the
- * **native** (unscaled) pixel dimensions of the layer's raster cache surface —
- * the compositor applies the layer transform when drawing, so caches hold
- * unscaled pixels. `isRenderableLayer` reports whether a layer can be
- * rasterized today (enabled, with an image/paint source).
- *
- * Zero React, zero import-time side effects.
+ * Shared layer/source geometry. `getSourceBounds` returns document-space bounds; `getSourcePixelSize` returns
+ * unscaled cache dimensions because compositing applies transforms.
  */
 
 import type {
@@ -41,12 +32,8 @@ export const isMaskLayer = (layer: CanvasLayerContract): layer is MaskLayer =>
   layer.type === 'inpaint_mask' || layer.type === 'regional_guidance';
 
 /**
- * A mask layer's alpha bitmap viewed as a `paint` source, so the whole paint
- * pipeline (rasterize, content-sized cache, growth, stroke, persistence) can
- * operate on masks unchanged: the mask stores an alpha stencil exactly like a
- * paint bitmap; only the compositor differs (it colorizes the alpha with the
- * layer's `fill` instead of blitting the RGBA directly). Returns `null` for a
- * non-mask layer.
+ * Views mask alpha as paint for shared rasterization, growth, stroke and persistence paths. Compositing alone
+ * colorizes with mask fill. Returns null for non-mask layers.
  */
 export const maskAsPaintSource = (
   layer: CanvasLayerContract
@@ -54,10 +41,8 @@ export const maskAsPaintSource = (
   isMaskLayer(layer) ? { bitmap: layer.mask.bitmap, offset: layer.mask.offset, type: 'paint' } : null;
 
 /**
- * A layer's rasterizable source: its own `source` for raster/control layers, or
- * a synthetic `paint` view of a mask layer's alpha bitmap. `null` for layers
- * with neither (there are none today). This is the single "what pixels does this
- * layer hold" accessor the engine's rasterize / cache / persistence paths share.
+ * Shared rasterizable-source accessor: raster/control source or a synthetic paint view of mask alpha; otherwise
+ * null.
  */
 export const renderableSourceOf = (layer: CanvasLayerContract): CanvasLayerSourceContract | null => {
   if (hasSource(layer)) {
@@ -70,16 +55,12 @@ export const renderableSourceOf = (layer: CanvasLayerContract): CanvasLayerSourc
 export const isEmptyPolygonShape = (source: { kind: ParametricShapeKind | 'polygon'; points?: unknown[] }): boolean =>
   source.kind === 'polygon' && (source.points?.length ?? 0) < 3;
 
-/**
- * True when a layer's source is one the engine can rasterize: image, paint,
- * gradient, text, or a shape — a polygon only once it has three points.
- */
+/** Rasterizable sources are image, paint, gradient, text and shapes; polygons require three points. */
 export const isRenderableLayer = (layer: CanvasLayerContract): boolean => {
   if (!isLayerContributing(layer)) {
     return false;
   }
-  // Mask layers are renderable whenever enabled: an empty (bitmap-less) mask
-  // rasterizes to a zero-rect surface (skipped downstream, like empty paint).
+  // Enabled empty masks rasterize to zero-rect surfaces, skipped downstream like empty paint.
   if (isMaskLayer(layer)) {
     return true;
   }
@@ -101,18 +82,9 @@ export const isRenderableLayer = (layer: CanvasLayerContract): boolean => {
 };
 
 /**
- * A layer's content rectangle in its LOCAL (untransformed) coordinate space —
- * the extent its raster cache surface covers, before the layer transform is
- * applied. Every layer type is content-sized:
- *
- * - `image`: `[0, 0, w, h]` at the image's native pixels.
- * - `shape` / `text`: `[0, 0, w, h]` at the source's own / estimated extent.
- * - `gradient`: `[0, 0, width, height]` from the explicit extent, defaulting to
- *   the document dims for legacy gradients that predate the extent field.
- * - `paint`: the persisted bitmap's dims at its `offset` (legacy default `0, 0`),
- *   or an EMPTY rect when the layer has no bitmap yet (a brand-new paint layer).
- *
- * Throws for layers without a rasterizable source, so callers fail loudly.
+ * Untransformed local cache extent: native image size, shape/text extent, explicit gradient extent (legacy
+ * document dimensions), or paint bitmap size at its offset (legacy zero). Empty paint has an empty rect;
+ * unsupported sources throw.
  */
 export const getSourceContentRect = (layer: CanvasLayerContract, doc: CanvasDocumentContractV3): Rect => {
   const source = renderableSourceOf(layer);
@@ -152,9 +124,8 @@ export const getSourceContentRect = (layer: CanvasLayerContract, doc: CanvasDocu
 };
 
 /**
- * A layer's axis-aligned bounds in DOCUMENT space: its {@link getSourceContentRect}
- * projected through the layer transform (rotation-aware). Used for culling and
- * fit-to-content. Throws for layers without a rasterizable source.
+ * Rotation-aware document bounds from transformed {@link getSourceContentRect}, for culling and fitting.
+ * Unsupported sources throw.
  */
 export const getSourceBounds = (layer: CanvasLayerContract, doc: CanvasDocumentContractV3): Rect => {
   const contentRect = getSourceContentRect(layer, doc);

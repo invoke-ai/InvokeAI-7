@@ -258,8 +258,7 @@ export class PixelEditController {
         try {
           o.notifyPainted(layerId);
         } catch {
-          // The live cache already owns the accepted pixels and is dirty. A
-          // later render invalidation reconciles ancillary UI observers.
+          // Accepted pixels are already dirty in the live cache; later invalidation reconciles UI observers.
         }
       } finally {
         releasePersistence();

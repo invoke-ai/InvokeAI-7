@@ -32,7 +32,7 @@ export const VideoFrameImageField = memo(
     image: ImageWithDims | null;
     onChange: (image: ImageWithDims | null) => void;
   }) {
-    const { findInGallery, getUploadBoardId } = useVideoUiActions();
+    const { findInGallery } = useVideoUiActions();
     const value = useMemo<GalleryMediaSlotValue | null>(
       () => (image ? { height: image.height, kind: 'image', name: image.image_name, width: image.width } : null),
       [image]
@@ -57,7 +57,6 @@ export const VideoFrameImageField = memo(
         disabledReason={disabledReason}
         dropId={dropId}
         labels={labels}
-        uploadBoardId={getUploadBoardId}
         value={value}
         onChange={handleChange}
         onFind={handleFind}

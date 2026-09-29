@@ -1,11 +1,4 @@
-/**
- * Deterministic synthetic data for browser release and performance journeys.
- *
- * Keep this module free of browser and server dependencies: harnesses can
- * import the same builders to validate their workload without starting HTTP.
- * Every generated value is derived from an index and a fixed epoch, so resets
- * are byte-identical and checked-in baselines never depend on wall-clock time.
- */
+/** Keep builders dependency-free and derive fixtures from indices and a fixed epoch for repeatable baselines. */
 
 export const MOCK_BACKEND_PROFILE_NAMES = Object.freeze(['empty', 'representative']);
 
@@ -54,17 +47,8 @@ export const assertMockBackendProfileName = (value) => {
 };
 
 /**
- * What Fixture Project 002's own board holds, and what sits just outside it.
- *
- * The project-file journey is the only place the whole board path runs end to end, and it can only
- * prove the interesting rules if the fixture actually contains them: a result the canvas draws with
- * *and* the board owns (so a restore must copy it and rewrite the layer), a result the document
- * never mentions (which is the entire reason `.invk` carries a board at all), assets under each
- * visible category, media that must be excluded, and references that live outside the board and so
- * must be deduplicated rather than copied.
- *
- * Every name here is an existing fixture image reassigned to the project's board — the image count
- * is a pinned dimension of the representative profile, so this composition must not change it.
+ * Cover board-only/shared references, visible/excluded categories, and external references. Reassign existing
+ * images without changing the pinned image count.
  */
 export const PROJECT_FILE_BOARD = Object.freeze({
   /** Generated, on the board, and drawn by the canvas: the overlap case. */
@@ -220,8 +204,7 @@ const createVideos = () => [
     workflow: null,
   },
   {
-    // On Fixture Project 002's own board: videos are a separate namespace with their own copy and
-    // upload routes, so a project file that only ever carried images would prove half the path.
+    // Include board-owned video to exercise its separate copy/upload routes.
     board_id: 'fixture-project-board-02',
     created_at: timestampAt(5),
     duration: 1,
@@ -280,17 +263,9 @@ const createVideos = () => [
   },
 ];
 
-/**
- * The board a project owns. Every project has exactly one, and only project APIs may rename or
- * delete it — the generic board routes refuse a claimed board.
- */
+/** Only project APIs may rename/delete a project-owned board. */
 export const projectBoardId = (index) => `fixture-project-board-${ordinal(index, 2)}`;
 
-/**
- * The board owned by Fixture Project 002 — the project the project-file journey exports, imports
- * and duplicates. Declared here rather than inlined so the composition above and the journey's
- * assertions cannot drift from the project they describe.
- */
 export const PROJECT_FILE_BOARD_ID = projectBoardId(1);
 
 const buildBoard = (boardId, boardName, images, videos, createdAt) => {
@@ -553,11 +528,7 @@ const createProjectFileWorkflowNodes = () => {
   ];
 };
 
-/**
- * The canvas leaves of a v3 document, stacks in composition order, each forest in preorder. The
- * order mirrors `LAYER_STACK_ORDER` in `src/workbench/canvas-engine/contracts.ts`, which a plain
- * module cannot import; keep the two in step.
- */
+/** Match LAYER_STACK_ORDER and preorder within each forest; plain JS cannot import the TypeScript constant. */
 export const collectCanvasLeaves = (document) => {
   const leaves = [];
   const visit = (nodes) => {
@@ -575,10 +546,7 @@ export const collectCanvasLeaves = (document) => {
   return leaves;
 };
 
-/**
- * The representative raster forest: 64 leaves, of which 24 sit in three groups (one nested two
- * deep), so the tree exercises indentation, ancestor-effective state and folder export.
- */
+/** Use 64 leaves, including 24 in three groups with two-level nesting, to exercise forest behavior. */
 const createRasterForest = (layers) => {
   if (layers.length < 32) {
     return layers;
@@ -605,10 +573,73 @@ const createRasterForest = (layers) => {
   ];
 };
 
+/** A schema-2 style graph; the workflow collection wraps it, or a legacy document carries it as `projectGraph`. */
+const createWorkflowDocument = ({ description, graphId, index, name, workflowNodes }) => {
+  const formRootId = `${graphId}-form-root`;
+
+  return {
+    author: 'InvokeAI',
+    contact: '',
+    description,
+    edges: [],
+    form: {
+      elements: {
+        [formRootId]: {
+          data: { children: [], layout: 'column' },
+          id: formRootId,
+          type: 'container',
+        },
+      },
+      rootElementId: formRootId,
+    },
+    id: graphId,
+    name,
+    nodes: workflowNodes,
+    notes: '',
+    tags: 'fixture',
+    updatedAt: timestampAt(index),
+    version: 2,
+    workflowVersion: '1.0.0',
+  };
+};
+
+/**
+ * Project 0 is a current schema-3 document that owns two workflows (a second, blank one beside the representative
+ * graph, so the This-project view has something to switch to). Project 1 stays a schema-2 document with a single
+ * `projectGraph`, which the project-file journey loads, exports and imports through the migration boundary.
+ */
 const createProjectDocument = ({ index, layers = [], workflowNodes = [] }) => {
   const id = `fixture-project-${ordinal(index, 3)}`;
   const graphId = `${id}-graph`;
-  const formRootId = `${graphId}-form-root`;
+  const primaryWorkflow = createWorkflowDocument({
+    description: index === 0 ? 'Representative 100-node workflow.' : '',
+    graphId,
+    index,
+    name: index === 0 ? 'Representative Workflow' : 'Empty Workflow',
+    workflowNodes,
+  });
+  const workflows =
+    index === 1
+      ? null
+      : {
+          activeWorkflowId: graphId,
+          entries: [
+            { document: primaryWorkflow },
+            ...(index === 0
+              ? [
+                  {
+                    document: createWorkflowDocument({
+                      description: 'A second, blank workflow beside the representative graph.',
+                      graphId: `${id}-graph-2`,
+                      index,
+                      name: 'Second Workflow',
+                      workflowNodes: [],
+                    }),
+                  },
+                ]
+              : []),
+          ],
+        };
 
   return {
     canvas: {
@@ -640,6 +671,7 @@ const createProjectDocument = ({ index, layers = [], workflowNodes = [] }) => {
       sourceId: workflowNodes.length > 0 ? 'workflow' : 'generate',
       sourceLocked: false,
     },
+    ...(workflows ? { documentSchemaVersion: 3 } : { documentSchemaVersion: 2 }),
     layout: {
       centerViewId: 'preview',
       panels: { isBottomOpen: false, isLeftOpen: true, isRightOpen: true },
@@ -647,35 +679,16 @@ const createProjectDocument = ({ index, layers = [], workflowNodes = [] }) => {
     },
     name: `Fixture Project ${ordinal(index, 3)}`,
     promptHistory: [],
-    projectGraph: {
-      author: 'InvokeAI',
-      contact: '',
-      description: index === 0 ? 'Representative 100-node workflow.' : '',
-      edges: [],
-      form: {
-        elements: {
-          [formRootId]: {
-            data: { children: [], layout: 'column' },
-            id: formRootId,
-            type: 'container',
-          },
-        },
-        rootElementId: formRootId,
-      },
-      id: graphId,
-      name: index === 0 ? 'Representative Workflow' : 'Empty Workflow',
-      nodes: workflowNodes,
-      notes: '',
-      tags: 'fixture',
-      updatedAt: timestampAt(index),
-      version: 2,
-      workflowVersion: '1.0.0',
-    },
+    ...(workflows ? { workflows } : { projectGraph: primaryWorkflow }),
     queue: { items: [] },
     settings: {},
     widgetGraphs: {},
   };
 };
+
+/** The first workflow a project document carries, whichever schema it uses. */
+export const getFixtureProjectWorkflowDocument = (data) =>
+  data?.workflows?.entries?.[0]?.document ?? data?.projectGraph ?? null;
 
 const createProjects = (count, workflowNodeCount, layerCount) =>
   range(count, (index) => {
@@ -710,6 +723,7 @@ const createWorkflows = (count) =>
       description: `Synthetic workflow library entry ${id}.`,
       name: `Fixture Workflow ${id}`,
       opened_at: index % 3 === 0 ? timestampAt(index) : null,
+      revision: 1,
       tags: 'fixture,representative',
       thumbnail_url: null,
       updated_at: timestampAt(index),
@@ -728,13 +742,58 @@ const createWorkflows = (count) =>
         version: '3.0.0',
         workflowVersion: '1.0.0',
       },
-      workflow_id: `fixture-workflow-${id}`,
+      // Bundled ids carry the server's `default_` prefix; the client treats those templates as read-only.
+      workflow_id: index % 4 === 0 ? `default_fixture-workflow-${id}` : `fixture-workflow-${id}`,
     };
   });
+
+/** Per-project intermediates rows for the Settings manager; ids match the projects fixture so entry points preselect. */
+const createIntermediates = () => [
+  {
+    user_id: 'fixture-user',
+    user_display_name: 'Fixture User',
+    user_email: 'fixture@example.com',
+    project_id: 'fixture-project-001',
+    project_name: 'Fixture Project 001',
+    cover_image_name: 'fixture-image-0002.png',
+    images: { safe: 128, referenced: 6, active: 2, recent: 4 },
+    videos: { safe: 3, referenced: 1, active: 0, recent: 0 },
+    reclaimable_bytes: 2_580_000_000,
+    referenced_bytes: 120_000_000,
+    unknown_size_count: 0,
+  },
+  {
+    user_id: 'fixture-user',
+    user_display_name: 'Fixture User',
+    user_email: 'fixture@example.com',
+    project_id: 'fixture-project-002',
+    project_name: 'Fixture Project 002',
+    cover_image_name: null,
+    images: { safe: 12, referenced: 0, active: 0, recent: 1 },
+    videos: { safe: 0, referenced: 0, active: 0, recent: 0 },
+    reclaimable_bytes: 96_000_000,
+    referenced_bytes: 0,
+    unknown_size_count: 3,
+  },
+  {
+    user_id: 'fixture-user',
+    user_display_name: 'Fixture User',
+    user_email: 'fixture@example.com',
+    project_id: null,
+    project_name: null,
+    cover_image_name: null,
+    images: { safe: 40, referenced: 0, active: 0, recent: 0 },
+    videos: { safe: 1, referenced: 0, active: 0, recent: 0 },
+    reclaimable_bytes: 410_000_000,
+    referenced_bytes: 0,
+    unknown_size_count: 0,
+  },
+];
 
 const createEmptyFixture = () => ({
   boards: [],
   images: [],
+  intermediates: [],
   models: [],
   nodeCatalog: { custom_nodes_path: '/opt/invokeai/nodes', node_packs: [] },
   openApiDocument: createOpenApiDocument(0),
@@ -753,6 +812,7 @@ const createRepresentativeFixture = () => {
   return {
     boards: createBoards(images, videos, counts.projects),
     images,
+    intermediates: createIntermediates(),
     models: createModels(counts.models),
     nodeCatalog: {
       custom_nodes_path: '/opt/invokeai/nodes',
@@ -784,7 +844,7 @@ export const getMockBackendFixtureCounts = (fixture) => ({
   nodes: countInvocationSchemas(fixture),
   projects: fixture.projects.length,
   queueItems: fixture.queueItems.length,
-  workflowNodes: fixture.projects[0]?.data?.projectGraph?.nodes?.length ?? 0,
+  workflowNodes: getFixtureProjectWorkflowDocument(fixture.projects[0]?.data)?.nodes?.length ?? 0,
 });
 
 const findDuplicates = (values) => {

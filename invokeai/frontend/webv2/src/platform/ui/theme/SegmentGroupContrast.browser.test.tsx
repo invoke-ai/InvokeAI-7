@@ -51,8 +51,7 @@ const renderSegments = async (): Promise<{ checked: HTMLElement; count: HTMLElem
 };
 
 describe('segmentGroup checked contrast', () => {
-  // The indicator is a solid accent fill, so anything inside the checked item
-  // has to be readable against accent — not against the panel behind it.
+  // Measure checked text against the accent indicator, not the panel.
   it('renders the checked label against the accent fill at AA contrast', async () => {
     const { checked, indicator } = await renderSegments();
 
@@ -65,8 +64,7 @@ describe('segmentGroup checked contrast', () => {
     const { count, indicator } = await renderSegments();
     const style = getComputedStyle(count);
 
-    // Secondary text inside a segment must dim from `currentColor`; pinning it
-    // to a fixed `fg.muted` grey drops to ~1.5:1 on the accent fill.
+    // Derive secondary text from currentColor; fixed muted gray loses contrast on selected accent fills.
     const ratio = getContrastRatio(style.color, getComputedStyle(indicator).backgroundColor, Number(style.opacity));
 
     expect(ratio).toBeGreaterThanOrEqual(4.5);

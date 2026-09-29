@@ -36,8 +36,7 @@ describe('layout preset activation', () => {
     expect(appliedPresetIds).toEqual(['edit']);
   });
 
-  // Callers paint the selection before the store has it; a dropped activation
-  // that resolved silently would strand the control on a preset nothing applied.
+  // Dropped activations must reject so optimistic preset selection can recover.
   it('reports the dropped activation when the active project changed under it', async () => {
     const appliedPresetIds: string[] = [];
     let activeProjectId = 'project-a';
@@ -142,11 +141,7 @@ describe('layout preset activation', () => {
     expect(appliedPresetIds).toEqual([layoutPresets[0].id]);
   });
 
-  // Condition 2 of the fast-path contract: the fast path must bump
-  // latestRequestId itself, not rely on apply's downstream dispatch to do it.
-  // If it didn't, an earlier slow activation — still racing its deadline —
-  // would see requestId === latestRequestId when its timer fires and would
-  // overwrite the fast-path's result.
+  // The warm fast path must advance latestRequestId itself so an older cold deadline cannot overwrite it.
   it('bumps the request id so an earlier pending slow activation cannot overwrite a later fast-path apply', async () => {
     const appliedPresetIds: string[] = [];
     let loaded = false;
@@ -159,18 +154,12 @@ describe('layout preset activation', () => {
       load: () => new Promise(() => {}),
     });
 
-    // Start a slow activation for a cold preset; it will sit waiting for its
-    // deadline timer.
     const slowActivation = activator.activate(layoutPresets[0]);
 
-    // A later, fully-warm activation for a different preset takes the fast
-    // path and applies synchronously.
     loaded = true;
     void activator.activate(layoutPresets[1]);
     expect(appliedPresetIds).toEqual(['edit']);
 
-    // When the slow activation's deadline fires, it must see it has been
-    // superseded and must not clobber the fast-path result.
     await expect(slowActivation).resolves.toBeNull();
     expect(appliedPresetIds).toEqual(['edit']);
   });

@@ -19,11 +19,6 @@ import {
   type WorkflowModelRequirement,
 } from './modelRequirements';
 
-/**
- * Fixture helpers mirror `graphToDocument.test.ts`: minimal templates and
- * documents built inline rather than mocking the module under test.
- */
-
 const fieldInput = (name: string, overrides: Partial<FieldInputTemplate> = {}): FieldInputTemplate => ({
   default: undefined,
   description: '',
@@ -117,6 +112,35 @@ describe('extractWorkflowModelRequirements', () => {
         identifier: { base: 'sdxl', hash: 'hash-1', key: 'model-key-1', name: 'My Model', type: 'main' },
         kind: 'exact',
         label: 'My Model',
+      },
+    ]);
+  });
+
+  it('extracts model requirements from persisted dynamic input templates', () => {
+    const model = fieldInput('model', { required: true });
+    const templates: InvocationTemplates = {
+      call_saved_workflow: invocationTemplate('call_saved_workflow', {}),
+    };
+    const document = graphDocument([
+      {
+        ...invocationNode('call', 'call_saved_workflow', {
+          model: { base: 'sdxl', hash: 'hash-1', key: 'model-key-1', name: 'My Model', type: 'main' },
+        }),
+        data: {
+          ...invocationNode('call', 'call_saved_workflow').data,
+          dynamicInputTemplates: { model },
+          inputs: { model: { label: 'Model', name: 'model', value: { base: 'sdxl', key: 'model-key-1' } } },
+        },
+      },
+    ]);
+
+    const { requirements } = extractWorkflowModelRequirements(document, templates);
+
+    expect(requirements).toEqual([
+      {
+        identifier: { base: 'sdxl', key: 'model-key-1' },
+        kind: 'exact',
+        label: 'model-key-1',
       },
     ]);
   });

@@ -30,24 +30,26 @@ dequantized, derotated bf16 weight per forward call. The derotation is a
 ``[out, in/256, 256] @ [256, 256]`` matmul — a rounding error next to the
 transformer forward itself — and the transient bf16 weight (<= ~310 MB for H3's
 largest layer) has to fit inside the calling node's working-memory reservation:
-``peak_int8_dequant_transient_bytes`` is what a denoise node adds to its estimate
-for that, since the model's resident size does not account for it.
+``dequantizing_linear.peak_dequant_transient_bytes`` is what a denoise node adds to
+its estimate for that, since the model's resident size does not account for it.
 """
 
 import json
-from collections.abc import Iterable, Mapping
+import struct
+from collections.abc import Callable, Iterable, Mapping
+from pathlib import Path
 from typing import Any
 
 import torch
-import torch.nn.functional as F
 
-from invokeai.backend.model_manager.taxonomy import ModelFormat
+from invokeai.backend.quantization.dequantizing_linear import DequantizingLinear
 from invokeai.backend.quantization.fp8_scaled import (
     COMFY_QUANT_SUFFIX,
     FP8_WEIGHT_DTYPES,
     INPUT_SCALE_SUFFIXES,
     WEIGHT_SCALE_SUFFIXES,
     is_castable_float,
+    iter_weight_scale_pairs,
 )
 
 CONVROT_GROUP_SIZE = 256
@@ -152,6 +154,33 @@ def parse_comfy_quant_marker(blob: torch.Tensor) -> dict:
     return parse_comfy_quant_bytes(raw)
 
 
+def read_comfy_quant_markers(path: Path) -> dict[str, dict[str, Any]]:
+    """Read every ``<layer>.comfy_quant`` marker from a safetensors file WITHOUT loading tensor
+    data - header parse plus a seek per marker blob. Keys are the raw (un-renamed) layer names.
+
+    Lets a loader reject unsupported quantization formats (e.g. the fp8_scaled repacks, which
+    share this key layout) before committing to a ~20 GiB read, and model identification -- which
+    sees only a header's dtypes and shapes -- check what a marker declares.
+
+    Marker bytes go through the same tolerant parser the state-dict readers use. This reader runs
+    FIRST, so a strict parse here is what a NUL-padded marker -- which Comfy writes, and which that
+    parser exists to absorb -- would actually hit: a `JSONDecodeError` out of the middle of a load,
+    naming neither the file nor the key.
+    """
+    markers: dict[str, dict[str, Any]] = {}
+    with open(path, "rb") as f:
+        header_len = struct.unpack("<Q", f.read(8))[0]
+        header = json.loads(f.read(header_len))
+        header.pop("__metadata__", None)
+        for key, entry in header.items():
+            if not key.endswith(COMFY_QUANT_SUFFIX):
+                continue
+            start, end = entry["data_offsets"]
+            f.seek(8 + header_len + start)
+            markers[key[: -len(COMFY_QUANT_SUFFIX)]] = parse_comfy_quant_bytes(f.read(end - start))
+    return markers
+
+
 def as_column_scale(weight: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
     """A per-output-channel scale shaped `[out, 1]`, so it multiplies down the rows.
 
@@ -191,23 +220,22 @@ def dequantize_convrot_weight(
     return w.to(dtype)
 
 
-class Int8ConvrotLinear(torch.nn.Module):
+class Int8ConvrotLinear(DequantizingLinear):
     """A linear layer storing Comfy int8_tensorwise(+convrot) weights, dequantized per forward.
 
     The int8 weight and fp32 scale are registered as PERSISTENT buffers named ``weight`` and
     ``weight_scale`` — exactly the converted checkpoint's key names — so ``load_state_dict``
     consumes the quantized tensors directly and the model cache moves them between devices
     like any other weight. The Hadamard matrix is neither loaded nor held per module: it is a
-    constant of the scheme, so ``forward`` takes it from :func:`shared_regular_hadamard`, which
-    keeps one per ``(size, device, dtype)`` for every layer in the model.
+    constant of the scheme, so the dequantization takes it from :func:`shared_regular_hadamard`,
+    which keeps one per ``(size, device, dtype)`` for every layer in the model.
 
     The model cache wraps this module as ``CustomInt8ConvrotLinear`` (see
     ``AUTOCAST_MODULE_TYPE_MAPPING``), which enables sidecar LoRA patches and lets a partial
-    load leave some int8 buffers on the CPU — ``forward``'s per-call ``.to(device)`` then
-    streams them (at half the bf16 byte count) instead of failing outright. Fully-resident
-    operation remains the intended regime (~20 GiB free VRAM for H3's pruned transformer);
-    streamed layers pay a per-forward PCIe cost, and an unquantized model is still the better
-    citizen on small cards.
+    load leave some int8 buffers on the CPU — the per-call ``.to(device)`` then streams them
+    (at half the bf16 byte count) instead of failing outright. Fully-resident operation remains
+    the intended regime (~20 GiB free VRAM for H3's pruned transformer); streamed layers pay a
+    per-forward PCIe cost, and an unquantized model is still the better citizen on small cards.
     """
 
     def __init__(
@@ -255,10 +283,20 @@ class Int8ConvrotLinear(torch.nn.Module):
             ).view(self.out_features, self.in_features)
         return w
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        weight = self._dequantized_weight(x.device, x.dtype)
-        bias = self.bias.to(device=x.device, dtype=x.dtype) if self.bias is not None else None
-        return F.linear(x, weight, bias)
+    def dequant_transient_bytes(self, compute_dtype: torch.dtype) -> int:
+        """Two weight-sized tensors in the compute dtype.
+
+        Both halves of ``_dequantized_weight`` peak at two: the dtype cast of the int8 weight is alive
+        alongside the product it is multiplied into, and that product is then alive alongside the
+        derotation matmul's output. Each pair is freed before the next allocates.
+
+        Under partial load the int8 weight is additionally streamed to the device per call, adding up to
+        half a weight again; the resident-model regime this scheme targets pays nothing for that. Verified
+        against the real `z_image_turbo_int8_convrot` checkpoint: exact for most shapes, and 2 MiB under on
+        the two that make cuBLAS take a workspace (10240x3840 and 3840x10240), against a 3 GiB reservation
+        floor.
+        """
+        return 2 * self.out_features * self.in_features * compute_dtype.itemsize
 
     def extra_repr(self) -> str:
         return f"in_features={self.in_features}, out_features={self.out_features}, convrot={self.convrot}"
@@ -283,6 +321,67 @@ def extract_int8_convrot_markers(sd: dict[str, Any]) -> dict[str, dict[str, Any]
         markers[key[: -len(COMFY_QUANT_SUFFIX)]] = marker
         del sd[key]
     return markers
+
+
+def reject_int8_layers_a_plain_fold_cannot_decode(sd: Mapping[str, Any], what: str = "This checkpoint") -> None:
+    """Refuse an ``int8_tensorwise`` layer to a fold that only multiplies the scale in.
+
+    ``int8_tensorwise`` and ComfyUI's scaled fp8 share a key layout — a ``.weight`` beside a
+    ``.weight_scale`` — so a loader with no int8 branch folds one as if it were the other. The scale
+    even goes down the right axis, which is what makes this quiet: the result has the weight's
+    shape, its dtype and roughly its magnitude. What is missing is the inverse Hadamard rotation
+    ``convrot`` applies along the input dim. Measured on a 64x256 layer, the folded weight
+    correlates with the one the checkpoint encodes at **0.07**, against 0.9999 for the real decode.
+
+    Only the rotated case is refused. With ``convrot`` off, ``codes * scale`` *is* the whole decode
+    — bit-identical to :class:`Int8ConvrotLinear` with ``convrot=False``, checked — so where a fold
+    actually runs, such a build folds to the right weight and must keep doing so. (It does not
+    follow that it loads: the Mistral encoder keeps fp8 rather than folding on any CUDA device, and
+    there an unrotated int8 weight is left untouched and dies later in ``load_state_dict``. That is
+    how it behaved before this check and is not what this check is about.) An int8 weight with no
+    marker is refused too: nothing says whether it was rotated, and every published build marks
+    every one of its int8 weights.
+
+    Read from the *per-tensor* marker only. The safetensors header names formats as well, but no
+    observed header entry carries ``convrot`` or the group size (see ``flux.py``, where the
+    per-layer marker wins for that reason), so a header entry is not evidence that a layer is safe
+    to fold — consulting one
+    would let a header-named rotated build straight through. Every caller here still has the markers
+    in ``sd``: the two folds run before anything pops them, and the Mistral seam checks ahead of
+    ``extract_fp8_scaled_layers`` for the same reason.
+
+    Narrower than :func:`reject_unmarked_int8_weights` in two ways, because it runs before a model
+    exists: it sees only int8 weights that have a scale beside them, and it cannot skip weights the
+    model will discard. A merged file bundling an int8 submodel a non-strict load would drop is
+    therefore refused rather than ignored.
+    """
+    rotated: list[str] = []
+    unmarked: list[str] = []
+    for weight_key, _scale_key in iter_weight_scale_pairs(sd):
+        weight = sd[weight_key]
+        if getattr(weight, "dtype", None) is not torch.int8:
+            continue
+        path = weight_key[: -len(".weight")]
+        blob = sd.get(f"{path}{COMFY_QUANT_SUFFIX}")
+        marker = parse_comfy_quant_marker(blob) if blob is not None else None
+        if not marker or marker.get("format") != INT8_TENSORWISE_FORMAT:
+            unmarked.append(path)
+        elif marker.get("convrot"):
+            rotated.append(path)
+
+    if rotated:
+        raise ValueError(
+            f"{what} carries {len(rotated)} int8_tensorwise layer(s) quantized with convrot (e.g. "
+            f"{', '.join(sorted(rotated)[:3])}), and this loader has no int8 branch. Folding the scale in "
+            "without the inverse rotation produces a weight of the right shape that bears no relation to the "
+            "one stored. Use the fp8 or bf16 build of this checkpoint."
+        )
+    if unmarked:
+        raise ValueError(
+            f"{what} carries {len(unmarked)} int8 weight(s) with no int8_tensorwise marker (e.g. "
+            f"{', '.join(sorted(unmarked)[:3])}), so nothing says whether they were rotated. Refusing rather "
+            "than guessing: read unrotated, a rotated weight loads cleanly and generates noise."
+        )
 
 
 def check_int8_scale_layout(path: str, weight: torch.Tensor, scale: torch.Tensor) -> None:
@@ -312,7 +411,9 @@ def check_int8_scale_layout(path: str, weight: torch.Tensor, scale: torch.Tensor
     )
 
 
-def reject_unmarked_int8_weights(sd: dict[str, Any], markers: Mapping[str, Any], architecture: str) -> None:
+def reject_unmarked_int8_weights(
+    sd: dict[str, Any], markers: Mapping[str, Any], architecture: str, model: torch.nn.Module | None = None
+) -> None:
     """Refuse a checkpoint holding an int8 weight that no ``int8_tensorwise`` marker claims.
 
     Call this *outside* the "did we find markers" branch. An int8 weight whose marker is missing --
@@ -330,37 +431,27 @@ def reject_unmarked_int8_weights(sd: dict[str, Any], markers: Mapping[str, Any],
     marker on the *weight* at ``foo.qkv`` exempted a packed sidecar the decode never places, and a
     key shorter than the suffix collapses to the empty string. An int8 tensor under any name but a
     marked ``.weight`` is a payload this decode cannot place, and saying so is the whole point.
+
+    Pass ``model`` where the caller has already built it, and the check narrows to weights this
+    model actually consumes -- the same filter :func:`reject_foreign_quantization_scales` applies,
+    for the same reason. A merged single file may bundle a quantized *submodel* beside the
+    transformer; a non-strict load discards those keys rather than casting them, so they cannot
+    become noise and are not this loader's business. Without ``model`` every int8 key in ``sd`` is
+    in scope, which is right for a caller that has not built the module tree yet.
     """
+    consumed = None if model is None else {name for name, _ in model.named_modules()}
     orphans = sorted(
         k
         for k, v in sd.items()
         if v.dtype is torch.int8
         and not (isinstance(k, str) and k.endswith(".weight") and k[: -len(".weight")] in markers)
+        and (consumed is None or (isinstance(k, str) and k.rsplit(".", 1)[0] in consumed))
     )
     if orphans:
         raise ValueError(
             f"{architecture} checkpoint has {len(orphans)} int8 weight(s) with no `comfy_quant` marker, "
             f"e.g. {orphans[:3]}. Loading them would produce a model that runs and generates noise."
         )
-
-
-def requires_sidecar_patching(transformer: Any, model_format: ModelFormat) -> bool:
-    """Whether LoRA has to be applied as a sidecar rather than written into the weights.
-
-    The format alone does not answer this. A plain ``checkpoint`` may still be an
-    ``int8_tensorwise`` build, whose Linears the loader replaced with :class:`Int8ConvrotLinear` --
-    those hold their weights as int8 *buffers*, which a direct patch cannot write into (and which
-    could not represent the patched values anyway, the rotation having mixed 256 of them). Worse,
-    the fallbacks that would otherwise catch this iterate ``module.parameters()``, and these modules
-    have none, so they answer "not quantized" and direct patching is chosen. So the loaded module
-    tree is consulted, not just the config.
-
-    Lives here rather than beside one denoise node because every architecture this scheme reaches
-    needs the same answer, and getting it from the config alone is wrong in the same way for each.
-    """
-    if model_format in (ModelFormat.GGUFQuantized, ModelFormat.SDNQQuantized):
-        return True
-    return any(isinstance(module, Int8ConvrotLinear) for module in transformer.modules())
 
 
 def drop_unconsumed_quantization_sidecars(sd: dict[str, Any]) -> dict[str, Any]:
@@ -397,8 +488,8 @@ def resolve_quantized_module_paths(
     return resolved
 
 
-def _resolve_int8_target(model: torch.nn.Module, path: str) -> tuple[torch.nn.Module, str]:
-    """The owner and attribute name of the module a marker names, as ``setattr`` needs them.
+def _resolve_int8_target(model: torch.nn.Module, path: str) -> tuple[torch.nn.Module, str, torch.nn.Linear]:
+    """The owner, attribute name and module a marker names, as ``setattr`` and the swap need them.
 
     Refuses anything an ``Int8ConvrotLinear`` cannot stand in for. Without this, a marker naming a
     module the built model lacks leaves ``get_submodule`` to raise a bare ``AttributeError`` out of
@@ -419,7 +510,7 @@ def _resolve_int8_target(model: torch.nn.Module, path: str) -> tuple[torch.nn.Mo
             f"'{path}' is marked int8_tensorwise but is a {type(target).__name__}, not an nn.Linear. "
             "Only a Linear weight can be kept in int8 storage."
         )
-    return parent, attribute
+    return parent, attribute, target
 
 
 def _can_stay_int8(path: str, weight: Any, model: torch.nn.Module | None, skip_patterns: Iterable[str] = ()) -> bool:
@@ -592,7 +683,19 @@ def swap_in_int8_linears(model: torch.nn.Module, sd: dict[str, Any], quantized: 
                 "Only a Linear weight can be kept in int8 storage; dequantize this one instead."
             )
         check_int8_scale_layout(path, weight, scale)
-        parent, attribute = _resolve_int8_target(model, path)
+        parent, attribute, target = _resolve_int8_target(model, path)
+        bias = sd.get(f"{path}.bias")
+        if (bias is None) is not (target.bias is None):
+            # The replacement's buffers are whatever the checkpoint supplied, so from here on the
+            # module's key set mirrors the file rather than the architecture -- and the strict
+            # `load_state_dict` the loaders run afterwards can no longer tell the two apart. A
+            # repack that drops all-zero biases would otherwise load, cache and render with every
+            # quantized layer silently missing its offset.
+            missing, extra = ("checkpoint", "model") if bias is None else ("model", "checkpoint")
+            raise ValueError(
+                f"'{path}' is marked int8_tensorwise and the {extra}'s Linear has a bias, but the "
+                f"{missing} has none. The checkpoint does not match this architecture."
+            )
         setattr(
             parent,
             attribute,
@@ -600,7 +703,7 @@ def swap_in_int8_linears(model: torch.nn.Module, sd: dict[str, Any], quantized: 
                 weight=weight,
                 weight_scale=scale,
                 convrot=bool(marker.get("convrot", False)),
-                bias=sd.get(f"{path}.bias"),
+                bias=bias,
                 group_size=int(marker.get("convrot_groupsize", CONVROT_GROUP_SIZE)),
             ),
         )
@@ -621,6 +724,53 @@ def cast_unquantized(sd: dict[str, Any], dtype: torch.dtype, quantized: dict[str
     for key in sd:
         if key not in pinned and is_castable_float(sd[key]):
             sd[key] = sd[key].to(dtype)
+
+
+def install_int8_convrot_layers(
+    model: torch.nn.Module,
+    sd: dict[str, Any],
+    quantized: dict[str, dict[str, Any]],
+    dtype: torch.dtype,
+    *,
+    architecture: str,
+    reserve: Callable[[int], None],
+    skip_patterns: Iterable[str] = (),
+    extra_reserved_bytes: int = 0,
+) -> dict[str, dict[str, Any]]:
+    """Take a marked int8 checkpoint from state dict to installed ``Int8ConvrotLinear`` modules.
+
+    Five steps whose order is the point, and which every loader that keeps int8 weights needs in
+    full. Each step depends on the one before it:
+
+    1. :func:`reject_foreign_quantization_scales` -- before anything is cast, because a scale from
+       another scheme means its weight is about to be cast without one, off by ``1/weight_scale``,
+       while the orphaned scale disappears into ``strict=False``. After the model exists, because
+       only a weight this model consumes can be corrupted that way.
+    2. ``reserve`` -- before the split, which dequantizes the layers it cannot keep. A reservation
+       made afterwards lets that transient land on an unreserved cache, and a locked model cannot be
+       evicted to make room for it.
+    3. :func:`split_int8_convrot_layers` -- widens what cannot stay int8 and returns what can.
+    4. :func:`cast_unquantized` -- the dense tensors only; the surviving payloads reach
+       ``load_state_dict`` exactly as stored.
+    5. :func:`swap_in_int8_linears` -- the surviving layers, never the full marker set: a marker on
+       a module the split widened would install an ``Int8ConvrotLinear`` where the model wants
+       something else.
+
+    Written down once because getting it partially right is silent: Z-Image and the PiD decoder each
+    skipped step 1 and loaded a mixed checkpoint's fp8 weights unscaled, with nothing in the log.
+
+    ``reserve`` is the cache's ``make_room``; ``extra_reserved_bytes`` is for a loader whose file
+    also holds layers of another scheme -- Krea-2 and Z-Image add what their nvfp4 layers will cost,
+    so the one reservation covers the whole load. Returns the layers that stayed int8.
+    """
+    reject_foreign_quantization_scales(sd, quantized, architecture, model)
+    reserve(
+        predict_int8_cast_size(sd, dtype, quantized, model=model, skip_patterns=skip_patterns) + extra_reserved_bytes
+    )
+    surviving = split_int8_convrot_layers(sd, quantized, dtype, model=model, skip_patterns=skip_patterns)
+    cast_unquantized(sd, dtype, surviving)
+    swap_in_int8_linears(model, sd, surviving)
+    return surviving
 
 
 def reject_foreign_quantization_scales(
@@ -670,31 +820,3 @@ def reject_foreign_quantization_scales(
             f"`int8_tensorwise` marker claims, e.g. {orphans[:3]}. A file mixing int8_tensorwise "
             "with scaled fp8 is not supported: the fp8 weights would load unscaled."
         )
-
-
-def peak_int8_dequant_transient_bytes(model: torch.nn.Module, compute_dtype: torch.dtype) -> int:
-    """Peak bytes one forward transiently needs to dequantize this model's int8 linears.
-
-    ``Int8ConvrotLinear`` keeps its weight int8 and materializes the dequantized, derotated weight
-    per forward, so that transient is *not* covered by the model's resident size and has to fit
-    inside the calling node's working-memory reservation. Zero when the model holds no such layer.
-
-    Two weight-sized tensors in the compute dtype, over the largest such layer. Both halves of
-    ``_dequantized_weight`` peak at two: the dtype cast of the int8 weight is alive alongside the
-    product it is multiplied into, and that product is then alive alongside the derotation matmul's
-    output. Each pair is freed before the next allocates, and the layers run one at a time.
-
-    Under partial load the int8 weight is additionally streamed to the device per call, adding up to
-    half a weight again; the resident-model regime this scheme targets pays nothing for that.
-
-    What it does not cover is the matmul's own cuBLAS workspace, which is not a property of this
-    scheme -- a dense Linear of the same shape allocates it too, and the node's activation estimate
-    is measured with it included. Verified against the real `z_image_turbo_int8_convrot` checkpoint:
-    exact for most shapes, and 2 MiB under on the two that make cuBLAS take a workspace
-    (10240x3840 and 3840x10240), against a 3 GiB reservation floor.
-    """
-    largest = 0
-    for module in model.modules():
-        if isinstance(module, Int8ConvrotLinear):
-            largest = max(largest, module.in_features * module.out_features)
-    return 2 * largest * compute_dtype.itemsize

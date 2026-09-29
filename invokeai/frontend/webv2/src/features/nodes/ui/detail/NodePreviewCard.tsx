@@ -21,14 +21,8 @@ import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { useTranslation } from 'react-i18next';
 
 /**
- * A read-only, static rendering of a single node — the same visual language as
- * the editor's `InvocationFlowNode` (titled header, output rows above input
- * rows, colored field handles), shared via the workflow feature's node chrome
- * helpers, but with none of its editor coupling. The real node depends on
- * ReactFlow context (`Handle`, `useStore`) and the workbench dispatch; the
- * Launchpad mounts neither, so this previews the node's shape from just its
- * `InvocationTemplate`. Handles are drawn as plain dots, fields are labels
- * only (no value controls), and nothing is interactive.
+ * Render template-only node previews without ReactFlow or workbench dependencies; handles and fields are
+ * noninteractive.
  */
 
 const sortByUiOrder = <T extends { uiOrder?: number | null }>(templates: T[]): T[] =>

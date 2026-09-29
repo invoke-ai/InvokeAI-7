@@ -1,9 +1,6 @@
 /**
- * The mapper, driven by the real response body.
- *
- * `__fixtures__/architectureCapabilities.json` is pinned against the backend by
- * `tests/backend/architectures/test_capabilities_fixture.py`, so these assertions are about the
- * payload the app actually receives rather than a hand-written stand-in.
+ * __fixtures__/architectureCapabilities.json is pinned to the backend by
+ * tests/backend/architectures/test_capabilities_fixture.py.
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -43,9 +40,7 @@ describe('the wire contract', () => {
 
 describe('toBaseGenerationConfig', () => {
   it('reads the guidance field for a guidance-labelled architecture', () => {
-    // dev is FLUX's base row -- variant rows exist only where they differ. It records cfg_scale
-    // 1.0 ("CFG off") alongside guidance 3.5, and buildFluxGraph wires this value into the node's
-    // `guidance`. Preferring cfg_scale would generate at 1.0.
+    // guidance 3.5 is distinct from cfg_scale 1.0, which disables CFG.
     expect(toBaseGenerationConfig(row('flux')).defaults.cfgScale).toBe(3.5);
     expect(toBaseGenerationConfig(row('flux', 'dev_fill')).defaults.cfgScale).toBe(30);
   });
@@ -64,8 +59,7 @@ describe('toBaseGenerationConfig', () => {
   });
 
   it('derives the optimal side from the declared area, not from width alone', () => {
-    // Square today for every generatable architecture, so this is the identity -- but MiniMax H3
-    // is 1344x768, so the area form is what keeps a non-square canvas from being squashed.
+    // Nonsquare defaults verify that optimum derives from area.
     expect(toBaseGenerationConfig(row('sd-1')).dimensions.optimalSide).toBe(512);
     expect(toBaseGenerationConfig(row('sd-2')).dimensions.optimalSide).toBe(768);
     expect(toBaseGenerationConfig(row('minimax-h3')).dimensions.optimalSide).toBe(1016); // sqrt(1344*768)
@@ -144,10 +138,7 @@ describe('the registry', () => {
 
 describe('publishing the table', () => {
   it('stays empty when a malformed row makes the mapping throw', () => {
-    // The wire type is applied by an unchecked `as` in the api module, so a row the backend never
-    // meant to serve is reachable. Publishing the rows before mapping them left the registry
-    // saying "loaded" over an empty config map: the widget would show the load error while every
-    // fail-closed gate elsewhere opened onto fallback policy for every architecture.
+    // Validate before publication so malformed rows cannot mark fallback policy loaded.
     const malformed = [...rows, { base: 'broken', variant: null } as unknown as ArchitectureCapabilitiesRow];
 
     expect(() => setArchitectureCapabilities(malformed)).toThrow();
@@ -168,8 +159,7 @@ describe('publishing the table', () => {
   });
 
   it('notifies subscribers when the table is replaced or dropped', () => {
-    // The single subscription contract behind every imperative reader: renders, the bbox grid, the
-    // Invoke gate and the bbox <-> dims sync all re-read on this.
+    // One registry subscription serves all synchronous policy readers.
     const seen: number[] = [];
     const unsubscribe = onArchitectureCapabilitiesChanged(() => seen.push(getArchitectureCapabilitiesRevision()));
 

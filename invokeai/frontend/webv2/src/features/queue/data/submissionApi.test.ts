@@ -113,6 +113,7 @@ const getSubmittedBody = () => {
       idempotency_key: string;
       origin: string;
       runs: number;
+      workflow?: Record<string, unknown>;
     };
   };
 };
@@ -337,6 +338,46 @@ describe('enqueueWorkflow', () => {
     expect(getSubmittedBody().batch.batch_id).toBeUndefined();
   });
 
+  it('sends batch-node groups in the backend shape and lets it multiply them across runs', async () => {
+    const { enqueueWorkflow } = await import('./submissionApi');
+
+    await enqueueWorkflow({
+      ...createWorkflowRequest(),
+      batchData: [
+        [{ fieldName: 'cfg', items: [1, 2], nodeId: 'denoise' }],
+        [{ fieldName: 'image', items: [{ image_name: 'a.png' }], nodeId: 'sink' }],
+      ],
+    });
+
+    expect(getSubmittedBody().batch.runs).toBe(2);
+    expect(getSubmittedBody().batch.data).toEqual([
+      [{ field_name: 'cfg', items: [1, 2], node_path: 'denoise' }],
+      [{ field_name: 'image', items: [{ image_name: 'a.png' }], node_path: 'sink' }],
+    ]);
+  });
+
+  it('includes the serialized parent workflow in the batch', async () => {
+    const { enqueueWorkflow } = await import('./submissionApi');
+    const workflow = {
+      author: '',
+      contact: '',
+      description: '',
+      edges: [],
+      exposedFields: [],
+      form: null,
+      meta: { category: 'user', version: '3.0.0' },
+      name: 'Parent workflow',
+      nodes: [],
+      notes: '',
+      tags: '',
+      version: '1.0.0',
+    };
+
+    await enqueueWorkflow({ ...createWorkflowRequest(), workflow });
+
+    expect(getSubmittedBody().batch.workflow).toEqual(workflow);
+  });
+
   it('expands recorded seeds into one zipped group and never redraws them', async () => {
     const { enqueueWorkflow } = await import('./submissionApi');
     const seeds = [
@@ -500,6 +541,88 @@ describe('getResultImages', () => {
     const images = await getResultImages(1, 'source-1', '2026-06-15T00:00:00.000Z');
 
     expect(images.map((image) => image.imageName)).toEqual(['external-a.png', 'external-b.png']);
+  });
+
+  it('extracts all image names from named workflow return values', async () => {
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (url === '/api/v1/queue/default/i/1') {
+        return Promise.resolve({
+          item_id: 1,
+          session: {
+            results: {
+              call: {
+                type: 'workflow_return_output',
+                values: {
+                  Image: { image_name: 'returned-a.png' },
+                  Images: { collection: [{ image_name: 'returned-b.png' }, { image_name: 'returned-c.png' }] },
+                },
+              },
+            },
+          },
+          status: 'completed',
+        });
+      }
+
+      const imageName = decodeURIComponent(url.replace('/api/v1/images/i/', ''));
+      return Promise.resolve({
+        height: 768,
+        image_name: imageName,
+        image_url: `/images/${imageName}`,
+        is_intermediate: false,
+        thumbnail_url: `/thumbs/${imageName}`,
+        width: 1024,
+      });
+    });
+
+    const { getResultImages } = await import('./submissionApi');
+
+    const images = await getResultImages(1, 'source-1', '2026-06-15T00:00:00.000Z');
+
+    expect(images.map((image) => image.imageName)).toEqual(['returned-a.png', 'returned-b.png', 'returned-c.png']);
+  });
+
+  it('ignores metadata and unused workflow return value images', async () => {
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (url === '/api/v1/queue/default/i/1') {
+        return Promise.resolve({
+          item_id: 1,
+          session: {
+            results: {
+              output: {
+                image: { image_name: 'actual.png' },
+                output_meta: { image_name: 'metadata.png' },
+                type: 'image_output',
+              },
+              unused: {
+                type: 'workflow_return_value_output',
+                value: { image_name: 'unused.png' },
+              },
+              returned: {
+                type: 'workflow_return_output',
+                values: { Image: { image_name: 'returned.png' } },
+              },
+            },
+          },
+          status: 'completed',
+        });
+      }
+
+      const imageName = decodeURIComponent(url.replace('/api/v1/images/i/', ''));
+      return Promise.resolve({
+        height: 768,
+        image_name: imageName,
+        image_url: `/images/${imageName}`,
+        is_intermediate: false,
+        thumbnail_url: `/thumbs/${imageName}`,
+        width: 1024,
+      });
+    });
+
+    const { getResultImages } = await import('./submissionApi');
+
+    const images = await getResultImages(1, 'source-1', '2026-06-15T00:00:00.000Z');
+
+    expect(images.map((image) => image.imageName)).toEqual(['actual.png', 'returned.png']);
   });
 
   it('carries the backend creation timestamp, normalized to ISO, alongside the submission instant', async () => {

@@ -85,8 +85,7 @@ describe('resolveCanvasProcessingSize', () => {
   });
 
   it('snaps on the grid the model variant declares, not the one its base declares', () => {
-    // Wan TI2V-5B takes multiples of 32 where A14B takes 16. 720 is on the one grid and not the
-    // other, so a caller that drops the variant shows a size the graph then re-snaps.
+    // 720 distinguishes 32-pixel grids from 16-pixel grids.
     const bbox = { height: 720, width: 1280 };
     const a14b = { base: 'wan', type: 'main' } as GenerateModelConfig;
     const ti2v = { base: 'wan', type: 'main', variant: 'ti2v_5b' } as GenerateModelConfig;

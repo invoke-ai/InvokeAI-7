@@ -12,12 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VideoReferenceListField } from './VideoReferenceListField';
 import { VideoUiProvider, type VideoUiAdapter } from './VideoUiContext';
 
-/**
- * Each card is badged with the labels the prompt must use for that reference. The numbers
- * come from three independent per-modality counters over the WHOLE list, so they are not a
- * card's own business: a move renumbers cards the user never touched, and the cards are
- * memoized against exactly that kind of re-render.
- */
+/** Modality counters span the whole list; reordering must update labels even on otherwise unchanged memoized cards. */
 const i18n = i18next.createInstance();
 await i18n.use(initReactI18next).init({
   fallbackLng: 'en',
@@ -120,12 +115,7 @@ const badges = (): string[] =>
     .map((badge) => badge.textContent!)
     .filter((text) => /^<(?:Picture|Video|Audio) \d+>$/.test(text));
 
-/**
- * Each card's accessible name, in card order: the labels it carries followed by its media
- * name. Asserting the pairing rather than a flat list of badges is what catches a card
- * rendering someone else's labels — which is the failure an identity-keyed, memoized list
- * of same-named references can produce.
- */
+/** Assert labels paired with media names so reused same-name cards cannot display another reference's labels. */
 const cards = (): string[] =>
   // `[aria-label]` narrows past the unnamed groups Chakra's own slider and select markup adds.
   [...host.querySelectorAll<HTMLElement>('[role="group"][aria-label]')].map((card) => card.getAttribute('aria-label')!);
@@ -151,11 +141,9 @@ describe('video reference prompt labels', () => {
       videoReference('b-roll.mp4', 'video'),
     ]);
 
-    // The badges carry the tokens verbatim, brackets included -- they are what the user
-    // copies into the prompt.
+    // Badges must preserve the encoder's token syntax, including brackets.
     expect(badges()).toEqual(['<Audio 1>', '<Picture 1>', '<Video 1>', '<Audio 2>', '<Picture 2>', '<Video 2>']);
-    // An audio-only reference takes an audio number and no video number; the sounded video
-    // takes one from each counter, so neither number is the card's position in the list.
+    // Modality counters are independent of card position.
     expect(cards()).toEqual([
       '<Audio 1> voiceover.mp4',
       '<Picture 1> portrait.png',
@@ -177,17 +165,11 @@ describe('video reference prompt labels', () => {
     expect(option).not.toBeNull();
     await act(() => option!.click());
 
-    // Dropping the FIRST reference's image track hands its video number to the second card,
-    // whose own reference and slot are untouched -- the card is memoized, so its labels have
-    // to arrive as props that change, not be derived from what it holds.
+    // Removing this image track renumbers an otherwise unchanged memoized sibling.
     expect(cards()).toEqual(['<Audio 1> v1.mp4', '<Video 1> <Audio 2> v2.mp4']);
   });
   it('keeps the token in prompt order inside an RTL document', async () => {
-    // The brackets are bidi-neutral, so in an RTL paragraph they flip and the badge reads
-    // '>Picture 1<' -- a token the encoder will not match, shown to a user who is being
-    // told to type it. Arabic and Hebrew set dir on the document root (I18nController), and
-    // widgets.video has no translations yet, so these badges DO get rendered in an RTL
-    // document today.
+    // In RTL text, bidi-neutral brackets can reverse the encoder token; badges must retain LTR token order.
     host.dir = 'rtl';
     await render([imageReference('portrait.png')]);
 
@@ -198,9 +180,7 @@ describe('video reference prompt labels', () => {
   });
 
   it('moves the labels with the card, not with the slot', async () => {
-    // Twins: same media name, so the list's identity keys collide by design and React
-    // reuses the card instances in place rather than moving them. Only the labels arriving
-    // as props keeps the pairing honest through the move.
+    // Same-name cards reuse their instances; label props must still follow the reordered references.
     await render([videoReference('twin.mp4', 'video'), videoReference('twin.mp4', 'video_audio')]);
     expect(cards()).toEqual(['<Video 1> twin.mp4', '<Video 2> <Audio 1> twin.mp4']);
 

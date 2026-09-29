@@ -216,10 +216,7 @@ describe('ResizableTextarea', () => {
     await expect.poll(() => textarea.value).toBe('(hello world)+++');
   });
 
-  // Regression: the write goes through the native value setter and a synthetic
-  // `input` event, which React honours even on a read-only textarea. In template
-  // view mode that wrote the merged text back as the authored prompt, and the
-  // next submit merged it a second time.
+  // Synthetic input must not mutate a read-only prompt.
   it('leaves a read-only prompt alone', async () => {
     const ReadOnlyHarness = () => (
       <PromptTextarea

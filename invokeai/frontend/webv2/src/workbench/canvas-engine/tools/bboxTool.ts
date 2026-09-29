@@ -1,30 +1,7 @@
 /**
- * The bbox tool: interactive editing of the generation bounding box
- * (`document.bbox`).
- *
- * Interaction contract (CANVAS_PLAN Phase 4.1):
- * - **Pointer-down** hit-tests the bbox: on a resize handle → a resize gesture;
- *   inside the frame → a move gesture; outside → nothing (the bbox is never
- *   "deselected").
- * - **Pointer-move** updates an engine-transient preview rect (via
- *   `stores.bboxPreview`) that the overlay renders — it never dispatches. Sizes
- *   and positions snap to the model grid (`stores.bboxGrid`); hold **alt** to
- *   bypass model-grid snapping. Bypassed movement and resize still stay aligned
- *   to whole document pixels. While moving, **shift** constrains the frame to the
- *   dominant horizontal or vertical axis. Corner/edge resize preserves the
- *   aspect ratio when the lock is active (`stores.bboxOptions`); **shift**
- *   toggles the constraint on for an unlocked frame (a locked ratio stays
- *   locked). **Ctrl** (⌘ on macOS) mirrors
- *   the resize across the frame's center, so the opposite edge moves too and the
- *   center holds; it composes with both snapping and the aspect constraint.
- *   Modifiers are sampled per pointer sample, so a mid-drag press takes effect on
- *   the next pointer move.
- * - **Commit** (pointer-up after a real change): exactly one `commitStructural`
- *   with the new/old bbox (`setCanvasBbox`, undoable). A zero-delta gesture
- *   commits nothing.
- * - **Cancel** (Esc / pointercancel): drops the preview, no dispatch.
- *
- * Zero React, zero import-time side effects.
+ * Bbox drags preview without dispatch. Handles resize, interior moves and outside is inert. Alt bypasses grid
+ * while retaining integer pixels; Shift constrains movement/aspect, Ctrl/Command resizes symmetrically. Read
+ * modifiers per sample. Release commits one changed bbox with undo; cancellation and zero change commit nothing.
  */
 
 import type { Rect, Vec2 } from '@workbench/canvas-engine/types';
@@ -38,10 +15,6 @@ import { type BboxTarget, bboxEquals, bboxTargetAt, moveBbox, resizeBbox, roundB
 /** Bit for the primary (usually left) mouse button in `PointerEvent.buttons`. */
 const PRIMARY_BUTTON = 1;
 
-/**
- * The CSS cursor for each bbox target: axis-aware resize arrows on the handles
- * (opposite corners/edges share a cursor) and `move` inside the frame.
- */
 const CURSOR_FOR_TARGET: Record<BboxTarget, string> = {
   e: 'ew-resize',
   move: 'move',
@@ -126,8 +99,6 @@ const nextBboxFor = (
 /** Creates a fresh bbox tool with its own gesture state. */
 export const createBboxTool = (): Tool => {
   let state: GestureState | null = null;
-  // The bbox target under the pointer while idle (no gesture), driving the hover
-  // resize/move cursor. `null` = the pointer is off the frame.
   let hoverTarget: BboxTarget | null = null;
 
   const clearPreview = (ctx: ToolContext): void => {
@@ -136,8 +107,7 @@ export const createBboxTool = (): Tool => {
   };
 
   return {
-    // During a drag the grabbed target's cursor holds; while idle the hovered
-    // handle/interior wins; off the frame it falls back to the default arrow.
+    // Hold the grabbed cursor during drag; otherwise use hovered handle/interior or default arrow.
     cursor: () => {
       const target = state?.target ?? hoverTarget;
       return target ? CURSOR_FOR_TARGET[target] : 'default';

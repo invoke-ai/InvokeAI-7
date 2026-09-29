@@ -1,15 +1,6 @@
 /**
- * Per-layer raster cache store.
- *
- * Each layer's rendered pixels are cached on their own {@link RasterSurface}
- * so the compositor can redraw the document without re-rasterizing every
- * layer each frame. Caches are always re-rasterizable, so eviction is safe:
- * a hidden layer's cache can be dropped to stay under a memory budget and
- * rebuilt on demand when it becomes visible again.
- *
- * All surface allocation flows through the injected {@link RasterBackend}
- * seam, so the store runs unchanged in node tests. Zero React, zero
- * import-time side effects.
+ * Per-layer raster surfaces avoid repeated rasterization during compositing. Allocation uses injected {@link
+ * RasterBackend}; callers protect pixels that cannot yet be reconstructed before eviction.
  */
 
 import type { Rect } from '@workbench/canvas-engine/types';
@@ -23,14 +14,7 @@ export const DEFAULT_CACHE_BUDGET_BYTES = 512 * 1024 * 1024;
 
 const BYTES_PER_PIXEL = 4;
 
-/**
- * How many recent writes a layer's damage trail retains.
- *
- * A derived surface asks what changed since the version it was built at, so the
- * trail only has to span the gap between two composites — normally one write.
- * The cap keeps a long stroke from growing the trail without bound; overrunning
- * it just means derived surfaces rebuild wholesale, which is the old behaviour.
- */
+/** Bound damage history between derived-surface refreshes. Overrunning the window safely forces a full rebuild. */
 const DAMAGE_TRAIL_LIMIT = 16;
 
 /** One recorded write: the version it produced, and where it landed (`null` = everywhere). */
@@ -48,12 +32,8 @@ export interface LayerCacheEntry {
   /** True only after real pixels have been published into this allocation. */
   hasPublishedPixels: boolean;
   /**
-   * The surface's content bounds in the layer's LOCAL coordinate space. The
-   * surface holds `rect.width`×`rect.height` pixels; surface pixel `(sx, sy)`
-   * maps to layer-local `(rect.x + sx, rect.y + sy)`. The origin can be negative
-   * (a paint layer grown up/left of its start). The compositor draws the surface
-   * at `transform × rect.origin`. An empty rect (0 width/height) marks an empty
-   * layer (a brand-new or cleared paint layer) — safe to skip everywhere.
+   * Local content bounds map surface (sx,sy) to (rect.x+sx,rect.y+sy), allowing negative origins. Composite at
+   * transform*origin; zero-sized rects represent empty layers.
    */
   rect: Rect;
   /** Bumped every time the cache is invalidated; thumbnails/subscribers watch this. */
@@ -94,43 +74,23 @@ export interface LayerCacheStore {
   /** Returns the existing cache entry for a layer, or `undefined`. Touches LRU order. */
   get(layerId: string): LayerCacheEntry | undefined;
   /**
-   * Returns the cache entry for a layer, creating (or resizing) its surface to
-   * `width`x`height` at the LOCAL origin `(0, 0)`. The returned entry identity is
-   * stable across calls that don't change the size, so callers can hold onto it
-   * between frames. Use this for origin-anchored layers (image / shape / text /
-   * gradient); paint caches, which can grow off-origin, use {@link getOrCreateRect}
-   * / {@link growToRect}.
+   * Create/resize origin-anchored caches with stable entry identity while size matches. Off-origin paint uses
+   * {@link getOrCreateRect} or {@link growToRect}.
    */
   getOrCreate(layerId: string, width: number, height: number): LayerCacheEntry;
   /**
-   * Like {@link getOrCreate} but places the surface at an arbitrary layer-local
-   * `rect` origin (which may be negative). Creates the entry when absent; when it
-   * already exists the surface is left untouched (the caller — a rasterizer or a
-   * growth op — owns resizing), only ensuring existence. Used for paint layers
-   * whose content rect is not origin-anchored.
+   * Ensure a cache at an arbitrary local rect, including negative origins. Existing surfaces remain untouched;
+   * rasterization/growth owns resizing.
    */
   getOrCreateRect(layerId: string, rect: Rect): LayerCacheEntry;
   /**
-   * Grows (never shrinks) a layer's cache to cover `rect` in layer-local space,
-   * preserving the existing pixels at their new offset. A no-op when `rect` is
-   * already within the current extent. Creates the entry (surface sized to `rect`)
-   * when absent. Returns the entry.
+   * Grow to include a local rect while preserving pixels and offset; never shrink. Creates missing entries and
+   * reuses already-covering ones.
    */
   growToRect(layerId: string, rect: Rect): LayerCacheEntry;
   /**
-   * Shrinks a layer's cache to `rect` (layer-local) — the mirror of
-   * {@link growToRect}. `rect` is INTERSECTED with the current extent, so this can
-   * never grow a cache; retained pixels move to the new offset and the rest is
-   * dropped. An empty `rect` collapses the cache to a zero-rect surface.
-   *
-   * Bumps the version UNCONDITIONALLY, unlike `growToRect`: a shrink destroys pixels,
-   * so an in-flight rasterization job must invalidate itself rather than resize the
-   * trimmed surface back up and redraw over it.
-   *
-   * MUTATES the entry, never deletes it — `applyImagePatch` gates undo on the entry
-   * existing, so a collapsed cache must still accept restored pixels via `growToRect`.
-   *
-   * No-op when `rect` already equals the extent; `undefined` when there is no cache.
+   * Intersect-crop local bounds, retaining the entry even when empty so undo can grow it again. Changed bounds
+   * always bump version to fence stale raster jobs. Equal bounds are a no-op; missing caches return undefined.
    */
   shrinkToRect(layerId: string, rect: Rect): LayerCacheEntry | undefined;
   /** Clones `pixels` into a detached replacement without mutating the live cache. */
@@ -138,20 +98,13 @@ export interface LayerCacheStore {
   /** Publishes a detached replacement without allocating, resizing, or drawing. */
   installReplacement(prepared: PreparedLayerCacheReplacement): LayerCacheEntry;
   /**
-   * Marks directly-written pixels current, bumps the version, and notifies
-   * observers.
-   *
-   * `damage` is the surface-local rect the write touched. Supplying it lets
-   * surfaces DERIVED from this cache (adjusted, mask-fill) refresh just that
-   * rect instead of rebuilding wholesale — see {@link damageSince}. Omitting it
-   * declares the whole surface changed, which is always safe.
+   * Publish direct writes as current, bump version and notify. Optional surface-local damage enables partial
+   * derived refresh; omission means the whole surface changed.
    */
   publishPixels(layerId: string, damage?: Rect | null): LayerCacheEntry | undefined;
   /**
-   * The union of the regions written to `layerId` since `version`, or `null` if
-   * that cannot be established — because some write did not name its damage,
-   * because the trail is older than the retained window, or because the surface
-   * was reallocated. `null` means "assume everything changed".
+   * Union damage since version, or null for unknown writes, expired history or reallocation. Null requires full
+   * refresh.
    */
   damageSince(layerId: string, version: number): Rect | null;
   /** Marks a layer's cache stale and bumps its `version`. */
@@ -162,11 +115,7 @@ export interface LayerCacheStore {
   version(layerId: string): number;
   /** Total bytes held across all cache surfaces (w*h*4 each). */
   byteSize(): number;
-  /**
-   * Evicts hidden-layer caches (those whose id is not in `visibleIds`) in
-   * least-recently-used order until the total {@link byteSize} is within
-   * `budgetBytes`. Visible layers are never evicted. Returns the evicted ids.
-   */
+  /** Evict unprotected ids in LRU order until within `budgetBytes`; never evict `visibleIds`. Returns evicted ids. */
   evictHidden(visibleIds: Iterable<string>, budgetBytes?: number): string[];
   /** Releases every cache entry. Cache surfaces are GC'd with the store. */
   dispose(): void;
@@ -196,12 +145,8 @@ export const createLayerCacheStore = (
     }
     damageTrails.set(entry.layerId, trail);
   };
-  // Per-id version FLOOR: the highest version each layer id has ever reached,
-  // retained across delete/recreate (delete, LRU eviction). A recreated entry
-  // (undo→redo, transform bake, merge, evict→re-show) starts ABOVE this floor
-  // rather than resetting to 0 — so version-keyed dependents (the adjusted-surface
-  // cache, thumbnail state) never mistake fresh pixels for a stale version they
-  // already have cached. Only ever grows; a plain number per id (negligible).
+  // Retain per-id version floors across deletion/eviction. Recreated entries start above prior versions so derived
+  // caches cannot mistake new pixels for old ones.
   const versionFloors = new Map<string, number>();
   let tick = 0;
 
@@ -345,12 +290,8 @@ export const createLayerCacheStore = (
     // recorded so far is void. Dropping the trail makes derived surfaces rebuild
     // wholesale for one frame rather than refresh the wrong pixels.
     damageTrails.delete(layerId);
-    // Grow onto a fresh backing store with the old pixels blitted across, at
-    // their new offset within it. `resize` cannot do this — it clears — so the
-    // pixels would otherwise have to make a CPU round trip, which measured as
-    // roughly the whole cost of the growth again on top of the allocation. This
-    // is the hot path for a stroke: painting outward grows the cache once per
-    // chunk boundary crossed, and each growth stalls the gesture.
+    // Grow by adopting a fresh backing store and blitting old pixels at the new offset. Ordinary resize clears,
+    // and CPU readback/upload would add work on the stroke hot path.
     const surface = existing.surface;
     if (!curEmpty && cur.width > 0 && cur.height > 0) {
       surface.resizePreserving(newRect.width, newRect.height, cur.x - newRect.x, cur.y - newRect.y);
@@ -429,8 +370,7 @@ export const createLayerCacheStore = (
       rect: prepared.rect,
       stale: false,
       surface: prepared.surface,
-      // Directly-published pixels receive the same extra version bump that the
-      // old create-then-notify path applied, while remaining monotonic on swap.
+      // Direct publication preserves the extra create-then-notify version bump and monotonic swaps.
       version: initialVersion(prepared.layerId) + 1,
     };
     touch(entry);
@@ -522,9 +462,7 @@ export const createLayerCacheStore = (
       if (total <= budgetBytes) {
         break;
       }
-      // Retain the version floor so a re-shown (re-rasterized) layer resumes ABOVE
-      // its pre-eviction version, not from 0 — otherwise the adjusted-surface /
-      // thumbnail caches would serve stale pixels keyed to the recycled version.
+      // Retain version floors across eviction to prevent stale adjusted surfaces and thumbnails after recreation.
       rememberFloor(entry);
       entries.delete(entry.layerId);
       damageTrails.delete(entry.layerId);

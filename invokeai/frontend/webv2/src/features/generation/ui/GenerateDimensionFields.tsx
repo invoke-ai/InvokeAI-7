@@ -45,12 +45,7 @@ const DIMENSION_SLIDER_MAX = 2048;
 /** Vertical gap between the width and height rows; the lock bracket's geometry assumes it. */
 const DIMENSION_ROW_GAP = '2';
 
-/**
- * One continuous line leaves the width row, runs behind the lock, and returns
- * to the height row: the coupling is drawn, and it lights up with the button
- * when locked. Geometry assumes `xs` rows (28px), an 8px row gap, a 4px column
- * gap, and the `2xs` button (24px).
- */
+/** Geometry assumes 28px rows, an 8px row gap, a 4px column gap, and a 24px lock button. */
 const LOCK_BRACKET_PATH = 'M0 14H12a4 4 0 0 1 4 4v28a4 4 0 0 1-4 4H0';
 const LOCK_BRACKET_CSS = {
   alignItems: 'center',
@@ -81,12 +76,7 @@ const PREVIEW_PAD_PX = 10;
 
 const clampToRange = (value: number): number => Math.min(MAX_DIMENSION, Math.max(MIN_DIMENSION, value));
 
-/**
- * The preview IS a control: the solid rectangle is the current size, the dashed
- * ghost is the model-recommended size at the same scale, and the corner handle
- * resizes by direct manipulation — grid-snapped on release, ratio-lock
- * respected while dragging. Arrow keys nudge by one grid step.
- */
+/** Respect ratio lock during drag and snap to the grid on release; arrow keys move by one grid step. */
 const SizePreview = ({
   current,
   grid,
@@ -126,11 +116,7 @@ const SizePreview = ({
     };
   };
 
-  // The rectangle stays centered, so the corner moves at half the size delta —
-  // the factor of two keeps the handle tracking the pointer. The scale is the
-  // one captured at drag start: the live scale shrinks as the rectangle grows,
-  // and reading it mid-drag turns each pointer step into a larger size step — a
-  // runaway feedback loop.
+  // Centered resize doubles pointer displacement; freeze the drag-start scale to avoid feedback.
   const dimsFromPointer = (event: { clientX: number; clientY: number }): Dimensions | null => {
     const drag = dragRef.current;
 
@@ -359,9 +345,7 @@ export const GenerateDimensionFields = ({
     });
   };
 
-  // The lock shows whether the ratio is held at all, preset or captured, so a
-  // chosen preset reads as locked and unlocking always returns to Free. Locking
-  // captures the current ratio, named by its preset when it matches one.
+  // Presets imply a lock; free ratios capture the current ratio. Unlocking selects Free.
   const toggleLock = () => {
     if (isRatioConstrained) {
       commitSettings({
@@ -406,8 +390,7 @@ export const GenerateDimensionFields = ({
     commitSettings(calculateNewSize(ratio, optimal * optimal, dimensionGrid));
   };
 
-  // "Recommended" is what the optimize action would produce for the live ratio:
-  // the model's optimal pixel budget reshaped to the current proportions.
+  // The recommendation reshapes the model's pixel budget to the live aspect ratio.
   const recommendedDimensions = calculateNewSize(
     dimensionRatio,
     dimensions.optimal * dimensions.optimal,
@@ -431,8 +414,7 @@ export const GenerateDimensionFields = ({
     </>
   );
 
-  // The model's optimal side is the stop worth landing on; the recommended
-  // size for the live ratio is what "Set optimal size" would produce.
+  // The optimal-side stop is scalar; recommended dimensions preserve the live ratio.
   const dimensionField = (key: 'height' | 'width') => (
     <ScrubberField
       defaultValue={modelDefaults?.[key]}
@@ -483,8 +465,7 @@ export const GenerateDimensionFields = ({
                 </Box>
               </HStack>
             </GenerateFieldContextMenu>
-            {/* The preset row mirrors the dimension rows: the select fills the value
-                column and the swap sits in the lock's column beneath it. */}
+
             <HStack alignItems="center" gap="1">
               <AspectRatioSelect
                 fallbackRatio={dimensionRatio}

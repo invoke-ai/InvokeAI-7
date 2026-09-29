@@ -10,19 +10,13 @@ import { assertAccountScopeCurrent } from '@platform/state/accountLifecycle';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * Lifecycle actions for a single model, shared by the detail page and the
- * library row context menu so behavior and notifications stay identical.
- * Confirmation UI is the caller's job; these just act and notify.
- */
+/** Share lifecycle actions and notifications across surfaces; callers own confirmation UI. */
 type ModelActionTarget = Pick<ModelConfig, 'key' | 'name'>;
 
 export const useModelActions = () => {
   const { t } = useTranslation();
   const notify = useNotify();
-  // Separate instances: `run` ignores calls while its own action is in
-  // flight, so sharing one would let a slow convert swallow a remove.
-  // The busy flags stay unused.
+  // Use independent action guards so a slow conversion cannot swallow a delete.
   const { run: runRemove } = useScopedAction();
   const { run: runConvert } = useScopedAction();
   const { run: runReidentify } = useScopedAction();

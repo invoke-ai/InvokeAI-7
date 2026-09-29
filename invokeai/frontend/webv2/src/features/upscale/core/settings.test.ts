@@ -107,10 +107,11 @@ describe('upscale settings', () => {
   it('validates required fields and ranges and clears a deleted input image', () => {
     const defaults = createDefaultUpscaleWidgetValues();
 
-    expect(getUpscaleValidationReasons({ ...defaults, scale: 17 })).toEqual(
+    expect(getUpscaleValidationReasons({ ...defaults, cfgScale: 0.5, scale: 17 })).toEqual(
       expect.arrayContaining([
         'Upscale needs an input image. Upload one or send one from Gallery.',
         'Scale must be between 1 and 16.',
+        'CFG scale must be between 1 and 100.',
       ])
     );
 

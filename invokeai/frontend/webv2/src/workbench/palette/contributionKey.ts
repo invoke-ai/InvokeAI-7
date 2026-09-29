@@ -1,11 +1,8 @@
 import type { WidgetContributionSource } from '@workbench/widgetContracts';
 
 /**
- * Stable identity for every palette contribution. Widget source identity is
- * part of the key so two instances may safely contribute the same local id.
- * The source tuple intentionally mirrors getWidgetContributionSourceKey;
- * keeping the palette helper self-contained prevents its lazy chunk from
- * pulling extension registry internals into either route's initial graph.
+ * Include widget source identity so instances can reuse local ids. Mirror the source tuple locally to preserve the
+ * palette's lazy boundary.
  */
 export const getPaletteContributionKey = (
   kind: 'command' | 'provider' | 'provider-error' | 'provider-result' | 'provider-row' | 'scope' | 'scope-command',

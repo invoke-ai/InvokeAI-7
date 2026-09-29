@@ -1,9 +1,9 @@
 """Tests for the Krea-2 and MiniMax H3 starter-model bundles.
 
-A single-file / GGUF Krea-2 transformer ships *only* the transformer, so it is unusable without a
+A single-file (nvfp4) or GGUF Krea-2 transformer ships *only* the transformer, so it is unusable without a
 standalone Qwen-Image VAE and Qwen3-VL text encoder. These tests assert that the Krea-2 launchpad
-bundle exists, exposes both the diffusers and GGUF options, and that each GGUF entry declares the two
-standalone dependencies so installing it also pulls the pieces needed to run it.
+bundle exists, exposes the diffusers, GGUF and nvfp4 options, and that each transformer-only entry declares the
+two standalone dependencies so installing it also pulls the pieces needed to run it.
 """
 
 from invokeai.backend.model_manager.starter_models import (
@@ -37,7 +37,8 @@ def test_krea2_bundle_contains_diffusers_gguf_and_standalone_components() -> Non
     assert "krea/Krea-2-Raw" in by_source
     assert any(s.endswith("krea2_turbo-Q4_K_M.gguf") for s in by_source)
     assert any(s.endswith("krea2_turbo-Q8_0.gguf") for s in by_source)
-    # Standalone components (also declared as GGUF dependencies).
+    assert any(s.endswith("krea2_turbo_nvfp4.safetensors") for s in by_source)
+    # Standalone components (also declared as dependencies of the transformer-only entries).
     assert any(m.type is ModelType.VAE for m in by_source.values())
     assert any(m.type is ModelType.Qwen3VLEncoder for m in by_source.values())
 
@@ -49,19 +50,22 @@ def test_krea2_diffusers_variants() -> None:
     assert by_source["krea/Krea-2-Raw"].variant is Krea2VariantType.Base
 
 
-def test_krea2_gguf_entries_declare_vae_and_encoder_dependencies() -> None:
-    gguf_models = [
+def test_krea2_transformer_only_entries_declare_vae_and_encoder_dependencies() -> None:
+    # Everything but the diffusers pipelines is a single file holding only the transformer: the GGUFs and the nvfp4
+    # safetensors alike.
+    transformer_only = [
         m
         for m in _krea2_bundle_by_source().values()
-        if m.format is ModelFormat.GGUFQuantized and m.base is BaseModelType.Krea2
+        if m.type is ModelType.Main and m.base is BaseModelType.Krea2 and m.source.startswith("https://")
     ]
-    assert len(gguf_models) == 2
+    assert {m.format for m in transformer_only} == {ModelFormat.GGUFQuantized, None}
+    assert len(transformer_only) == 3
 
-    for model in gguf_models:
+    for model in transformer_only:
         assert model.variant is Krea2VariantType.Turbo
         assert model.dependencies is not None, f"{model.name} must declare its standalone dependencies"
         dep_types = {dep.type for dep in model.dependencies}
-        # GGUF ships only the transformer -> it must pull a VAE and a Qwen3-VL encoder.
+        # It ships only the transformer -> it must pull a VAE and a Qwen3-VL encoder.
         assert ModelType.VAE in dep_types, f"{model.name} is missing a VAE dependency"
         assert ModelType.Qwen3VLEncoder in dep_types, f"{model.name} is missing a Qwen3-VL encoder dependency"
 

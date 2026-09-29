@@ -7,6 +7,76 @@ import type { FieldInputInstance } from './field';
 import { zFieldInputInstance, zFieldInputInstanceWithExtras, zFieldInputTemplate, zFieldOutputTemplate } from './field';
 import { zSemVer } from './semver';
 
+const zWebv2DynamicInputTemplateSource = z.object({
+  default: z.unknown().optional(),
+  description: z.string(),
+  exclusiveMaximum: z.number().nullable().optional(),
+  exclusiveMinimum: z.number().nullable().optional(),
+  fieldKind: z.enum(['input', 'internal']),
+  input: z.enum(['connection', 'direct', 'any']),
+  maximum: z.number().nullable().optional(),
+  minimum: z.number().nullable().optional(),
+  multipleOf: z.number().nullable().optional(),
+  name: z.string(),
+  options: z.array(z.unknown()).nullable().optional(),
+  required: z.boolean(),
+  title: z.string(),
+  type: z.object({
+    batch: z.boolean(),
+    cardinality: z.enum(['SINGLE', 'COLLECTION', 'SINGLE_OR_COLLECTION']),
+    name: z.string(),
+    originalType: z.unknown().optional(),
+  }),
+  uiChoiceLabels: z.record(z.string(), z.string()).nullable().optional(),
+  uiComponent: z.enum(['slider', 'textarea', 'video-frame-index']).nullable().optional(),
+  uiHidden: z.boolean(),
+  uiModelBase: z.array(z.string()).nullable().optional(),
+  uiModelFormat: z.array(z.string()).nullable().optional(),
+  uiModelType: z.array(z.string()).nullable().optional(),
+  uiOrder: z.number().int().nullable().optional(),
+});
+
+const zWebv2DynamicInputTemplate = z.preprocess((value) => {
+  const result = zWebv2DynamicInputTemplateSource.safeParse(value);
+  if (!result.success) {
+    return value;
+  }
+
+  const template = result.data;
+  const options = template.options?.map(String);
+  const defaultValue =
+    template.type.name === 'EnumField' && (template.default === undefined || template.default === null)
+      ? (options?.[0] ?? '')
+      : template.default;
+  return {
+    ...template,
+    fieldKind: 'input' as const,
+    labels: template.uiChoiceLabels ?? undefined,
+    exclusiveMaximum: template.exclusiveMaximum ?? undefined,
+    exclusiveMinimum: template.exclusiveMinimum ?? undefined,
+    maximum: template.maximum ?? undefined,
+    minimum: template.minimum ?? undefined,
+    multipleOf: template.multipleOf ?? undefined,
+    options: options ?? undefined,
+    default:
+      template.type.name === 'EnumField' && defaultValue !== undefined && defaultValue !== null
+        ? String(defaultValue)
+        : defaultValue,
+    originalType: template.type.originalType,
+    type: template.type,
+    ui_choice_labels: template.uiChoiceLabels ?? undefined,
+    ui_component: template.uiComponent ?? undefined,
+    ui_hidden: template.uiHidden,
+    ui_model_base: template.uiModelBase ?? undefined,
+    ui_model_format: template.uiModelFormat ?? undefined,
+    ui_model_type: template.uiModelType ?? undefined,
+    ui_order: template.uiOrder ?? undefined,
+    ui_type: undefined,
+  };
+}, zFieldInputTemplate);
+
+const zCompatibleFieldInputTemplate = z.union([zFieldInputTemplate, zWebv2DynamicInputTemplate]);
+
 // #region InvocationTemplate
 const _zInvocationTemplate = z.object({
   type: z.string(),
@@ -37,7 +107,7 @@ export const zInvocationNodeData = z
     // Parsed per-input in the transform below so that the input-instance schema can be chosen based
     // on the node type (extras are only accepted for nodes that declare `extra='allow'`).
     inputs: z.record(z.string(), z.unknown()),
-    dynamicInputTemplates: z.record(z.string(), zFieldInputTemplate).default({}),
+    dynamicInputTemplates: z.record(z.string(), zCompatibleFieldInputTemplate).default({}),
     isOpen: z.boolean(),
     isIntermediate: z.boolean(),
     useCache: z.boolean(),
@@ -51,7 +121,16 @@ export const zInvocationNodeData = z
     const instanceSchema = nodeAcceptsExtraInputs(data.type) ? zFieldInputInstanceWithExtras : zFieldInputInstance;
     const inputs: Record<string, FieldInputInstance> = {};
     for (const [name, rawInput] of Object.entries(data.inputs)) {
-      const result = instanceSchema.safeParse(rawInput);
+      const dynamicTemplate = data.dynamicInputTemplates[name];
+      const rawValue =
+        rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)
+          ? (rawInput as { value?: unknown }).value
+          : undefined;
+      const normalizedInput =
+        dynamicTemplate?.type.name === 'EnumField' && (typeof rawValue === 'number' || typeof rawValue === 'boolean')
+          ? { ...(rawInput as Record<string, unknown>), value: String(rawValue) }
+          : rawInput;
+      const result = instanceSchema.safeParse(normalizedInput);
       if (!result.success) {
         ctx.addIssue({
           code: 'custom',
@@ -161,6 +240,13 @@ const zDefaultInvocationNodeEdge = z.custom<Edge<Record<string, never>, 'default
 );
 export type DefaultInvocationNodeEdge = z.infer<typeof zDefaultInvocationNodeEdge>;
 
+const zLoopLinkageInvocationNodeEdgeValidationSchema = z.looseObject({
+  type: z.literal('loop_linkage'),
+});
+const zLoopLinkageInvocationNodeEdge = z.custom<Edge<Record<string, never>, 'loop_linkage'>>(
+  (val) => zLoopLinkageInvocationNodeEdgeValidationSchema.safeParse(val).success
+);
+
 const zInvocationNodeEdgeCollapsedData = z.object({
   count: z.number().int().min(1),
 });
@@ -174,7 +260,11 @@ const zCollapsedInvocationNodeEdge = z.custom<Edge<InvocationNodeEdgeCollapsedDa
   (val) => zInvocationNodeEdgeCollapsedValidationSchema.safeParse(val).success
 );
 export type CollapsedInvocationNodeEdge = z.infer<typeof zCollapsedInvocationNodeEdge>;
-export const zAnyEdge = z.union([zDefaultInvocationNodeEdge, zCollapsedInvocationNodeEdge]);
+export const zAnyEdge = z.union([
+  zDefaultInvocationNodeEdge,
+  zLoopLinkageInvocationNodeEdge,
+  zCollapsedInvocationNodeEdge,
+]);
 export type AnyEdge = z.infer<typeof zAnyEdge>;
 // #endregion
 

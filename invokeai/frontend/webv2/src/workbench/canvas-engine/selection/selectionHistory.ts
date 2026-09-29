@@ -1,18 +1,12 @@
 /**
- * Makes a {@link SelectionState} undoable: every selection-changing call is
- * bracketed by snapshots and recorded on the engine history as one step, so a
- * marquee, lasso, select-all, invert, deselect, or Select Object result reverts
- * on its own instead of taking the previous pixel edit with it.
- *
- * Replay restores snapshots directly and never re-enters this wrapper's
- * recording path; a call that leaves the selection unchanged records nothing.
- *
- * Zero React, zero import-time side effects.
+ * Snapshots selection-changing calls into individual engine-history steps. Unchanged selections record nothing;
+ * replay restores snapshots directly without recording again.
  */
 
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { Rect, SelectionOp } from '@workbench/canvas-engine/types';
 
+import { NO_HELD_ASSET_REFS } from '@workbench/canvas-engine/history/history';
 import { isEmpty } from '@workbench/canvas-engine/math/rect';
 
 import type { SelectionCommit, SelectionSnapshot, SelectionState } from './selectionState';
@@ -78,6 +72,7 @@ export const withSelectionHistory = (selection: SelectionState, history: History
     lastAfter = after;
     history.push({
       bytes: beforeBytes + (after.alpha?.byteLength ?? 0),
+      heldAssetRefs: NO_HELD_ASSET_REFS,
       label,
       redo: () => selection.restore(after),
       undo: () => selection.restore(before),

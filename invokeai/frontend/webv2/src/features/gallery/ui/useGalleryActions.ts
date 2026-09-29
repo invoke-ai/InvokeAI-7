@@ -59,8 +59,6 @@ export const useGalleryActions = ({
     return {
       archiveBoard: async (boardId, archived) => {
         const owner = captureAccountScope();
-        // Optimistic: the board moves between sections immediately, and
-        // archiving the board being viewed steps off it right away.
         const rollback = patchGalleryBoardCaches(queryClient, boardId, { archived });
         const movedSelectionAway = archived && boardId === selectedBoardId;
 
@@ -181,8 +179,6 @@ export const useGalleryActions = ({
       refresh,
       renameBoard: async (boardId, boardName) => {
         const owner = captureAccountScope();
-        // Optimistic: the new name paints everywhere at once; the refresh
-        // re-sorts name-ordered lists once the backend confirms.
         const rollback = patchGalleryBoardCaches(queryClient, boardId, { name: boardName });
 
         try {
@@ -206,16 +202,19 @@ export const useGalleryActions = ({
       setCompareItem: gallery.setCompareItem,
       setSearchTerm: gallery.setSearchTerm,
       setStarredOnly: gallery.setStarredOnly,
-      // The similarity reference is widget state rather than a workbench
-      // command: it patches the gallery widget's persisted values, the same
-      // surface the parsed query is read back from. Changing the query resets
-      // pagination (mirroring setGallerySearchTerm) and clears the text term
-      // the chip visually replaces — left behind, a stale term would keep
-      // filtering invisibly and poison the preview widget's navigation query.
-      // Filmstrip/preview navigation under semantic ranking still follows
-      // board chronology, not similarity rank — an inherited limitation.
+      setSemanticSearchMode: gallery.setSemanticSearchMode,
+      setSemanticSearchText: gallery.setSemanticSearchText,
+      commitSemanticSearch: gallery.commitSemanticSearch,
+      clearSearch: gallery.clearSearch,
+      // Store references in widget values, reset pagination, and clear replaced text/mode so hidden filters cannot
+      // affect listing or Preview navigation.
       setSemanticImageQuery: (reference) =>
-        widgets.patchGalleryValues({ galleryPage: 0, searchTerm: '', semanticImageQuery: reference }),
+        widgets.patchGalleryValues({
+          galleryPage: 0,
+          searchTerm: '',
+          semanticImageQuery: reference,
+          semanticSearchText: null,
+        }),
       setView: gallery.setView,
       toggleItemInSelection: gallery.toggleItemSelection,
       updateSettings: gallery.updateSettings,

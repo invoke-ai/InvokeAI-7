@@ -1,6 +1,6 @@
+import type { LogNamespace } from '@platform/logging/contracts';
 import type { SettingFieldProps } from '@platform/ui/settings/contracts';
 import type { WorkbenchThemeId } from '@theme/themes';
-import type { DeveloperLogNamespace } from '@workbench/diagnostics/contracts';
 
 import { Box, chakra, Checkbox, Flex, HStack, Icon, SimpleGrid, Stack, Text, useSlotRecipe } from '@chakra-ui/react';
 import { Button, ConfirmDialog } from '@platform/ui';
@@ -8,9 +8,10 @@ import { resolveSettingsText } from '@platform/ui/settings/contracts';
 import { ModifiedSettingIndicator } from '@platform/ui/settings/ModifiedSettingIndicator';
 import { themeCardRecipe } from '@theme/recipes';
 import { previewSwatches, THEMES, type ThemeDefinition } from '@theme/system';
+import { areLoggingPreferencesDefault, resetLoggingPreferences } from '@workbench/diagnostics/loggingPreferences';
 import { clearAllWorkbenchData } from '@workbench/projects/syncedPersistence';
 import { useOptionalWorkbenchCommands, useOptionalWorkbenchPersistenceService } from '@workbench/WorkbenchContext';
-import { CheckIcon, RotateCcwIcon, Trash2Icon } from 'lucide-react';
+import { BrushCleaningIcon, CheckIcon, RotateCcwIcon, Trash2Icon } from 'lucide-react';
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -19,6 +20,7 @@ import { clearWorkspaceData, rememberWorkspaceClearFailure } from './clearWorksp
 import { GenerationDevicesSettings } from './GenerationDevicesSettings';
 import { HotkeysSettingsSection } from './HotkeysSettingsSection';
 import { ImageMapVocabularySettings } from './ImageMapVocabularySettings';
+import { setWorkbenchSettingsSection } from './settingsDialogStore';
 import {
   clearWorkbenchSettings,
   DEFAULT_PREFERENCES,
@@ -86,7 +88,7 @@ export const DeveloperNamespacesSettings = () => {
   const developerLogNamespaces = useWorkbenchPreferenceSelector((preferences) => preferences.developerLogNamespaces);
   const enabledNamespaces = useMemo(() => new Set(developerLogNamespaces), [developerLogNamespaces]);
   const toggleNamespace = useCallback(
-    (namespace: DeveloperLogNamespace, checked: boolean) => {
+    (namespace: LogNamespace, checked: boolean) => {
       const next = checked
         ? [...developerLogNamespaces, namespace]
         : developerLogNamespaces.filter((candidate) => candidate !== namespace);
@@ -118,8 +120,8 @@ const DeveloperNamespaceCheckbox = ({
   toggleNamespace,
 }: {
   checked: boolean;
-  namespace: DeveloperLogNamespace;
-  toggleNamespace: (namespace: DeveloperLogNamespace, checked: boolean) => void;
+  namespace: LogNamespace;
+  toggleNamespace: (namespace: LogNamespace, checked: boolean) => void;
 }) => {
   const handleCheckedChange = useCallback(
     (event: { checked: boolean | 'indeterminate' }) => toggleNamespace(namespace, event.checked === true),
@@ -137,7 +139,28 @@ const DeveloperNamespaceCheckbox = ({
   );
 };
 
+export const LoggingResetSettings = () => {
+  const { t } = useTranslation();
+  const isDefault = useWorkbenchPreferenceSelector(areLoggingPreferencesDefault);
+  const reset = useCallback(() => void resetLoggingPreferences(), []);
+
+  return (
+    <HStack gap="3">
+      <Button disabled={isDefault} size="sm" variant="outline" onClick={reset}>
+        <RotateCcwIcon />
+        {t('settings.catalog.resetLoggingDefaults')}
+      </Button>
+      {isDefault ? (
+        <Text color="fg.muted" fontSize="xs">
+          {t('settings.catalog.loggingDefaultsActive')}
+        </Text>
+      ) : null}
+    </HStack>
+  );
+};
+
 export const WorkspaceSettings = () => {
+  const { t } = useTranslation();
   const commands = useOptionalWorkbenchCommands();
   const mountedPersistence = useOptionalWorkbenchPersistenceService();
   const scope = useWorkbenchSettingsSelector((snapshot) => snapshot.scope);
@@ -162,6 +185,7 @@ export const WorkspaceSettings = () => {
   const resetLayout = useCallback(() => commands?.layout.reset(), [commands]);
   const openClearConfirm = useCallback(() => setIsClearConfirmOpen(true), []);
   const closeClearConfirm = useCallback(() => setIsClearConfirmOpen(false), []);
+  const openIntermediates = useCallback(() => setWorkbenchSettingsSection('intermediates', 'intermediatesManager'), []);
 
   return (
     <Stack gap="3">
@@ -172,6 +196,10 @@ export const WorkspaceSettings = () => {
             Reset layout
           </Button>
         ) : null}
+        <Button size="sm" variant="outline" onClick={openIntermediates}>
+          <BrushCleaningIcon />
+          {t('settings.catalog.manageIntermediates')}
+        </Button>
         <Button
           borderColor="border.emphasized"
           color="fg.error"
@@ -230,6 +258,9 @@ const CustomSettingField = ({ field }: SettingFieldProps) => {
     case 'developerLogNamespaces':
       editor = <DeveloperNamespacesSettings />;
       break;
+    case 'developerLoggingReset':
+      editor = <LoggingResetSettings />;
+      break;
     case 'workspaceActions':
       editor = <WorkspaceSettings />;
       break;
@@ -240,9 +271,9 @@ const CustomSettingField = ({ field }: SettingFieldProps) => {
       editor = <GenerationDevicesSettings />;
       break;
     case 'hotkeys':
-      // The hotkey editor owns its heading and needs a bounded viewport for its virtual list.
+      // The hotkey editor owns its heading and fills the dialog's allocated height.
       return (
-        <Box h="32rem" maxH="calc(100dvh - 15rem)" minH="16rem">
+        <Box display="flex" flex="1" flexDirection="column" minH="0">
           <HotkeysSettingsSection />
         </Box>
       );

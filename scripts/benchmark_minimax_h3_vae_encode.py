@@ -9,8 +9,8 @@ the numeric drift between the two encodes, and projects the cost of a full-lengt
     python scripts/benchmark_minimax_h3_vae_encode.py --vae /path/to/MiniMax-H3-components/vae
     python scripts/benchmark_minimax_h3_vae_encode.py --root ~/invokeai   # finds the VAE in the models dir
 
-The same ROCm conv3d handling the model loader applies (the conv2d decomposition on HIP < 7.2,
-native conv3d otherwise) is applied here, and the active path is printed; ``--conv3d decomposed``
+The same ROCm conv3d handling the model loader applies (the conv2d decomposition on every HIP
+version) is applied here, and the active path is printed; ``--conv3d decomposed``
 or ``--conv3d native`` forces one path so the two can be A/B'd on the same HIP version. The decoder is not
 loaded onto the device — it is a ~4.5 GiB ViT that the encode never touches.
 

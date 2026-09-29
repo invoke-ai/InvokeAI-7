@@ -4,7 +4,7 @@ import type { GalleryBoard } from '@features/gallery/core/types';
 import type { GalleryUiAdapter } from '@features/gallery/react';
 
 import { ChakraProvider } from '@chakra-ui/react';
-import { legacyGeneratedImageToGalleryItem } from '@features/gallery/core/items';
+import { getGalleryUploadAccept, legacyGeneratedImageToGalleryItem } from '@features/gallery/core/items';
 import { GalleryUiProvider } from '@features/gallery/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { system } from '@theme/system';
@@ -444,6 +444,22 @@ describe('GalleryPickerPopover', () => {
     expect(mocks.listItems).toHaveBeenCalledWith(expect.objectContaining({ boardId: 'none' }));
     expect(getOptions(dialog).map((option) => option.dataset.itemKey)).toEqual(['image:loose.png']);
     expect(galleryCommands.selectBoard).not.toHaveBeenCalled();
+  });
+
+  // Assert video acceptance through the rendered picker; the regression was view wiring rather than the
+  // accept-list builder.
+  it('offers the full video and audio list on a video-kind picker', async () => {
+    const { dialog } = await openPicker(
+      <GalleryPickerPopover accept={['video']} label="Choose video" onPick={onPick}>
+        <button type="button">Choose video</button>
+      </GalleryPickerPopover>
+    );
+    const accept = dialog.querySelector<HTMLInputElement>('input[type="file"]')?.getAttribute('accept')?.split(',');
+
+    expect(accept).toContain('video/*');
+    expect(accept).toContain('audio/*');
+    expect(accept).toEqual(getGalleryUploadAccept(['video']).split(','));
+    expect(accept).not.toContain('image/png');
   });
 
   it('uploads into the current board and picks the result', async () => {

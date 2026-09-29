@@ -13,6 +13,8 @@ import { GalleryUiAdapterProvider } from './GalleryUiAdapter';
 let store: ReturnType<typeof createWorkbenchStore>;
 let adapter: GalleryUiAdapter;
 const noop = () => undefined;
+const livePreviewFollow = vi.fn();
+const openWorkbenchWidget = vi.fn();
 
 vi.mock('@features/gallery/react', () => ({
   GalleryUiProvider: ({ adapter: next, children }: { adapter: GalleryUiAdapter; children: ReactNode }) => {
@@ -25,12 +27,14 @@ vi.mock('@workbench/widgets/preview/livePreviewFollow', () => ({
     sessions: [],
     gallerySessions: [],
     pinnedSessionId: null,
+    followedSessionId: 'run:1',
+    follow: livePreviewFollow,
     pin: vi.fn(),
     showAll: vi.fn(),
   }),
 }));
 vi.mock('@workbench/projects/useProjectFileActions', () => ({ useExportLibraryProject: () => noop }));
-vi.mock('@workbench/useOpenWorkbenchWidget', () => ({ useOpenWorkbenchWidget: () => noop }));
+vi.mock('@workbench/useOpenWorkbenchWidget', () => ({ useOpenWorkbenchWidget: () => openWorkbenchWidget }));
 vi.mock('@workbench/WorkbenchContext', () => ({
   useActiveProjectSelector: (selector: (project: Project) => unknown) => selector(store.getSnapshot().activeProject),
   useWorkbenchCommands: () => store.commands,
@@ -44,10 +48,34 @@ const renderAdapter = () => {
 const values = (projectId: string) => getProjectWidgetValues(store.queries.getProject(projectId)!, 'gallery');
 
 beforeEach(() => {
+  vi.clearAllMocks();
   accountLifecycle.activate('gallery-adapter-test');
   store = createWorkbenchStore();
 });
 afterEach(() => accountLifecycle.invalidate());
+
+describe('Gallery live-follow adapter', () => {
+  it('passes the followed session through and reveals Preview only for a tile click', () => {
+    const owner = renderAdapter();
+
+    expect(owner.followedProgressSessionId).toBe('run:1');
+
+    owner.followProgressSession('run:2', { revealPreview: false });
+    expect(livePreviewFollow).toHaveBeenCalledExactlyOnceWith('run:2');
+    expect(openWorkbenchWidget).not.toHaveBeenCalled();
+
+    owner.followProgressSession('run:2', { revealPreview: true });
+    expect(openWorkbenchWidget).toHaveBeenCalledExactlyOnceWith('preview');
+  });
+
+  it('ignores a follow retained across an account change', () => {
+    const owner = renderAdapter();
+
+    accountLifecycle.activate('gallery-adapter-test');
+    owner.followProgressSession('run:2', { revealPreview: true });
+    expect(livePreviewFollow).not.toHaveBeenCalled();
+  });
+});
 
 describe('Gallery settings adapter ownership', () => {
   it('updates the captured active project through the Gallery command', () => {

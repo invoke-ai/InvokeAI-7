@@ -12,6 +12,7 @@ from invokeai.app.services.image_records.image_records_common import (
     ResourceOrigin,
 )
 from invokeai.app.services.images.images_common import ImageDTO
+from invokeai.app.services.shared.intermediate_delete import IntermediateDeleteGuard, IntermediateDeleteResult
 from invokeai.app.services.shared.pagination import OffsetPaginatedResults
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 
@@ -56,6 +57,7 @@ class ImageServiceABC(ABC):
         workflow: Optional[str] = None,
         graph: Optional[str] = None,
         user_id: Optional[str] = None,
+        project_id: Optional[str] = None,
     ) -> ImageDTO:
         """Creates an image, storing the file and its metadata."""
         pass
@@ -158,13 +160,14 @@ class ImageServiceABC(ABC):
         pass
 
     @abstractmethod
-    def delete_intermediates(self) -> int:
-        """Deletes all intermediate images."""
-        pass
+    def delete_intermediates_by_names(
+        self, image_names: list[str], guard: Optional[IntermediateDeleteGuard] = None
+    ) -> IntermediateDeleteResult:
+        """Deletes the named images that are still intermediates, journalled, reporting the names removed.
 
-    @abstractmethod
-    def get_intermediates_count(self, user_id: Optional[str] = None) -> int:
-        """Gets the number of intermediate images. If user_id is provided, only counts that user's intermediates."""
+        ``guard`` is consulted on the deleting transaction so the cleanup policy's final check and
+        the record removal are one atomic step.
+        """
         pass
 
     @abstractmethod

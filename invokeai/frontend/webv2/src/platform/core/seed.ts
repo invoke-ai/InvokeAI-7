@@ -1,9 +1,6 @@
 /**
- * The seed policy every seeded submission shares: the range, the four modes,
- * and how a submission walks its sequence. Kept pure (no top-level calls, no
- * dependencies) so a graph compiler can import it without becoming
- * side-effectful; rolldown would otherwise materialise that compiler's facade
- * and pull the canvas-layer chunk into the settings and palette overlays.
+ * Keep seed policy free of top-level side effects so importing graph compilers cannot pull canvas chunks into
+ * settings/palette bundles.
  */
 
 export const SEED_MAX = 4_294_967_295;
@@ -34,11 +31,7 @@ export interface SeedSequenceInput {
   seedMode: SeedMode;
 }
 
-/**
- * How many entries of the seed sequence one submission uses. A fixed seed uses
- * its single entry however many images run. Otherwise every iteration takes an
- * entry, and with several prompts sharing disabled every image does.
- */
+/** Fixed consumes one seed; otherwise consume per iteration, or per image when prompts do not share seeds. */
 export const getSeedSequenceLength = ({
   batchCount,
   promptCount,
@@ -58,11 +51,7 @@ export interface SeedSubmissionPlan {
   step: SeedStep;
 }
 
-/**
- * The seeds a submission consumes and where the editable seed goes afterwards.
- * Only the stepping modes advance it: random keeps the manual value in reserve,
- * fixed reuses it.
- */
+/** Only stepping modes advance the editable seed; random preserves it and fixed reuses it. */
 export const planSeedSubmission = ({
   startSeed,
   ...sequence

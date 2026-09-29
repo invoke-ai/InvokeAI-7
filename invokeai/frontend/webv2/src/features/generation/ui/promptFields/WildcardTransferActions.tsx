@@ -34,14 +34,7 @@ const IMPORT_SOURCES = ['files', 'folder'] as const;
 /** Not in React's DOM typings, and `multiple` comes along with it implicitly. */
 const DIRECTORY_INPUT_PROPS = { directory: '', webkitdirectory: '' } as unknown as { webkitdirectory: string };
 
-/**
- * Import and export for the whole catalog.
- *
- * Both directions are pure client work — wildcards are per-user CRUD, so an
- * import is a run of ordinary creates and updates rather than a route of its
- * own. Writes go one at a time and stop at the first failure, so a half-finished
- * import says how far it got instead of reporting success over a silent error.
- */
+/** Import CRUD operations sequentially; stop at the first failure and report completed writes. */
 export const WildcardTransferActions = ({ catalog }: { catalog: WildcardCatalog }) => {
   const { t } = useTranslation();
   const { notifications } = useGenerationUi();
@@ -85,9 +78,7 @@ export const WildcardTransferActions = ({ catalog }: { catalog: WildcardCatalog 
           return;
         }
 
-        // Writes go one at a time, so a failure part-way leaves real wildcards
-        // behind. Saying only that the import failed sent people back for a
-        // second run that then clashed with everything the first one had made.
+        // Report partial success so retries do not duplicate completed writes.
         const done = caught instanceof WildcardWriteError ? caught.done : 0;
 
         reportError(
@@ -117,9 +108,7 @@ export const WildcardTransferActions = ({ catalog }: { catalog: WildcardCatalog 
         const entries = planWildcardImport(parsed, catalog.wildcards);
         assertAccountScopeCurrent(owner);
 
-        // Nothing to decide and nothing to explain — the file pick was the
-        // confirmation, so a dialog with only an Import button would be a click
-        // that tells the user what they already know.
+        // Import directly when file selection leaves no conflicts or other decisions.
         if (entries.every((entry) => entry.rejection === null && entry.conflictId === null)) {
           await applyImport(entries, {}, owner);
           return;
@@ -175,8 +164,7 @@ export const WildcardTransferActions = ({ catalog }: { catalog: WildcardCatalog 
     [startImport]
   );
 
-  // A folder hands over everything in it, so the readmes and `.DS_Store` are
-  // dropped here rather than failing the import the way a named file would.
+  // Ignore unrelated directory files, but reject explicitly selected invalid files.
   const handleDirectoryChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
       const files = [...(event.currentTarget.files ?? [])].filter(isSupportedWildcardFile);
@@ -262,9 +250,7 @@ export const WildcardTransferActions = ({ catalog }: { catalog: WildcardCatalog 
         type="file"
         onChange={handleFileChange}
       />
-      {/* A second input, because one cannot be both. The a1111 layout nests
-          wildcards in folders, and only a directory pick supplies the relative
-          path that turns `animals/dogs.txt` into `animals/dogs`. */}
+      {/* Use a separate directory input to preserve relative wildcard paths. */}
       <input {...DIRECTORY_INPUT_PROPS} hidden ref={directoryInputRef} type="file" onChange={handleDirectoryChange} />
       {pendingImport ? (
         <WildcardImportDialog entries={pendingImport.entries} onCancel={cancelImport} onConfirm={confirmImport} />

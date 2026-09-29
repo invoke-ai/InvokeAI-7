@@ -18,13 +18,13 @@ vi.mock('@platform/transport/http', () => ({
 
 import {
   addImagesToGalleryBoard,
-  classifyGalleryUpload,
   deleteGalleryBoard,
   deleteGalleryImages,
   downloadGalleryArchive,
   getGalleryImageByName,
   getGalleryImagesByNames,
   getGalleryVideoMetadata,
+  getGalleryImageWorkflow,
   getGalleryVideoWorkflow,
   imageMakeCanvasAssetChanges,
   imageMakeDurableChanges,
@@ -169,6 +169,7 @@ describe('getGalleryImageByName', () => {
     mocks.apiFetchJson.mockResolvedValue({
       board_id: 'board-1',
       created_at: '2026-07-09T12:00:00.000Z',
+      has_workflow: true,
       height: 360,
       image_category: 'general',
       image_name: 'folder/workflow result.png',
@@ -182,6 +183,7 @@ describe('getGalleryImageByName', () => {
     await expect(getGalleryImageByName('folder/workflow result.png', controller.signal)).resolves.toEqual({
       boardId: 'board-1',
       createdAt: '2026-07-09T12:00:00.000Z',
+      hasWorkflow: true,
       height: 360,
       imageCategory: 'general',
       imageName: 'folder/workflow result.png',
@@ -194,6 +196,18 @@ describe('getGalleryImageByName', () => {
     });
     expect(mocks.apiFetchJson).toHaveBeenCalledWith('/api/v1/images/i/folder%2Fworkflow%20result.png', {
       signal: controller.signal,
+    });
+  });
+
+  it('reads the embedded workflow of an image, encoded like the record lookup', async () => {
+    mocks.apiFetchJson.mockResolvedValue({ graph: null, workflow: '{"nodes":[]}' });
+
+    await expect(getGalleryImageWorkflow('folder/workflow result.png')).resolves.toEqual({
+      graph: null,
+      workflow: '{"nodes":[]}',
+    });
+    expect(mocks.apiFetchJson).toHaveBeenCalledWith('/api/v1/images/i/folder%2Fworkflow%20result.png/workflow', {
+      signal: undefined,
     });
   });
 
@@ -639,14 +653,11 @@ describe('imageMakeDurableChanges', () => {
 
 describe('imageMakeCanvasAssetChanges', () => {
   it('makes the image durable AND moves it out of the gallery images view', () => {
-    // A node's output is `general` — precisely what the Images view lists — so
-    // durability alone published every ControlNet preprocess into the gallery.
+    // Durability alone leaves node outputs in `general`, publishing preprocess results to Images.
     expect(imageMakeCanvasAssetChanges()).toEqual({ image_category: 'other', is_intermediate: false });
   });
 
   it('uses the same category the canvas uploads its own paint bitmaps under', () => {
-    // Layer pixels are layer pixels however they were produced; a filtered
-    // control map must not be classified differently from a painted one.
     expect(imageMakeCanvasAssetChanges().image_category).toBe('other');
   });
 
@@ -669,10 +680,7 @@ describe('gallery category queries', () => {
   };
 
   it('never asks the assets view for the canvas-owned category', async () => {
-    // The regression this guards: canvas paint bitmaps, composites and adopted
-    // filter results all upload as `other`. While `other` was an assets
-    // category, every brush stroke and every generation put an image in the
-    // user's Assets tab.
+    // Canvas-owned `other` images must stay out of Assets, including brush strokes and adopted filter results.
     expect(await categoriesFor('assets')).not.toContain('other');
   });
 
@@ -808,45 +816,6 @@ describe('deleteGalleryImages partial failures', () => {
   it('skips the request entirely for an empty selection', async () => {
     await expect(deleteGalleryImages([])).resolves.toEqual({ deletedImageNames: [], failedImageNames: [] });
     expect(mocks.apiFetchJson).not.toHaveBeenCalled();
-  });
-});
-
-describe('classifyGalleryUpload', () => {
-  it.each([
-    ['image/png', 'photo.bin', 'image'],
-    ['image/jpeg', 'photo.bin', 'image'],
-    ['image/jpg', 'photo.bin', 'image'],
-    ['image/webp', 'photo.bin', 'image'],
-    ['video/mp4', 'clip.bin', 'video'],
-    ['video/quicktime', 'clip.bin', 'video'],
-    ['video/webm', 'clip.webm', 'video'],
-    ['audio/mpeg', 'song.bin', 'video'],
-    ['audio/wav', 'memo.bin', 'video'],
-    ['', 'photo.PNG', 'image'],
-    ['', 'clip.MOV', 'video'],
-    ['', 'memo.m4a', 'video'],
-    ['application/octet-stream', 'photo.jpeg', 'image'],
-    ['application/octet-stream', 'song.mp3', 'video'],
-    ['binary/octet-stream', 'clip.MP4', 'video'],
-    ['application/octet-stream', 'clip.wmv', 'video'],
-    ['application/octet-stream', 'song.WMA', 'video'],
-    ['application/pdf', 'photo.png', 'image'],
-  ] as const)('classifies MIME %s and name %s as %s', (type, name, kind) => {
-    expect(classifyGalleryUpload(new File(['media'], name, { type }))).toEqual({ kind });
-  });
-
-  it.each([
-    ['application/pdf', 'document.pdf'],
-    ['', 'archive.zip'],
-    ['image/gif', 'animation.gif'],
-  ] as const)('rejects unsupported MIME %s and name %s', (type, name) => {
-    expect(classifyGalleryUpload(new File(['media'], name, { type }))).toBeNull();
-  });
-
-  it('uses a supported MIME before a conflicting extension', () => {
-    expect(classifyGalleryUpload(new File(['media'], 'looks-like-video.mp4', { type: 'image/png' }))).toEqual({
-      kind: 'image',
-    });
   });
 });
 

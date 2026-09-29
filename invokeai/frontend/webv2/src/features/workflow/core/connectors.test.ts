@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import type { WorkflowInvocationNode } from './types';
+import type { FieldInputTemplate, InvocationTemplates, WorkflowInvocationNode } from './types';
 
-import { getConnectorDeletionSpliceConnections } from './connectors';
+import {
+  CONNECTOR_INPUT_HANDLE,
+  CONNECTOR_OUTPUT_HANDLE,
+  getConnectorDeletionSpliceConnections,
+  resolveConnectorTarget,
+} from './connectors';
 import { createProjectGraph, projectGraphReducer } from './document';
 
 const node = (id: string, type: string): WorkflowInvocationNode => ({
@@ -20,6 +25,29 @@ const node = (id: string, type: string): WorkflowInvocationNode => ({
   id,
   position: { x: 0, y: 0 },
   type: 'invocation',
+});
+
+const dynamicInput = (name: string): FieldInputTemplate => ({
+  description: '',
+  exclusiveMaximum: null,
+  exclusiveMinimum: null,
+  fieldKind: 'input',
+  input: 'any',
+  maximum: null,
+  minimum: null,
+  multipleOf: null,
+  name,
+  options: null,
+  required: false,
+  title: name,
+  type: { batch: false, cardinality: 'SINGLE', name: 'IntegerField' },
+  uiChoiceLabels: null,
+  uiComponent: null,
+  uiHidden: false,
+  uiModelBase: null,
+  uiModelFormat: null,
+  uiModelType: null,
+  uiOrder: null,
 });
 
 describe('connector deletion', () => {
@@ -276,5 +304,49 @@ describe('connector deletion', () => {
         type: 'default',
       },
     ]);
+  });
+});
+
+describe('connector target resolution', () => {
+  it('uses a persisted dynamic input template for a Call Saved Workflow target', () => {
+    const source = node('source', 'source');
+    const target = node('target', 'call_saved_workflow');
+    target.data.dynamicInputTemplates = { dynamic_input: dynamicInput('dynamic_input') };
+    const templates: InvocationTemplates = {};
+
+    expect(
+      resolveConnectorTarget(
+        'connector',
+        [
+          source,
+          {
+            data: { label: '' },
+            id: 'connector',
+            position: { x: 0, y: 0 },
+            type: 'connector',
+          },
+          target,
+        ],
+        [
+          {
+            id: 'source-connector',
+            source: 'source',
+            sourceHandle: 'output',
+            target: 'connector',
+            targetHandle: CONNECTOR_INPUT_HANDLE,
+            type: 'default',
+          },
+          {
+            id: 'connector-target',
+            source: 'connector',
+            sourceHandle: CONNECTOR_OUTPUT_HANDLE,
+            target: 'target',
+            targetHandle: 'dynamic_input',
+            type: 'default',
+          },
+        ],
+        templates
+      )?.type
+    ).toEqual({ batch: false, cardinality: 'SINGLE', name: 'IntegerField' });
   });
 });

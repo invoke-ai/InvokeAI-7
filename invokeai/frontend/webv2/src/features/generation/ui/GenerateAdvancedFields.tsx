@@ -93,8 +93,7 @@ export const GenerateAdvancedFields = ({
     return null;
   }
 
-  // The closed section reports deviation, not detail: each user-level decision
-  // that is off its default counts once.
+  // Count user decisions, not modified settings keys.
   const overrideCount = [
     customVae,
     modelDefaults !== null && settings.vaePrecision !== modelDefaults.vaePrecision,
@@ -305,8 +304,7 @@ export const GenerateAdvancedFields = ({
                 const mode = value[0];
 
                 if (isPidMode(mode)) {
-                  // Committed immediately: switching to or from native changes the dimension
-                  // grid, and a debounced write would let a now-invalid size linger.
+                  // Commit immediately because native mode changes the valid dimension grid.
                   onCommitImmediate({ pidMode: mode });
                 }
               }}

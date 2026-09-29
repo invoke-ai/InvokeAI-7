@@ -39,6 +39,7 @@ const image = (imageName: string): GalleryImage => ({
 
 const createActions = (deleteItems: ImageActions['deleteItems']): ImageActions => ({
   canUseAsReferenceImage: false,
+  canUseAsReferenceVideo: false,
   copyImage: vi.fn(() => Promise.resolve()),
   createCanvasFromImages: vi.fn(() => Promise.resolve()),
   deleteItems,
@@ -49,6 +50,7 @@ const createActions = (deleteItems: ImageActions['deleteItems']): ImageActions =
   downloadImage: vi.fn(() => Promise.resolve()),
   downloadImages: vi.fn(() => Promise.resolve()),
   getImageRecallCapabilities: vi.fn(() => Promise.resolve(EMPTY_IMAGE_RECALL_CAPABILITIES)),
+  loadImageWorkflow: vi.fn(() => Promise.resolve()),
   moveItemsToBoard: vi.fn(() => Promise.resolve()),
   moveImagesToBoard: vi.fn(() => Promise.resolve()),
   openItemInNewTab: vi.fn(),
@@ -62,7 +64,9 @@ const createActions = (deleteItems: ImageActions['deleteItems']): ImageActions =
   setItemsStarred: vi.fn(() => Promise.resolve()),
   setImagesStarred: vi.fn(() => Promise.resolve()),
   savePromptAsTemplate: vi.fn(),
+  sendToInitialVideo: vi.fn(),
   useAsReferenceImage: vi.fn(),
+  useAsReferenceVideo: vi.fn(),
 });
 
 let host: HTMLDivElement | null = null;
@@ -93,25 +97,30 @@ const settleUntil = async (isSettled: () => boolean, description: string, timeou
   }
 };
 
-/** Quick icon items select through zag, which needs the item highlighted by a hover before the click. */
-const pickQuickItem = async (label: string): Promise<void> => {
-  const target = document.querySelector<HTMLElement>(`[aria-label="${label}"]`);
-  expect(target).not.toBeNull();
-  // zag only treats a move as a real hover when the pointer position changes,
-  // so approach the item's center from one pixel away instead of a static point.
-  const rect = target!.getBoundingClientRect();
+/**
+ * Hovers an item the way zag recognises. zag only treats a move as a real hover when the pointer position changes,
+ * so approach the item's center from one pixel away instead of dispatching a static point, which reads as no move
+ * at all whenever zag's last recorded position is already there.
+ */
+const hoverItem = async (target: HTMLElement): Promise<void> => {
+  const rect = target.getBoundingClientRect();
   const clientX = rect.left + rect.width / 2;
   const clientY = rect.top + rect.height / 2;
   await interact(() => {
     for (const x of [clientX - 1, clientX]) {
-      target!.dispatchEvent(
+      target.dispatchEvent(
         new PointerEvent('pointermove', { bubbles: true, clientX: x, clientY, pointerType: 'mouse' })
       );
     }
   });
-  // zag applies `data-highlighted` asynchronously and ignores a click on an unhighlighted item, so
-  // a fixed wait here silently dropped the click whenever the machine needed longer than it --
-  // the action mock simply recorded no call, and only under CI load.
+};
+
+/** Quick icon items select through zag, which needs the item highlighted by a hover before the click. */
+const pickQuickItem = async (label: string): Promise<void> => {
+  const target = document.querySelector<HTMLElement>(`[aria-label="${label}"]`);
+  expect(target).not.toBeNull();
+  await hoverItem(target!);
+  // Wait for Zag's asynchronous highlight before clicking; unhighlighted items ignore clicks.
   await settleUntil(() => target!.hasAttribute('data-highlighted'), `"${label}" to be highlighted`);
   await interact(() => target!.click());
 };
@@ -216,13 +225,38 @@ describe('ImageContextMenu deletion delegation', () => {
   });
 });
 
+describe('ImageContextMenu load workflow', () => {
+  it('enables Load Workflow once the image is known to embed one and hands the image to the action', async () => {
+    const actions = createActions(vi.fn());
+    actions.getImageRecallCapabilities = vi.fn(() =>
+      Promise.resolve({ ...EMPTY_IMAGE_RECALL_CAPABILITIES, workflow: true })
+    );
+    await renderMenu(actions, [image('made-by-workflow.png')]);
+
+    await vi.waitFor(() => expect(getMenuItem('Load Workflow').getAttribute('aria-disabled')).not.toBe('true'));
+    await interact(() => getMenuItem('Load Workflow').click());
+
+    expect(actions.loadImageWorkflow).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ imageName: 'made-by-workflow.png' })
+    );
+  });
+
+  it('keeps Load Workflow disabled for an image without one', async () => {
+    const actions = createActions(vi.fn());
+    await renderMenu(actions, [image('plain.png')]);
+
+    await vi.waitFor(() => expect(actions.getImageRecallCapabilities).toHaveBeenCalled());
+    expect(getMenuItem('Load Workflow').getAttribute('aria-disabled')).toBe('true');
+    expect(actions.loadImageWorkflow).not.toHaveBeenCalled();
+  });
+});
+
 describe('ImageContextMenu starred state', () => {
   const starIconFill = (label: string): string =>
     getComputedStyle(document.querySelector<HTMLElement>(`[aria-label="${label}"] svg`)!).fill;
 
   it('fills the star for a starred item and leaves it outlined otherwise', async () => {
-    // Lucide is stroke-only, so an unfilled star was the *only* thing shown for
-    // both states — the text label was carrying all of the meaning.
+    // Fill distinguishes starred state because Lucide outlines alone look identical.
     const unstarred = item('image', 'plain.png');
     await renderItemMenu(createActions(vi.fn()), {
       itemRefs: [{ kind: 'image', name: unstarred.name }],
@@ -279,22 +313,47 @@ describe('ImageContextMenu new canvas from image', () => {
     const images = Array.from({ length: count }, (_, index) => image(`image-${index}.png`));
     await renderMenu(actions, images);
 
-    // A nested menu opens from a mouse hover on its trigger item, after zag's open delay.
-    const trigger = getMenuItem('widgets.canvas.import.newFromImage');
-    await interact(() =>
-      trigger.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' }))
-    );
-    await act(
+    // A nested menu opens from a real hover on its trigger item, after zag's open delay, so the open is waited for
+    // rather than slept through.
+    await hoverItem(getMenuItem('widgets.canvas.import.newFromImage'));
+    await settleUntil(
       () =>
-        new Promise<void>((resolve) => {
-          globalThis.setTimeout(resolve, 300);
-        })
+        Array.from(document.querySelectorAll('[role="menuitem"]')).some(
+          (candidate) => candidate.textContent?.trim() === 'widgets.canvas.import.newCanvasFromImage'
+        ),
+      'the new-from-image submenu to open',
+      5000
     );
     await interact(() => getMenuItem('widgets.canvas.import.newCanvasFromImage').click());
 
     const calls = vi.mocked(actions.createCanvasFromImages).mock.calls;
     expect(calls).toHaveLength(1);
     expect(calls[0]?.[0].map((entry) => entry.imageName)).toEqual(images.map((entry) => entry.imageName));
+  });
+});
+
+describe('ImageContextMenu video placement', () => {
+  const renderVideoMenu = (actions: ImageActions, video: GalleryItem) =>
+    renderItemMenu(actions, { itemRefs: [{ kind: 'video', name: video.name }], items: [video], x: 20, y: 20 });
+
+  it('hands the video to the Initial Video and reference actions', async () => {
+    const video = item('video', 'clip.mp4');
+    const actions = { ...createActions(vi.fn()), canUseAsReferenceVideo: true };
+    await renderVideoMenu(actions, video);
+
+    await interact(() => getMenuItem('Extend in Video').click());
+    expect(actions.sendToInitialVideo).toHaveBeenCalledExactlyOnceWith(video);
+
+    await interact(() => getMenuItem('Use as Reference Video').click());
+    expect(actions.useAsReferenceVideo).toHaveBeenCalledExactlyOnceWith(video);
+  });
+
+  it('disables Use as Reference Video when the Video panel cannot take another', async () => {
+    const actions = createActions(vi.fn());
+    await renderVideoMenu(actions, item('video', 'clip.mp4'));
+
+    expect(getMenuItem('Use as Reference Video').getAttribute('aria-disabled')).toBe('true');
+    expect(getMenuItem('Extend in Video').getAttribute('aria-disabled')).not.toBe('true');
   });
 });
 

@@ -500,8 +500,7 @@ describe('submitResolvedInvocation', () => {
     expect(submitResolved.mock.calls[0]?.[0]).toMatchObject({ positivePrompts: undefined });
   });
 
-  // Submitting the authored text on a failed expansion would put the literal
-  // `{a|b}` or `__name__` in front of the model, so neither failure generates.
+  // Expansion failures must not submit literal dynamic syntax.
   describe('when a prompt cannot be expanded', () => {
     const submitDynamicPrompt = () => {
       const project = getActiveProject(createGenerateValues(animaModel, { positivePrompt: 'a {red|green} cat' }));
@@ -578,8 +577,7 @@ describe('resolveInvocationRoute — video destination compatibility', () => {
       sourceLocked: false,
     };
 
-    // A canvas-routed video run would complete with the output appearing
-    // nowhere (staging is image-based; only gallery-destined videos board).
+    // Canvas cannot stage video, and only Gallery-destined videos are boarded.
     const blocked = resolveInvocationRouteInput(input, 'global', canvasRoute);
 
     expect(blocked.destinationValid).toBe(false);

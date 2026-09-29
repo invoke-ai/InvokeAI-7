@@ -27,14 +27,8 @@ import {
 } from './projectsMetrics';
 
 /**
- * The library itself: grouped, virtualized, and in whichever layout was chosen
- * last.
- *
- * Rows are the virtualization unit in both layouts — a grid row holds
- * `columnCount` cards, a list row holds one — so headings and items share a
- * single flat index space and grouping costs nothing extra. Row heights are
- * derived rather than measured, which is what lets the virtualizer place
- * everything without a layout pass.
+ * Virtualize derived-height rows in both layouts: grid rows hold multiple cards, list rows one. Headings share the
+ * same flat index space.
  */
 
 const MEASURE_SX: SystemStyleObject = {
@@ -179,10 +173,6 @@ export const ProjectsBrowser = ({
         ) : rows.length === 0 ? (
           <ProjectsEmptyState isSearching={isSearching} searchTerm={searchTerm} onClearSearch={onClearSearch} />
         ) : (
-          // No "new project" cell here: the page header already carries that
-          // action, and a lone dashed tile in a four-column row reads as a
-          // broken grid. The empty state, where it is the only thing to do,
-          // still offers it.
           <Box height={`${virtualizer.totalSize}px`} position="relative" w="full">
             {virtualizer.virtualItems.map((virtualRow) => {
               const row = rows[virtualRow.index];
@@ -259,9 +249,7 @@ const VirtualProjectsRow = ({
         </SimpleGrid>
       ) : (
         row.projects.map((project) => (
-          // The wrapper owns the virtualizer's full row pitch. No divider: the
-          // row's own rounded hover fill separates the items, and a hairline
-          // running under a rounded fill only cuts across its corners.
+          // Let the wrapper own full row pitch; rounded hover fills separate items without intersecting dividers.
           <Box h={`${PROJECT_ROW_HEIGHT_PX}px`} key={project.id}>
             <ProjectRow isPinned={pinnedIds.includes(project.id)} summary={project} onTogglePin={onTogglePin} />
           </Box>
@@ -271,16 +259,6 @@ const VirtualProjectsRow = ({
   );
 };
 
-/**
- * Both empty states align to `start`, on the same axis as the page heading,
- * the description and the search field. A centered block under a left-aligned
- * page shares an edge with nothing above it.
- *
- * The action is a button, not the dashed tile this used to render. That tile
- * was a grid cell with no grid around it — floating at an arbitrary width, and
- * shown even in list view — and it repeated a call to action the header
- * already carries. A button matches what the no-matches state beside it does.
- */
 const ProjectsEmptyState = ({
   isSearching,
   onClearSearch,
@@ -314,10 +292,6 @@ const ProjectsEmptyState = ({
       icon={NO_PROJECTS_ICON}
       title={t('projects.noSavedProjects')}
     >
-      {/* Outline, not solid: the header already carries this action as the
-          page's one accent, and repeating that weight a few hundred pixels
-          away doubles the loudest thing on an otherwise quiet screen without
-          adding a choice. */}
       <NewProjectButton variant="outline" />
     </EmptyState>
   );

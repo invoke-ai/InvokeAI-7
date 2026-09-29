@@ -14,12 +14,16 @@ import type { SettingsEntry, SettingsSection } from './catalog';
 import { settingsDialogStore } from './settingsDialogStore';
 import { SettingsScopeLabel } from './SettingsScopeLabel';
 
+const FILL_PROPS = { display: 'flex', flex: '1', flexDirection: 'column', minH: '0' } as const;
+
 const LoadedSetting = ({
   entry,
+  fill,
   target,
   surface,
 }: {
   entry: SettingsEntry;
+  fill: boolean;
   target?: SettingsTarget;
   surface: 'quick' | 'dialog';
 }) => {
@@ -37,11 +41,15 @@ const LoadedSetting = ({
     [entry.field.id, surface]
   );
   return (
-    <Box ref={attach}>
+    <Box ref={attach} {...(fill ? FILL_PROPS : undefined)}>
       <Field field={entry.field} surface={surface} target={target} />
     </Box>
   );
 };
+
+/** A custom editor that owns its scrolling fills the dialog body instead of stacking in it. */
+export const isFillSettingsEntry = (entry: SettingsEntry, surface: 'quick' | 'dialog'): boolean =>
+  surface === 'dialog' && entry.field.kind === 'custom' && entry.field.fill === true;
 
 export const SettingsEntryView = ({
   entry,
@@ -88,6 +96,7 @@ export const SettingsEntryView = ({
   const unavailable = (entry.field.scope === 'instance' || entry.field.scope === 'project') && !target;
   const scope = entry.field.scope;
   const isDestination = search && entry.field.kind === 'custom';
+  const fill = !search && !unavailable && isFillSettingsEntry(entry, surface);
   return (
     <>
       {showGroup && entry.field.group ? (
@@ -105,8 +114,9 @@ export const SettingsEntryView = ({
       <Box
         data-setting-id={entry.field.id}
         py={surface === 'quick' ? '1.5' : '4'}
-        borderBottomWidth="1px"
+        borderBottomWidth={fill ? '0' : '1px'}
         borderColor="border.subtle"
+        {...(fill ? FILL_PROPS : undefined)}
       >
         {unavailable || isDestination ? (
           <Stack gap="2">
@@ -136,7 +146,7 @@ export const SettingsEntryView = ({
             retryLabel={t('common.retry')}
           >
             <Suspense fallback={loading}>
-              <LoadedSetting entry={entry} target={target ?? undefined} surface={surface} />
+              <LoadedSetting entry={entry} fill={fill} target={target ?? undefined} surface={surface} />
             </Suspense>
           </RetryBoundary>
         )}

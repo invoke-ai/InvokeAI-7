@@ -15,12 +15,7 @@ export interface GalleryBoardMenuTarget {
   y: number;
 }
 
-/**
- * Cursor-anchored actions menu for a single board row (download, rename,
- * archive, delete) so boards can be managed without selecting them first.
- * Opened from the board dropdown via right-click or the row's hover actions
- * button; the dropdown stays open underneath.
- */
+/** Keep the board dropdown open beneath its cursor-anchored actions menu; actions need not select the board. */
 export const GalleryBoardMenu = ({
   target,
   onClose,
@@ -39,13 +34,8 @@ export const GalleryBoardMenu = ({
   targetRef.current = target;
 
   const board = target?.board ?? null;
-  // A project's board can be downloaded but never renamed, archived, or deleted: those follow
-  // the project. This covers every project's board, not just the open one — the server refuses
-  // all of them, so offering the action anywhere would only produce a 409.
-  //
-  // The open project's own board is checked locally as well. `project_id` is omitted rather than
-  // nulled by the backend's DTO, so a response that has lost it would make the project's board
-  // look ordinary — offering a rename that 409s and dropping the badge that explains why.
+  // Protect every project-owned board from rename/archive/delete. Also check the active project's board ID because
+  // omitted project_id must not expose invalid actions.
   const isManagedBoard =
     board !== null && board.kind === 'board' && board.projectId === null && board.id !== gallery.projectBoardId;
   const positioning = useMemo(
@@ -236,11 +226,7 @@ export const GalleryBoardMenu = ({
   );
 };
 
-/**
- * A project's board sits inside a project, so its menu offers both: the whole project as an
- * `.invk`, and the board's media on its own. The media-only download is the existing action and
- * keeps its video-omission warning; this one carries the document too.
- */
+/** Project export includes the document; the separate media-only download retains its video-omission warning. */
 const BoardExportProjectMenuItem = ({ board }: { board: GalleryBoard }) => {
   const { t } = useTranslation();
   const { actions } = useGalleryWidget();

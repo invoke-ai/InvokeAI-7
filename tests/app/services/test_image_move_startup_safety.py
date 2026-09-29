@@ -47,6 +47,7 @@ def _services(**overrides):
         "gallery": object(),
         "image_index_records": object(),
         "image_index": object(),
+        "intermediates": object(),
         "image_moves": None,
         "system_prompt_records": object(),
     }

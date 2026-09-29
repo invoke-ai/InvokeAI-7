@@ -1,43 +1,11 @@
 /**
- * Export raster layers to a Photoshop (.psd) document.
+ * PSD export separates pure geometry planning from raster baking, lazy `ag-psd` serialization and download.
+ * Reverse every top-first tree level for ag-psd's bottom-first children; omit empty leaves/folders and size the
+ * document to exported world bounds.
  *
- * Split into a PURE planner and an IMPURE executor, mirroring the
- * planner/executor split of `compositeForGeneration.ts`:
- *
- * - {@link planPsdExport} is pure geometry (no DOM, no `ag-psd`, no engine): it
- *   turns each raster layer's transform + content rect into a PSD layer entry
- *   (position, opacity, blend, hidden, order) and the document bounds. Unit
- *   tested in node.
- * - {@link executePsdExport} is the side-effecting half: it bakes each layer's
- *   pixels through the {@link RasterBackend} seam, lazily imports `ag-psd`
- *   (`writePsd`) at call time so the library never enters the main bundle, and
- *   triggers a browser download. Verified by types + manual QA (opening the PSD).
- *
- * ### Conventions
- * - **Order.** The canvas document stores nodes top-first (index 0 = top-most) at
- *   every level of the raster tree. ag-psd's `children` array is BOTTOM-to-top
- *   (`children[0]` is the bottom-most layer, written first to the PSD layer
- *   records, which the format stores bottom-up). So the plan reverses every
- *   level of the top-first input into bottom-to-top.
- * - **Folders.** Groups become pass-through PSD folders with their own name and
- *   visibility; a folder whose subtree exports nothing is dropped with it. The
- *   flat leaf order is the depth-first order of the tree, which is also the
- *   visual order because groups do not composite in isolation.
- * - **Bounds.** The PSD canvas is the union of every EXPORTED layer's
- *   world-space (document-space) content AABB — document/bbox-independent. An
- *   empty union means nothing to export.
- * - **Opacity.** ag-psd's `Layer.opacity` is 0..1 (the writer multiplies by 255
- *   internally), NOT 0..255. Our `layer.opacity` is already 0..1, so it passes
- *   through unchanged (clamped).
- * - **Hidden.** Every raster layer with content is exported; a layer disabled in
- *   its own right is written with `hidden: true` rather than dropped, and a
- *   disabled group becomes a hidden folder. The merged preview flattens only the
- *   leaves that contribute (enabled with every ancestor enabled), which is what
- *   Photoshop shows for the same flags.
- * - **Adjustments.** Non-destructive raster adjustments are BAKED into the
- *   layer's pixels (PSD has no matching non-destructive representation we emit),
- *   exactly as `compositeForGeneration` bakes them, so the PSD matches what the
- *   user sees. Opacity/blend stay as PSD layer properties (not baked).
+ * Export disabled content as hidden layers/folders; flatten only effectively enabled content for the merged
+ * preview. Opacity stays in [0,1]. Bake raster adjustments into pixels, but retain opacity/blend as PSD
+ * properties.
  */
 
 import type { CanvasAdjustmentsContract, CanvasBlendMode, CanvasColorLabel } from '@workbench/canvas-engine/contracts';
@@ -51,11 +19,7 @@ import { isEmpty, roundOut, transformBounds, union } from '@workbench/canvas-eng
 import { applyAdjustments } from '@workbench/canvas-engine/render/adjustments';
 import { blendToComposite } from '@workbench/canvas-engine/render/compositor';
 
-/**
- * Maximum PSD side length. ag-psd/Photoshop tolerate up to 300000px, but a
- * multi-gigabyte export from an unbounded-canvas union helps nobody — refuse
- * past a sane cap and tell the user. Legacy Photoshop's own PSD limit is 30000.
- */
+/** Cap exports at the legacy PSD 30000px side limit to bound unbounded-canvas allocations. */
 export const PSD_MAX_DIMENSION = 30000;
 
 /** A canvas layer transform (TRS), duplicated to keep this module contract-light. */
@@ -68,10 +32,8 @@ export interface PsdLayerTransform {
 }
 
 /**
- * Maps a document blend mode to ag-psd's blend key. Every blend mode the canvas
- * supports has a direct PSD equivalent (Photoshop is the origin of these modes),
- * so this is total; an unknown value falls back to 'normal' and is reported via
- * {@link PsdExportOk.unmappedBlends}.
+ * Maps supported blends to PSD keys; unknown values fall back to normal and populate {@link
+ * PsdExportOk.unmappedBlends}.
  */
 const BLEND_MODE_TO_PSD: Record<CanvasBlendMode, BlendMode> = {
   color: 'color',
@@ -210,13 +172,8 @@ const layerMatrix = (t: PsdLayerTransform): Mat2d => fromTRS({ x: t.x, y: t.y },
 const clamp01 = (value: number): number => (value < 0 ? 0 : value > 1 ? 1 : value);
 
 /**
- * Plans a PSD export from the raster tree (top-first at every level). Computes
- * each layer's world-space AABB, unions them for the PSD canvas, and produces
- * per-layer PSD entries in bottom-to-top order plus the folder tree they sit in.
- * Layers with no content (empty rect, or a degenerate zero-area transform)
- * contribute nothing and are omitted, and so is any folder left without a leaf.
- * Returns `empty` when nothing has content and `too-large` when the union
- * exceeds the dimension cap.
+ * Plans world-AABB union bounds and a bottom-first PSD tree. Omit empty/degenerate leaves and empty folders;
+ * return empty or too-large when applicable.
  */
 export const planPsdExport = (
   inputs: readonly PsdExportNodeInput[],
@@ -224,8 +181,8 @@ export const planPsdExport = (
 ): PsdExportPlan => {
   const maxDimension = options.maxDimension ?? PSD_MAX_DIMENSION;
 
-  // Leaves in depth-first (visual, top-first) order with their effective enablement, and the
-  // world-space AABB of each (null = no content: empty local rect or a zero-area transform).
+  // Top-first depth-first leaves with effective enablement and world bounds; null bounds indicate empty or
+  // degenerate content.
   const withBounds: { input: PsdExportLayerInput; contributes: boolean; worldRect: Rect | null }[] = [];
   const walk = (nodes: readonly PsdExportNodeInput[], enabled: boolean): void => {
     for (const node of nodes) {
@@ -361,11 +318,7 @@ const defaultReadImageData = (surface: RasterSurface, rect: Rect): ImageData =>
 const defaultWriteImageData = (surface: RasterSurface, imageData: ImageData, x: number, y: number): void =>
   surface.ctx.putImageData(imageData, x, y);
 
-/**
- * Serializes a {@link Psd} to bytes via a LAZILY-imported `ag-psd`, so the
- * library is never pulled into the main bundle (Vite code-splits the dynamic
- * import into its own chunk, loaded only when an export runs).
- */
+/** Lazy-loads `ag-psd` only for serialization, keeping it out of the main bundle. */
 const defaultWritePsd = async (psd: Psd): Promise<ArrayBuffer> => {
   const { writePsd } = await import('ag-psd');
   return writePsd(psd);
@@ -383,11 +336,7 @@ export interface ExecutePsdExportDeps {
   backend: { createSurface(width: number, height: number): RasterSurface };
   /** Cancels before the next background allocation or side effect. */
   signal?: AbortSignal;
-  /**
-   * Ensures a layer's cache is rasterized and returns its surface plus the
-   * content `rect` (layer-local origin/size) those pixels occupy. The engine
-   * wires this to its rasterize path (reading live paint caches when present).
-   */
+  /** Returns rasterized pixels and local content bounds, using live paint caches when available. */
   getLayerSurface(layerId: string): Promise<{ surface: RasterSurface; rect: Rect }>;
   /** Reads a surface region's pixels (default `getImageData`). */
   readImageData?(surface: RasterSurface, rect: Rect): ImageData;
@@ -411,10 +360,8 @@ const throwIfAborted = (signal?: AbortSignal): void => {
 };
 
 /**
- * Bakes one planned layer's pixels into a world-AABB-sized surface: draws the
- * layer's cache through its transform (offset into the AABB), then bakes any
- * non-destructive adjustments in place. Opacity/blend are NOT baked — they ride
- * on the PSD layer. Returns the surface + its straight-alpha `ImageData`.
+ * Bakes transformed pixels and adjustments into world-AABB bounds, returning surface and straight-alpha ImageData.
+ * Opacity/blend remain PSD properties.
  */
 const bakeLayer = async (
   planLayer: PsdPlanLayer,
@@ -453,10 +400,8 @@ const bakeLayer = async (
 };
 
 /**
- * Executes a PSD export plan: bakes each layer, flattens the enabled layers into
- * a merged composite (so Photoshop/Bridge show a correct preview — ag-psd does
- * NOT regenerate the composite), assembles the {@link Psd}, serializes via the
- * lazily-imported `ag-psd`, and triggers a download. No-op for a non-`ok` plan.
+ * Bakes layers, builds the enabled merged preview (ag-psd does not generate it), serializes and downloads. Non-ok
+ * plans do nothing.
  */
 export const executePsdExport = async (
   plan: PsdExportPlan,
@@ -507,11 +452,8 @@ export const executePsdExport = async (
     );
   const children = toChildren(plan.tree);
 
-  // Flatten the contributing tree (bottom-to-top at every level) into the merged
-  // composite the PSD carries as its full-document preview. A folder with
-  // non-default opacity/blend is isolated into a buffer first — readers apply
-  // those properties to the folder's composite, and the preview must match the
-  // file's own layers.
+  // Flatten bottom-first. Isolate folders with opacity/blend so the merged preview matches readers' folder
+  // compositing.
   throwIfAborted(deps.signal);
   const surfaceById = new Map(baked.map(({ planLayer, surface }) => [planLayer.id, surface]));
   const drawPreview = (ctx: Ctx, nodes: readonly PsdPlanNode[]): void => {

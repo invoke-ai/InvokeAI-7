@@ -1,14 +1,6 @@
 /**
- * A single-rAF render scheduler.
- *
- * Consumers call `invalidate(...)` many times per frame; the scheduler
- * coalesces those into one pending `RenderFlags` set and runs the injected
- * `render` callback at most once per animation frame. The rAF driver is
- * injectable so the scheduler can be driven deterministically in node tests.
- *
- * Zero React, zero import-time side effects; the only DOM touch point is the
- * default `requestFrame`/`cancelFrame`, which are resolved lazily at call
- * time (never at import) and are always overridden in tests.
+ * Coalesces invalidations into one flag set and render per animation frame. Injected drivers support deterministic
+ * tests; default browser functions resolve lazily.
  */
 
 import type { LayerDamage, RenderFlags } from '@workbench/canvas-engine/types';
@@ -24,12 +16,8 @@ export interface InvalidatePayload {
   /** Force a full repaint next frame. */
   all?: true;
   /**
-   * The layer-local region this invalidation changed — purely an optimisation,
-   * letting the frame repaint only those pixels.
-   *
-   * It is honoured ONLY when it names the single layer in `layers`; anything
-   * else (a bare `layers`, a `view`, an `all`) widens the frame back to a full
-   * repaint. Callers therefore opt in, and omitting it is always safe.
+   * Optional local damage is honored only for the sole named layer. View/all or unqualified layer invalidations
+   * force full repaint; omission is safe.
    */
   damage?: LayerDamage;
 }
@@ -74,10 +62,6 @@ const defaultCancelFrame = (handle: number): void => {
   globalThis.cancelAnimationFrame(handle);
 };
 
-/**
- * Creates a coalescing, single-frame render scheduler. See module docs for
- * the coalescing and pause/resume semantics.
- */
 export const createRenderScheduler = (deps: RenderSchedulerDeps): RenderScheduler => {
   const requestFrame = deps.requestFrame ?? defaultRequestFrame;
   const cancelFrame = deps.cancelFrame ?? defaultCancelFrame;
@@ -121,11 +105,8 @@ export const createRenderScheduler = (deps: RenderSchedulerDeps): RenderSchedule
     if (disposed) {
       return;
     }
-    // Damage merging is deliberately pessimistic: a frame may repaint only part
-    // of the viewport just when EVERY invalidation in it named the region it
-    // changed. A repaint-everything flag, or a layer invalidation without a
-    // region, drops the frame back to full — so a caller that forgets to report
-    // damage costs performance, never correctness.
+    // Partial repaint requires every invalidation to declare damage. Any unknown region widens to full, trading
+    // performance for correctness.
     if (payload.all) {
       pending.all = true;
       pending.damage = null;

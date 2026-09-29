@@ -100,6 +100,8 @@ VIDEO_DTO_COLS = ", ".join(
             "deleted_at",
             "starred",
             "video_subfolder",
+            "project_id",
+            "file_size_bytes",
         ]
     ]
     # `media_origin` is not a column: it is the one key of the `metadata` JSON blob the
@@ -132,6 +134,12 @@ class VideoRecord(BaseModelExcludeNull):
     starred: bool = Field(description="Whether this video is starred.")
     has_workflow: bool = Field(description="Whether this video has a workflow associated.")
     video_subfolder: str = Field(default="", description="The subfolder where the video is stored on disk.")
+    project_id: Optional[str] = Field(
+        default=None, description="The project this video originated in, if it was made for one."
+    )
+    file_size_bytes: Optional[int] = Field(
+        default=None, description="Bytes the video, its thumbnail and sidecar occupy on disk; null until measured."
+    )
     media_origin: Optional[str] = Field(
         default=None,
         description="How this video entered the gallery, if it was marked: 'audio_upload' for an uploaded audio "
@@ -168,6 +176,8 @@ def deserialize_video_record(video_dict: dict) -> VideoRecord:
     has_workflow = video_dict.get("has_workflow", False)
     video_subfolder = video_dict.get("video_subfolder", "")
     media_origin = coerce_media_origin(video_dict.get("media_origin", None))
+    project_id = video_dict.get("project_id", None)
+    file_size_bytes = video_dict.get("file_size_bytes", None)
 
     return VideoRecord(
         video_name=video_name,
@@ -187,6 +197,8 @@ def deserialize_video_record(video_dict: dict) -> VideoRecord:
         has_workflow=has_workflow,
         video_subfolder=video_subfolder,
         media_origin=media_origin,
+        project_id=project_id,
+        file_size_bytes=file_size_bytes,
     )
 
 

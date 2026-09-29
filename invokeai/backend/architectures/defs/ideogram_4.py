@@ -5,6 +5,7 @@ from invokeai.backend.architectures.facets.default_settings import DefaultSettin
 from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import FLUX2_32, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
+from invokeai.backend.architectures.facets.vae import VaeCompatibility, VaeFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
 from invokeai.backend.model_manager.taxonomy import BaseModelType
@@ -25,6 +26,18 @@ register(
     # the UI shows for a control the sampler does not have.
     DefaultSettingsFacet(
         {None: MainModelDefaultSettings(scheduler="euler", steps=48, cfg_scale=1.0, width=1024, height=1024)}
+    ),
+    VaeFacet(
+        frozenset(
+            {
+                # Ideogram 4 decodes with the same 32-channel autoencoder as FLUX.2, and Comfy-Org
+                # ships that exact file (`vae/flux2-vae.safetensors`) next to the single-file
+                # transformers. It is the only entry because no VAE config class produces
+                # `ideogram-4`: the released file identifies as a FLUX.2 VAE, and a record forced to
+                # this base by hand would find no loader at all.
+                VaeCompatibility(BaseModelType.Flux2),
+            }
+        )
     ),
     # Text-to-image only.
     ModalityFacet(frozenset({"txt2img"}), metadata_slug="ideogram4"),

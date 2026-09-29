@@ -1,9 +1,6 @@
 /**
- * Nested contiguous [start, end) scopes over a flat drawn list, one per
- * composited group — a group whose output must be built in isolation because it
- * carries a contributing adjustment stack, an opacity below 1, or a non-normal
- * blend mode. Both renderers consume the same shape. Relies on preorder (or its
- * reversal) keeping every subtree contiguous.
+ * Contiguous [start,end) scopes identify isolated groups with adjustments, opacity or blend. Both renderers rely
+ * on preorder/reversed-preorder keeping subtrees contiguous.
  */
 
 import type {

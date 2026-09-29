@@ -18,6 +18,8 @@ from invokeai.app.services.events.events_common import (
     ImageIndexStatusEvent,
     ImageIndexUpdatedEvent,
     ImageMapProjectionReadyEvent,
+    ImageUploadedEvent,
+    IntermediatesOperationChangedEvent,
     InvocationCompleteEvent,
     InvocationErrorEvent,
     InvocationProgressEvent,
@@ -40,6 +42,11 @@ from invokeai.app.services.events.events_common import (
     QueueItemStatusChangedEvent,
     RecallParametersUpdatedEvent,
     UserAccessChangedEvent,
+    VideoRecallAction,
+    VideoRecallMode,
+    VideoRecallRequestedEvent,
+    VideoRecallVideo,
+    VideoUploadedEvent,
     WorkflowCreatedEvent,
     WorkflowDeletedEvent,
     WorkflowUpdatedEvent,
@@ -47,7 +54,10 @@ from invokeai.app.services.events.events_common import (
 
 if TYPE_CHECKING:
     from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocationOutput
+    from invokeai.app.services.board_records.board_records_common import BoardRecord
     from invokeai.app.services.download.download_base import DownloadJob
+    from invokeai.app.services.images.images_common import ImageDTO
+    from invokeai.app.services.intermediates.intermediates_common import IntermediatesOperation
     from invokeai.app.services.model_install.model_install_common import ModelInstallJob
     from invokeai.app.services.session_processor.session_processor_common import ProgressImage
     from invokeai.app.services.session_queue.session_queue_common import (
@@ -57,6 +67,7 @@ if TYPE_CHECKING:
         SessionQueueItem,
         SessionQueueStatus,
     )
+    from invokeai.app.services.videos.videos_common import VideoDTO
     from invokeai.backend.model_manager.configs.factory import AnyModelConfig
     from invokeai.backend.model_manager.taxonomy import SubModelType
 
@@ -145,6 +156,19 @@ class EventServiceBase:
     def emit_recall_parameters_updated(self, queue_id: str, user_id: str, parameters: dict) -> None:
         """Emitted when recall parameters are updated"""
         self.dispatch(RecallParametersUpdatedEvent.build(queue_id, user_id, parameters))
+
+    def emit_video_recall_requested(
+        self,
+        queue_id: str,
+        user_id: str,
+        action: VideoRecallAction,
+        mode: VideoRecallMode | None = None,
+        strict: bool = False,
+        parameters: dict | None = None,
+        video: VideoRecallVideo | None = None,
+    ) -> None:
+        """Emitted when an external caller asks for a user's Video panel to be updated"""
+        self.dispatch(VideoRecallRequestedEvent.build(queue_id, user_id, action, mode, strict, parameters, video))
 
     # endregion
 
@@ -352,5 +376,52 @@ class EventServiceBase:
     def emit_image_map_projection_ready(self, user_id: str, point_count: int) -> None:
         """Emitted when a user's image map projection has been recomputed"""
         self.dispatch(ImageMapProjectionReadyEvent.build(user_id=user_id, point_count=point_count))
+
+    # endregion
+
+    # region Intermediates
+
+    def emit_intermediates_operation_changed(self, operation: "IntermediatesOperation") -> None:
+        """Emitted whenever an intermediates cleanup operation is created, progresses or finishes"""
+        self.dispatch(IntermediatesOperationChangedEvent.build(operation))
+
+    # endregion
+
+    # region Media uploads
+
+    def emit_image_uploaded(
+        self, image_dto: "ImageDTO", user_id: str, board: Optional["BoardRecord"], shared_user_ids: list[str]
+    ) -> None:
+        """Emitted when a gallery-visible image arrives through the upload API; `board` is the one it was sent to"""
+        # The board attach can fail quietly inside create(); the DTO says where the image actually is.
+        board = board if image_dto.board_id is not None else None
+        self.dispatch(
+            ImageUploadedEvent.build(
+                image_name=image_dto.image_name,
+                image_category=image_dto.image_category,
+                user_id=user_id,
+                board_id=image_dto.board_id,
+                board_owner_id=board.user_id if board else None,
+                board_visibility=board.board_visibility if board else None,
+                shared_user_ids=shared_user_ids if board else [],
+            )
+        )
+
+    def emit_video_uploaded(
+        self, video_dto: "VideoDTO", user_id: str, board: Optional["BoardRecord"], shared_user_ids: list[str]
+    ) -> None:
+        """Emitted when a gallery-visible video arrives through the upload API; `board` is the one it was sent to"""
+        board = board if video_dto.board_id is not None else None
+        self.dispatch(
+            VideoUploadedEvent.build(
+                video_name=video_dto.video_name,
+                video_category=video_dto.video_category,
+                user_id=user_id,
+                board_id=video_dto.board_id,
+                board_owner_id=board.user_id if board else None,
+                board_visibility=board.board_visibility if board else None,
+                shared_user_ids=shared_user_ids if board else [],
+            )
+        )
 
     # endregion

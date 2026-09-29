@@ -13,6 +13,7 @@ from invokeai.app.services.board_records.board_records_common import (
     BoardRecordNotFoundException,
     BoardVisibility,
 )
+from invokeai.app.services.project_records.project_records_common import ProjectRecordNotFoundError
 
 
 def _get_board_record(board_id: str) -> BoardRecord:
@@ -133,7 +134,7 @@ def assert_image_read_access(image_name: str, current_user: CurrentUserOrDefault
     raise HTTPException(status_code=403, detail="Not authorized to access this image")
 
 
-def assert_board_write_access(board_id: str | None, current_user: CurrentUserOrDefault) -> None:
+def assert_board_write_access(board_id: str | None, current_user: CurrentUserOrDefault) -> BoardRecord | None:
     """Raise if the current user may not put media on this board.
 
     `None` means "no board" — always allowed, so upload routes can pass their optional board
@@ -141,20 +142,36 @@ def assert_board_write_access(board_id: str | None, current_user: CurrentUserOrD
     the board is Public (public boards accept contributions from any user).
 
     Shared boards are deliberately read-only here: `Shared` grants visibility, not contribution.
+
+    Returns the board record it checked (None for no board) so callers that need the board — the
+    upload routes announce the upload with its visibility — do not look it up a second time.
     """
     if board_id is None:
-        return
+        return None
 
     board = _get_board_record(board_id)
 
     if current_user.is_admin:
-        return
+        return board
     if board.user_id == current_user.user_id:
-        return
+        return board
     if board.board_visibility == BoardVisibility.Public:
-        return
+        return board
 
     raise HTTPException(status_code=403, detail="Not authorized to modify this board")
+
+
+def board_share_recipients(board: BoardRecord | None) -> list[str]:
+    """The users who can see a private board through an explicit share.
+
+    Empty for no board and for Shared/Public boards, whose uploads are announced to everyone
+    rather than enumerated. This is how an upload route tells the socket layer which extra
+    users to notify without the socket layer reaching into storage per event.
+    """
+    if board is None or board.board_visibility is not BoardVisibility.Private:
+        return []
+
+    return ApiDependencies.invoker.services.board_records.get_shared_user_ids(board.board_id)
 
 
 def assert_video_read_access(video_name: str, current_user: CurrentUserOrDefault) -> None:
@@ -226,3 +243,18 @@ def assert_board_read_access(board_id: str, current_user: CurrentUserOrDefault) 
         return
 
     raise HTTPException(status_code=403, detail="Not authorized to access this board")
+
+
+def assert_project_owned(project_id: str | None, current_user: CurrentUserOrDefault) -> None:
+    """Raise 404 unless `project_id` names one of the caller's own projects.
+
+    Provenance is recorded only from a validated identity: an admin cannot attribute media to
+    someone else's project, and a project id nobody owns reads as absent rather than as a
+    permission decision, matching how the queue treats `Batch.project_id`.
+    """
+    if project_id is None:
+        return
+    try:
+        ApiDependencies.invoker.services.project_records.get_board_id(current_user.user_id, project_id)
+    except ProjectRecordNotFoundError:
+        raise HTTPException(status_code=404, detail="Project not found")

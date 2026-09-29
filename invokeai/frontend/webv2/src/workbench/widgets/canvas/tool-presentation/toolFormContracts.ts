@@ -41,9 +41,8 @@ export interface ToolPropertyGroup {
 }
 
 /**
- * A tool's purpose-built pane form: an optional preview card on top, then
- * named groups of typed rows. Successor to the region adapter; tools migrate
- * one by one and the pane renders whichever shape a tool declares.
+ * Describe tool panes with optional previews and typed row groups; the pane supports this form alongside migrating
+ * region adapters.
  */
 export interface ToolPropertyForm {
   id: ToolId;

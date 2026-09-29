@@ -12,12 +12,8 @@ import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * The float control replaced a menu item, so the conditions that used to hide
- * that item now decide whether a button renders at all: only a widget whose
- * manifest forbids floating, and the floating region itself. Even the last
- * center view may float — the emptied surface falls back to the center's
- * fallback view until the window docks back. Docking is covered by the
- * floating window's own chrome.
+ * Offer floating only from dockable panel regions when the manifest allows it; center and already-floating chrome
+ * expose no float button.
  */
 
 const floatMocks = vi.hoisted(() => ({
@@ -133,13 +129,11 @@ describe('WidgetFloatButton', () => {
     expect(await renderButton('right', false)).toBeNull();
   });
 
-  it('renders for the last enabled center view — the emptied surface falls back until it docks back', async () => {
-    expect(await renderButton('center')).not.toBeNull();
-  });
+  it('renders nothing for a center view, even one that is not the last', async () => {
+    expect(await renderButton('center')).toBeNull();
 
-  it('renders for a center view that is not the last one', async () => {
     floatMocks.centerInstanceIds = ['image-map-instance', 'canvas-instance'];
 
-    expect(await renderButton('center')).not.toBeNull();
+    expect(await renderButton('center')).toBeNull();
   });
 });

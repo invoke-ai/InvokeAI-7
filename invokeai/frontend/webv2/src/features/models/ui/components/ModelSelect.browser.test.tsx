@@ -39,6 +39,8 @@ const MODELS_UI_ADAPTER = { enableModelDescriptions: true, managerProjectId: nul
 const MAIN_MODEL_TYPES: ['main'] = ['main'];
 const CROSS_TYPE_MODEL_TYPES: ['main', 'lora'] = ['main', 'lora'];
 
+const CONTROLNET_TYPES = ['controlnet'] as const;
+
 describe('ModelSelect loading states', () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -74,6 +76,41 @@ describe('ModelSelect loading states', () => {
     await expect.poll(() => document.querySelector('[role="option"]')?.textContent).toContain('SDXL Main');
   });
 
+  it('disables the trigger instead of opening an empty list when nothing compatible is installed', async () => {
+    setModelsSnapshotForTests({ error: null, models: [model], status: 'loaded' });
+
+    await act(() => {
+      root.render(
+        <ChakraProvider value={system}>
+          <ModelsUiProvider adapter={MODELS_UI_ADAPTER}>
+            <ModelSelect modelTypes={CONTROLNET_TYPES} showManagerButton={false} value={null} onChange={vi.fn()} />
+          </ModelsUiProvider>
+        </ChakraProvider>
+      );
+    });
+
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-haspopup="listbox"]')!;
+    expect(trigger.disabled).toBe(true);
+    expect(trigger.textContent).toContain('scopeNoCompatibleInstalled');
+    await act(() => trigger.click());
+    // Closed: the picker computes no options, and the popover never opens.
+    expect(document.querySelectorAll('[role="option"]')).toHaveLength(0);
+    expect(document.querySelector('[data-scope="popover"][data-part="content"][data-state="open"]')).toBeNull();
+
+    // While the library is still loading there is nothing to conclude yet.
+    setModelsSnapshotForTests({ error: null, models: [], status: 'loading' });
+    await act(() => {
+      root.render(
+        <ChakraProvider value={system}>
+          <ModelsUiProvider adapter={MODELS_UI_ADAPTER}>
+            <ModelSelect modelTypes={CONTROLNET_TYPES} showManagerButton={false} value={null} onChange={vi.fn()} />
+          </ModelsUiProvider>
+        </ChakraProvider>
+      );
+    });
+    expect(host.querySelector<HTMLButtonElement>('[aria-haspopup="listbox"]')!.disabled).toBe(false);
+  });
+
   const renderPicker = async (props: Partial<Parameters<typeof ModelSelect>[0]> = {}) => {
     await act(() => {
       root.render(
@@ -98,8 +135,7 @@ describe('ModelSelect loading states', () => {
   const optionTexts = (): string[] =>
     [...document.querySelectorAll('[role="option"]')].map((option) => option.textContent ?? '');
 
-  // The bug that prompted the rewrite: grouping by (type, base) printed "Main
-  // Models" above every base section of a cross-type picker.
+  // Cross-type pickers must not repeat Main Models headings for every base.
   it('groups a cross-type picker by base alone, with no type header', async () => {
     setModelsSnapshotForTests({ error: null, models: [model, loraModel], status: 'loaded' });
     await renderPicker({ id: 'test-cross-type', modelTypes: CROSS_TYPE_MODEL_TYPES });

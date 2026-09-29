@@ -32,7 +32,10 @@ from invokeai.backend.model_manager.starter_models.common import (
     flux2_dev_cow_mistral_q4,
     flux2_dev_cow_mistral_q8,
     flux2_klein_qwen3_4b_encoder,
+    flux2_klein_qwen3_4b_encoder_fp4,
     flux2_klein_qwen3_8b_encoder,
+    flux2_klein_qwen3_8b_encoder_fp4,
+    flux2_klein_qwen3_8b_encoder_int8,
     gemma2_2b_encoder,
     llava_onevision,
     llava_onevision_7b,
@@ -41,6 +44,7 @@ from invokeai.backend.model_manager.starter_models.common import (
     qwen3_vl_encoder_4b,
     qwen_vl_encoder_diffusers,
     qwen_vl_encoder_fp8,
+    qwen_vl_encoder_nvfp4,
     realesrgan_x2,
     realesrgan_x4,
     siglip,
@@ -52,11 +56,15 @@ from invokeai.backend.model_manager.starter_models.common import (
     t5_gguf_q6_k_encoder,
     wan_22_t5_encoder,
     z_image_qwen3_encoder,
+    z_image_qwen3_encoder_fp4,
     z_image_qwen3_encoder_quantized,
 )
 from invokeai.backend.model_manager.starter_models.ernie_image import (
     ernie_image,
+    ernie_image_mistral_encoder,
+    ernie_image_single_file,
     ernie_image_turbo,
+    ernie_image_turbo_single_file,
 )
 from invokeai.backend.model_manager.starter_models.external import (
     alibabacloud_qwen_image_2,
@@ -81,6 +89,7 @@ from invokeai.backend.model_manager.starter_models.flux import (
     flux_canny_control_lora,
     flux_depth_control_lora,
     flux_dev,
+    flux_dev_int8,
     flux_dev_quantized,
     flux_fill,
     flux_kontext_quantized,
@@ -114,6 +123,7 @@ from invokeai.backend.model_manager.starter_models.flux2 import (
     flux2_klein_9b_fp8,
     flux2_klein_9b_gguf_q4,
     flux2_klein_9b_gguf_q8,
+    flux2_klein_9b_int8,
     flux2_klein_9b_sdnq,
     flux2_vae,
     pid_decoder_flux2_2k,
@@ -121,13 +131,29 @@ from invokeai.backend.model_manager.starter_models.flux2 import (
 )
 from invokeai.backend.model_manager.starter_models.ideogram_4 import (
     ideogram_4_fp8,
+    ideogram_4_int8,
     ideogram_4_nf4,
+    ideogram_4_qwen3_vl_encoder_8b,
+    ideogram_4_single_file,
+    ideogram_4_unconditional_int8,
+    ideogram_4_unconditional_single_file,
 )
 from invokeai.backend.model_manager.starter_models.krea_2 import (
     krea2_raw,
     krea2_turbo,
     krea2_turbo_gguf_q4_k_m,
     krea2_turbo_gguf_q8_0,
+    krea2_turbo_nvfp4,
+)
+from invokeai.backend.model_manager.starter_models.ltx_2 import (
+    ltx2_5_components,
+    ltx2_5_dev_transformer_bf16,
+    ltx2_5_dev_transformer_int8,
+    ltx2_5_distilled_lora,
+    ltx2_5_distilled_transformer_int8,
+    ltx2_5_prompt_enhancer,
+    ltx2_5_text_encoder_bf16,
+    ltx2_5_text_encoder_int8,
 )
 from invokeai.backend.model_manager.starter_models.minimax_h3 import (
     minimax_h3_components,
@@ -139,6 +165,8 @@ from invokeai.backend.model_manager.starter_models.minimax_h3 import (
     minimax_h3_turbo_lora,
 )
 from invokeai.backend.model_manager.starter_models.qwen_image import (
+    pid_1_5_decoder_qwenimage_2kto4k,
+    pid_1_5_decoder_qwenimage_2kto4k_int8,
     pid_decoder_qwenimage_2kto4k,
     qwen_image,
     qwen_image_edit,
@@ -244,6 +272,7 @@ from invokeai.backend.model_manager.starter_models.z_image import (
     z_image_controlnet_tile,
     z_image_controlnet_union,
     z_image_turbo,
+    z_image_turbo_nvfp4,
     z_image_turbo_q8,
     z_image_turbo_quantized,
     z_image_turbo_sdnq,
@@ -256,6 +285,7 @@ STARTER_MODELS: list[StarterModel] = [
     flux_kontext_quantized,
     flux_schnell_quantized,
     flux_dev_quantized,
+    flux_dev_int8,
     flux_schnell,
     flux_dev,
     flux_schnell_sdnq,
@@ -263,6 +293,11 @@ STARTER_MODELS: list[StarterModel] = [
     sd35_large,
     ideogram_4_nf4,
     ideogram_4_fp8,
+    ideogram_4_single_file,
+    ideogram_4_unconditional_single_file,
+    ideogram_4_int8,
+    ideogram_4_unconditional_int8,
+    ideogram_4_qwen3_vl_encoder_8b,
     cyberrealistic_sd1,
     rev_animated_sd1,
     dreamshaper_8_sd1,
@@ -339,6 +374,7 @@ STARTER_MODELS: list[StarterModel] = [
     flux2_klein_4b_fp8,
     flux2_klein_9b,
     flux2_klein_9b_fp8,
+    flux2_klein_9b_int8,
     flux2_klein_4b_sdnq,
     flux2_klein_9b_sdnq,
     flux2_klein_4b_gguf_q4,
@@ -347,6 +383,9 @@ STARTER_MODELS: list[StarterModel] = [
     flux2_klein_9b_gguf_q8,
     flux2_klein_qwen3_4b_encoder,
     flux2_klein_qwen3_8b_encoder,
+    flux2_klein_qwen3_4b_encoder_fp4,
+    flux2_klein_qwen3_8b_encoder_fp4,
+    flux2_klein_qwen3_8b_encoder_int8,
     flux2_dev_comfy_mistral_bf16,
     flux2_dev_comfy_mistral_fp4,
     flux2_dev_comfy_mistral_fp8,
@@ -363,6 +402,7 @@ STARTER_MODELS: list[StarterModel] = [
     cogview4,
     qwen_image_vae,
     qwen_vl_encoder_fp8,
+    qwen_vl_encoder_nvfp4,
     qwen_vl_encoder_diffusers,
     qwen_image_edit,
     qwen_image_edit_gguf_q2_k,
@@ -383,17 +423,23 @@ STARTER_MODELS: list[StarterModel] = [
     z_image_turbo,
     z_image_turbo_quantized,
     z_image_turbo_q8,
+    z_image_turbo_nvfp4,
     z_image_turbo_sdnq,
     z_image_qwen3_encoder,
     z_image_qwen3_encoder_quantized,
+    z_image_qwen3_encoder_fp4,
     z_image_controlnet_union,
     z_image_controlnet_tile,
     ernie_image,
     ernie_image_turbo,
+    ernie_image_single_file,
+    ernie_image_turbo_single_file,
+    ernie_image_mistral_encoder,
     krea2_turbo,
     krea2_raw,
     krea2_turbo_gguf_q4_k_m,
     krea2_turbo_gguf_q8_0,
+    krea2_turbo_nvfp4,
     qwen3_vl_encoder_4b,
     wan_22_t5_encoder,
     wan_22_a14b_vae,
@@ -422,6 +468,14 @@ STARTER_MODELS: list[StarterModel] = [
     minimax_h3_turbo_lora,
     minimax_h3_lightx2v_turbo_lora,
     minimax_h3_lightx2v_ref2v_turbo_lora,
+    ltx2_5_dev_transformer_int8,
+    ltx2_5_distilled_transformer_int8,
+    ltx2_5_distilled_lora,
+    ltx2_5_dev_transformer_bf16,
+    ltx2_5_text_encoder_int8,
+    ltx2_5_text_encoder_bf16,
+    ltx2_5_components,
+    ltx2_5_prompt_enhancer,
     gemini_flash_image,
     gemini_pro_image_preview,
     gemini_3_1_flash_image_preview,
@@ -457,6 +511,8 @@ STARTER_MODELS: list[StarterModel] = [
     pid_decoder_sd3_2kto4k,
     pid_decoder_sdxl_2kto4k,
     pid_decoder_qwenimage_2kto4k,
+    pid_1_5_decoder_qwenimage_2kto4k,
+    pid_1_5_decoder_qwenimage_2kto4k_int8,
 ]
 
 sd1_bundle: list[StarterModel] = [
@@ -561,6 +617,7 @@ krea2_bundle: list[StarterModel] = [
     krea2_raw,
     krea2_turbo_gguf_q4_k_m,
     krea2_turbo_gguf_q8_0,
+    krea2_turbo_nvfp4,
 ]
 
 # Wan 2.2 starter bundles. Split into T2V and I2V so users only pay for the
@@ -608,6 +665,13 @@ minimax_h3_bundle: list[StarterModel] = [
     minimax_h3_lightx2v_ref2v_turbo_lora,
 ]
 
+ltx2_bundle: list[StarterModel] = [
+    ltx2_5_components,
+    ltx2_5_text_encoder_int8,
+    ltx2_5_dev_transformer_int8,
+    ltx2_5_distilled_transformer_int8,
+]
+
 STARTER_BUNDLES: dict[str, StarterModelBundle] = {
     BaseModelType.StableDiffusion1: StarterModelBundle(name="Stable Diffusion 1.5", models=sd1_bundle),
     BaseModelType.StableDiffusionXL: StarterModelBundle(name="SDXL", models=sdxl_bundle),
@@ -621,6 +685,7 @@ STARTER_BUNDLES: dict[str, StarterModelBundle] = {
     "wan_t2v": StarterModelBundle(name="Wan 2.2 Text-to-Video", models=wan_t2v_bundle),
     "wan_i2v": StarterModelBundle(name="Wan 2.2 Image-to-Video", models=wan_i2v_bundle),
     BaseModelType.MiniMaxH3: StarterModelBundle(name="MiniMax H3", models=minimax_h3_bundle),
+    BaseModelType.LTX2: StarterModelBundle(name="LTX-2.5", models=ltx2_bundle),
     BaseModelType.Ideogram4: StarterModelBundle(name="Ideogram 4", models=ideogram_bundle),
 }
 

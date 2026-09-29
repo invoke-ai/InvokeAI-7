@@ -29,10 +29,11 @@ import {
   recordImageIndexStatus,
   refreshImageIndexStatus,
   refreshImageMapPoints,
+  setClusterEps,
 } from './imageMapStore';
 import {
   ALL_POINTS_TRACE,
-  buildAllPointsTrace,
+  buildAllPointsTraces,
   buildCurrentImageTrace,
   buildMapLayout,
   CURRENT_IMAGE_TRACE,
@@ -52,11 +53,8 @@ const BACKEND_RESPONSE = {
   visible_hash: 'hash-1',
 };
 
-// A labels response stamped for some other projection, which the store must
-// discard. Tests that exercise the points/status flows answer labels requests
-// with this: a body without a `labels` key throws a TypeError in the api
-// mapping, which the store classifies as a network failure and retries —
-// arming a real-timer chain that outlives the test.
+// Return valid labels stamped for another projection to exercise discard. Malformed fixtures throw TypeError and
+// arm network retries beyond the test.
 const FOREIGN_LABELS_RESPONSE = { labels: {}, updated_at: 'another projection', visible_hash: 'another set' };
 
 const mockPointsWithForeignLabels = (): void => {
@@ -135,6 +133,7 @@ describe('image map store', () => {
     mocks.apiFetchJson.mockReset();
     imageMapStore.setSnapshot({
       clusterLabels: null,
+      clusterLabelsEps: null,
       clusterLabelsHash: null,
       data: null,
       error: null,
@@ -148,6 +147,74 @@ describe('image map store', () => {
   // Retry-schedule tests fake the clock; restore it whatever their outcome.
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('clusters at the chosen strength on every later refresh', async () => {
+    // The strength is module state rather than a call argument precisely so
+    // that socket-driven refreshes carry it too; nothing else would.
+    mockPointsWithForeignLabels();
+    await refreshImageMapPoints();
+    setClusterEps(0.25);
+    await Promise.resolve();
+    await refreshImageMapPoints();
+
+    const pointsCalls = mocks.apiFetchJson.mock.calls
+      .map((call) => String(call[0]))
+      .filter((url) => url.startsWith('/api/v1/image_map/points'));
+
+    expect(pointsCalls[0]).not.toContain('eps=');
+    expect(pointsCalls.at(-1)).toContain('eps=0.25');
+
+    setClusterEps(null);
+    await Promise.resolve();
+    await refreshImageMapPoints();
+
+    const afterClearing = mocks.apiFetchJson.mock.calls
+      .map((call) => String(call[0]))
+      .filter((url) => url.startsWith('/api/v1/image_map/points'))
+      .at(-1);
+
+    expect(afterClearing).not.toContain('eps=');
+    setClusterEps(null);
+  });
+
+  it('refetches when the strength changes, and retires the old labels', async () => {
+    // Changing eps renumbers every cluster while the projection and the
+    // visible set stay put, so `visibleHash` cannot detect it: labels left in
+    // the store would be shown against a clustering they do not describe.
+    mocks.apiFetchJson.mockImplementation((url: string) =>
+      url.startsWith('/api/v1/image_map/cluster_labels')
+        ? Promise.resolve({
+            labels: { '0': { label: 'boats' } },
+            updated_at: '2026-08-02 12:00:00',
+            visible_hash: 'hash-1',
+          })
+        : Promise.resolve(BACKEND_RESPONSE)
+    );
+
+    await refreshImageMapPoints();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(imageMapStore.getSnapshot().clusterLabels).not.toBeNull();
+    expect(imageMapStore.getSnapshot().clusterLabelsEps).toBe(0.42);
+
+    const before = mocks.apiFetchJson.mock.calls.length;
+    setClusterEps(0.3);
+
+    expect(imageMapStore.getSnapshot().clusterLabels).toBeNull();
+    expect(imageMapStore.getSnapshot().clusterLabelsEps).toBeNull();
+    expect(mocks.apiFetchJson.mock.calls.length).toBeGreaterThan(before);
+    setClusterEps(null);
+  });
+
+  it('does not refetch for a strength that is already in force', async () => {
+    mockPointsWithForeignLabels();
+    await refreshImageMapPoints();
+    const before = mocks.apiFetchJson.mock.calls.length;
+
+    setClusterEps(null);
+
+    expect(mocks.apiFetchJson.mock.calls.length).toBe(before);
   });
 
   it('loads points into the snapshot', async () => {
@@ -188,8 +255,7 @@ describe('image map store', () => {
         '0': { alternates: ['kittens', 'pets'], label: 'cats' },
       });
     });
-    // Stamped with the set they were clustered over, so a consumer can tell
-    // they still describe the drawn points.
+    // Fingerprint labels with their clustered visible set.
     expect(imageMapStore.getSnapshot().clusterLabelsHash).toBe(BACKEND_RESPONSE.visible_hash);
   });
 
@@ -211,10 +277,8 @@ describe('image map store', () => {
       expect(imageMapStore.getSnapshot().clusterLabelsHash).toBe(BACKEND_RESPONSE.visible_hash);
     });
 
-    // L2: a refresh over a drifted set, whose labels have not come back yet.
-    // DBSCAN may have renumbered every cluster, so the labels still in the
-    // store describe a clustering that is no longer drawn — the hash must say
-    // so for the whole window rather than only once new labels arrive.
+    // While new labels lag refreshed points, retain the old fingerprint so consumers reject potentially renumbered
+    // cluster labels.
     const drifted = { ...BACKEND_RESPONSE, visible_hash: 'hash-2' };
     mocks.apiFetchJson.mockImplementation((url: string) =>
       url.startsWith('/api/v1/image_map/cluster_labels') ? new Promise(() => {}) : Promise.resolve(drifted)
@@ -248,8 +312,7 @@ describe('image map store', () => {
         '/api/v1/image_map/cluster_labels?include_videos=true&eps=0.42'
       );
     });
-    // Flush the response handler: cluster ids from a different visible set
-    // must not be applied to the rendered map.
+    // Settle the handler and reject cluster ids from a different visible set.
     await new Promise((resolve) => {
       setTimeout(resolve, 0);
     });
@@ -450,10 +513,8 @@ describe('image map store', () => {
   });
 
   it('clears labels when the newest request fails outright', async () => {
-    // L1 lands labels; L2's request then fails with its sequence still
-    // current — the failure must wipe them rather than leave L1's clustering
-    // annotated over the newer point set. (L2's failure is a plain Error:
-    // non-retryable, so no timer is armed either.)
+    // Current-request failure clears older labels instead of annotating new points with stale clusters; plain
+    // Error avoids retry timers.
     mocks.apiFetchJson.mockImplementation((url: string) => {
       if (url.startsWith('/api/v1/image_map/cluster_labels')) {
         return Promise.resolve({
@@ -526,11 +587,8 @@ describe('image map store', () => {
   });
 
   it('collapses mid-flight refresh requests into one rerun', async () => {
-    // The socket runtime can call refresh while the first load is still in
-    // flight (projection-ready is admitted during 'loading'), and several
-    // events may land inside one fetch's window. Every caller must join the
-    // in-flight request, and exactly one rerun may follow — not one per
-    // caller, and never a parallel fetch.
+    // Concurrent refreshes join one in-flight fetch and coalesce into exactly one follow-up, including socket
+    // events during initial load.
     const pointsResolvers: Array<(value: typeof BACKEND_RESPONSE) => void> = [];
     mocks.apiFetchJson.mockImplementation((url: string) => {
       if (url.startsWith('/api/v1/image_map/points')) {
@@ -586,9 +644,6 @@ describe('image map store', () => {
     refreshImageMapPoints();
     await first;
 
-    // The rerun ran (a second points fetch) despite the first one failing,
-    // and it recovered the map. Without the queued rerun, pointsCall would
-    // sit at 1 and loadState at 'error'.
     await vi.waitFor(() => expect(pointsCall).toBe(2));
     await new Promise((resolve) => {
       setTimeout(resolve, 0);
@@ -607,28 +662,124 @@ describe('cluster palette', () => {
   });
 });
 
+/** Cluster and kind vary on different cycles, so neither can stand in for the other. */
+const manyPoints = (): ImageMapPoint[] =>
+  Array.from({ length: 500 }, (_, index) => {
+    const kind = index % 11 === 0 ? ('video' as const) : ('image' as const);
+    const name = `${index}.${kind === 'video' ? 'mp4' : 'png'}`;
+
+    return {
+      cluster: index % 7 === 0 ? -1 : index % 37,
+      item: { kind, name },
+      key: `${kind}:${name}` as ImageMapPoint['key'],
+      x: index,
+      y: -index,
+    };
+  });
+
 describe('trace builders', () => {
   const points: ImageMapPoint[] = [
     { cluster: 0, item: { kind: 'image', name: 'a.png' }, key: 'image:a.png', x: 1, y: 2 },
     { cluster: -1, item: { kind: 'video', name: 'clip.mp4' }, key: 'video:clip.mp4', x: 3, y: 4 },
   ];
 
-  it('builds the all-points scattergl trace with item keys as customdata', () => {
-    const trace = buildAllPointsTrace(points);
+  it('splits the base points into one scattergl trace per appearance', () => {
+    const traces = buildAllPointsTraces(points);
 
-    expect(trace.type).toBe('scattergl');
-    expect(trace.name).toBe(ALL_POINTS_TRACE);
-    expect(trace.x).toEqual([1, 3]);
-    expect(trace.y).toEqual([2, 4]);
+    // Every marker property is scalar. Per-point arrays are what plotly
+    // reprocesses on each relayout, and a zoom is a relayout per frame.
+    for (const trace of traces) {
+      expect(trace.type).toBe('scattergl');
+      expect(trace.name).toBe(ALL_POINTS_TRACE);
+      expect(typeof trace.marker.color).toBe('string');
+      expect(typeof trace.marker.opacity).toBe('number');
+      expect(typeof trace.marker.symbol).toBe('string');
+    }
+
+    const clustered = traces.find((trace) => trace.marker.color === getClusterColor(0));
+    const noise = traces.find((trace) => trace.marker.color === getClusterColor(-1));
+
+    expect(clustered?.x).toEqual([1]);
+    expect(clustered?.y).toEqual([2]);
     // Keys, not bare names: a click has to know which namespace to resolve in.
-    expect(trace.customdata).toEqual(['image:a.png', 'video:clip.mp4']);
+    expect(clustered?.customdata).toEqual(['image:a.png']);
     // Kind gets the one channel colour and size do not already carry, so a
     // clip is findable on the map without hovering every point.
-    expect(trace.marker.symbol).toEqual(['circle', 'diamond']);
-    expect((trace.marker.color as string[])[0]).toBe(getClusterColor(0));
+    expect(clustered?.marker.symbol).toBe('circle');
+    expect(noise?.marker.symbol).toBe('diamond');
+    expect(noise?.customdata).toEqual(['video:clip.mp4']);
     // Noise points are dimmed relative to clustered points.
-    const opacities = trace.marker.opacity as number[];
-    expect(opacities[1]).toBeLessThan(opacities[0]);
+    expect(noise?.marker.opacity as number).toBeLessThan(clustered?.marker.opacity as number);
+    // And dimmed points are drawn first, so they sit under the clustered ones.
+    expect(traces.indexOf(noise!)).toBeLessThan(traces.indexOf(clustered!));
+  });
+
+  it('gives every point the appearance it would have had, and keeps it exactly once', () => {
+    // The split is the only thing standing between a point and the map. A
+    // bucketing slip drops or duplicates part of the gallery; a subtler one
+    // keys on the wrong field and every clustered point comes out the same
+    // colour, or a video comes out a circle. Cluster and kind vary
+    // independently here so that keying on either alone fails.
+    const many = manyPoints();
+    const byKey = new Map(many.map((point) => [point.key, point]));
+    const traces = buildAllPointsTraces(many);
+    const seen: string[] = [];
+
+    for (const trace of traces) {
+      for (const [index, key] of trace.customdata.entries()) {
+        const point = byKey.get(key as ImageMapPoint['key']);
+
+        expect(point).toBeDefined();
+        seen.push(key);
+        // Index alignment: plotly reads x, y and customdata positionally, so
+        // a shuffle inside one trace plots a point at another's coordinates
+        // and resolves a click to the wrong image.
+        expect(trace.x[index]).toBe(point?.x);
+        expect(trace.y[index]).toBe(point?.y);
+        // And the scalar appearance has to be the one this point earned.
+        expect(trace.marker.color).toBe(getClusterColor(point!.cluster));
+        expect(trace.marker.opacity).toBe(point!.cluster < 0 ? 0.25 : 0.85);
+        expect(trace.marker.symbol).toBe(point!.item.kind === 'video' ? 'diamond' : 'circle');
+      }
+    }
+
+    expect(seen).toHaveLength(many.length);
+    expect(new Set(seen).size).toBe(many.length);
+    // Bounded by the palette, not by the gallery: 15 colours + noise, each
+    // able to carry images and videos.
+    expect(traces.length).toBeLessThanOrEqual((CLUSTER_PALETTE.length + 1) * 2);
+  });
+
+  it('draws a point whose cluster is not an integer rather than losing it', () => {
+    // The bucket slot is an array index. A fractional label would collide
+    // with another cluster's slot and steal its colour; a non-finite one
+    // would write a string property the emit loop never visits, and those
+    // points would vanish from the map with nothing to show for it. The
+    // endpoint declares `int` and the client does not validate, so only this
+    // stands between a contract slip and missing images.
+    const odd: ImageMapPoint[] = [2.5, Number.NaN, Infinity, -0.5].map((cluster, index) => ({
+      cluster,
+      item: { kind: 'image', name: `${index}.png` },
+      key: `image:${index}.png`,
+      x: index,
+      y: index,
+    }));
+
+    const traces = buildAllPointsTraces(odd);
+
+    expect(traces.flatMap((trace) => trace.customdata)).toHaveLength(odd.length);
+    // Treated as unclustered: nothing sensible names their cluster.
+    for (const trace of traces) {
+      expect(trace.marker.color).toBe(getClusterColor(-1));
+      expect(trace.marker.opacity).toBe(0.25);
+    }
+  });
+
+  it('yields no base traces for an empty map', () => {
+    // The view never mounts the plot for an empty point set, and plotly
+    // handles the trace count changing in either direction, so there is
+    // nothing to stand in for.
+    expect(buildAllPointsTraces([])).toEqual([]);
   });
 
   it('builds an empty gold current-image trace that stays last in z-order', () => {
@@ -657,10 +808,7 @@ describe('trace builders', () => {
 
 describe('map layout stability', () => {
   it('pins uirevision to a constant so pan/zoom survives a data refresh', () => {
-    // The whole point of uirevision is that plotly keeps the user's viewport
-    // when the traces change. A value derived from the data (a point count, a
-    // hash, a timestamp) would compare unequal on every refresh and silently
-    // reset the view — which looks identical to "it works" in a static test.
+    // Stable uirevision preserves viewport across data refreshes; data-derived revisions would silently reset it.
     const first = buildMapLayout();
     const second = buildMapLayout();
 
@@ -676,6 +824,7 @@ describe('snapshot transitions', () => {
     // starts at null; seed a real error first so the clearing is what is tested.
     imageMapStore.setSnapshot({
       clusterLabels: null,
+      clusterLabelsEps: null,
       clusterLabelsHash: null,
       data: null,
       error: 'boom',
@@ -704,10 +853,10 @@ describe('snapshot transitions', () => {
   });
 
   it('clears a render failure on a successful refresh so the plot can retry', () => {
-    // Without this the WebGL error is permanent for the session: the view stops
-    // mounting the plot, and nothing else ever resets renderError.
+    // Retry must clear renderError so a transient WebGL failure can remount the plot.
     imageMapStore.setSnapshot({
       clusterLabels: null,
+      clusterLabelsEps: null,
       clusterLabelsHash: null,
       data: null,
       error: null,
@@ -729,6 +878,7 @@ const drainMacrotask = (): Promise<void> =>
 
 const EMPTY_SNAPSHOT = {
   clusterLabels: null,
+  clusterLabelsEps: null,
   clusterLabelsHash: null,
   data: null,
   error: null,
@@ -836,9 +986,7 @@ describe('image index progress', () => {
   });
 
   it('re-reads the counts on every mount, not just the first load of the map', async () => {
-    // The widget is routinely reopened long after the first load — mid-
-    // backfill, with the worker parked and no event due — which is exactly
-    // when the panel has nothing else to show.
+    // Reopening mid-backfill must fetch counts even if the worker is paused and no event is due.
     mocks.apiFetchJson.mockImplementation((url: string) =>
       url.startsWith('/api/v1/image_map/status')
         ? Promise.resolve({ enabled: true, index: { embedded: 70, failed: 0, total: 100 } })
@@ -879,8 +1027,7 @@ describe('image index progress', () => {
   });
 
   it('runs one status request at a time so an older response cannot land last', async () => {
-    // Concurrent requests resolve in no fixed order, and every mount, retry
-    // and reconnect asks for one.
+    // Mount, retry and reconnect requests must coalesce despite unordered completions.
     const resolvers: Array<(value: unknown) => void> = [];
     mocks.apiFetchJson.mockImplementation(
       () =>
@@ -895,8 +1042,6 @@ describe('image index progress', () => {
 
     expect(resolvers).toHaveLength(1);
 
-    // ...and the claim is released once it settles, so the next caller is not
-    // locked out for the rest of the session.
     resolvers[0]?.({ enabled: true, index: { embedded: 40, failed: 0, total: 100 } });
     await vi.waitFor(() => expect(imageMapStore.getSnapshot().indexCounts).not.toBeNull());
 

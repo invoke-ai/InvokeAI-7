@@ -1,17 +1,7 @@
 /**
- * Rasterizes a `gradient` layer source (linear / radial). Gradient layers are
- * PARAMETRIC and CONTENT-SIZED: the source carries an explicit `width`/`height`
- * extent (set bbox-sized at creation, preserved across angle edits) and the
- * gradient spans that extent. Legacy gradients that predate the extent field
- * default to the document dims (see {@link RasterizeDeps.documentSize}), so they
- * render identically. The compositor positions the extent via the layer transform.
- *
- * Linear: the gradient line runs through `center` along `angle` (degrees;
- * 0° = left→right) for `span` px. Radial: `span` is the radius around `center`.
- * Without an anchor the ramp is centered on the extent and fitted to its
- * corners (how gradients looked before the drag placed them).
- *
- * Zero React, zero import-time side effects.
+ * Content-sized parametric gradients use explicit extent, falling back to document dimensions for legacy sources.
+ * Linear angle 0 runs left-to-right over span; radial span is radius. Without anchors, center and fit the ramp to
+ * extent corners.
  */
 
 import type { CanvasLayerSourceContract } from '@workbench/canvas-engine/contracts';
@@ -49,10 +39,8 @@ const buildGradient = (ctx: Ctx, source: GradientSource, width: number, height: 
 };
 
 /**
- * Draws a gradient source into a surface sized to its explicit extent (or the
- * document dims for legacy gradients), reusing `target` if provided. Synchronous
- * work wrapped in a resolved promise so it shares the `rasterizeSource` dispatch
- * signature.
+ * Rasterizes explicit or legacy document extent, reusing target. Synchronous drawing returns a resolved promise to
+ * match source dispatch.
  */
 export const rasterizeGradientSource = (
   source: GradientSource,

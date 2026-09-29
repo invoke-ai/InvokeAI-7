@@ -113,8 +113,7 @@ beforeEach(() => {
   templateQuery.queryFn.mockResolvedValue([]);
 });
 
-// The resolver fails closed without the backend's architecture table, so seed the registry with the
-// same fixture the backend pins. Reset afterwards so registry state cannot leak between files.
+// Seed the shared capability fixture and clear it after each test.
 beforeEach(() => {
   setArchitectureCapabilities(capabilitiesFixture as ArchitectureCapabilitiesRow[]);
 });
@@ -259,9 +258,7 @@ describe('createGenerateWidgetSyncRuntime', () => {
 });
 
 describe('the architecture-capabilities gate', () => {
-  // reconcile() writes its result into the project via patchValues, so it must not run on fallback
-  // policy: the values are persisted, not merely displayed. This is why the gate lives here and
-  // not only in the widget -- the runtime reconciles at construction, before anything renders.
+  // Constructor reconciliation persists values, so it must wait for authoritative capabilities.
   it('writes nothing until the capability table has arrived', () => {
     const { capabilitiesLoaded, patches } = setup({
       capabilitiesLoaded: false,

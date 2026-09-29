@@ -96,4 +96,121 @@ describe('zInvocationNodeData: extra-input scoping', () => {
     expect(parsed.inputs.z_image_seed_variance_enabled?.value).toBe(false);
     expect(parsed.inputs.z_image_seed_variance_strength?.value).toBe(0.1);
   });
+
+  it('normalizes webv2 dynamic input templates', () => {
+    const parsed = zInvocationNodeData.parse({
+      ...buildNodeData('call_saved_workflow', {}),
+      dynamicInputTemplates: {
+        board: {
+          batch: false,
+          cardinality: 'SINGLE',
+          description: 'Child board',
+          fieldKind: 'internal',
+          input: 'any',
+          name: 'board',
+          required: false,
+          title: 'Board',
+          type: { batch: false, cardinality: 'SINGLE', name: 'BoardField' },
+          uiChoiceLabels: null,
+          uiComponent: null,
+          uiHidden: false,
+          uiModelBase: null,
+          uiModelFormat: null,
+          uiModelType: null,
+          uiOrder: null,
+        },
+      },
+    });
+
+    expect(parsed.dynamicInputTemplates.board).toMatchObject({
+      fieldKind: 'input',
+      name: 'board',
+      title: 'Board',
+      type: { name: 'BoardField' },
+      ui_hidden: false,
+    });
+  });
+
+  it('accepts legacy-compatible enum dynamic templates from webv2', () => {
+    const parsed = zInvocationNodeData.parse({
+      ...buildNodeData('call_saved_workflow', {}),
+      dynamicInputTemplates: {
+        literal: {
+          batch: false,
+          cardinality: 'SINGLE',
+          default: '2',
+          description: 'Literal value',
+          fieldKind: 'input',
+          input: 'any',
+          name: 'literal',
+          options: ['2'],
+          required: false,
+          title: 'Literal',
+          type: { batch: false, cardinality: 'SINGLE', name: 'EnumField' },
+          uiHidden: false,
+        },
+      },
+    });
+
+    expect(parsed.dynamicInputTemplates.literal).toMatchObject({ default: '2', options: ['2'] });
+  });
+
+  it('accepts an enum dynamic template whose optional default is unset', () => {
+    // webv2 leaves `default` unset for an optional enum whose backend default is
+    // null, so the backend receives `None` rather than an invented choice. JSON
+    // drops the undefined key, so the template arrives here without it. Legacy's
+    // `zEnumFieldInputTemplate.default` is a required `z.string()`, and
+    // `zWorkflowV3.parse` throws rather than dropping one template, so the whole
+    // workflow fails to open in this editor.
+    const parsed = zInvocationNodeData.parse({
+      ...buildNodeData('call_saved_workflow', {}),
+      dynamicInputTemplates: {
+        fidelity: {
+          description: 'Input fidelity',
+          exclusiveMaximum: null,
+          exclusiveMinimum: null,
+          fieldKind: 'input',
+          input: 'any',
+          maximum: null,
+          minimum: null,
+          multipleOf: null,
+          name: 'fidelity',
+          options: ['low', 'high'],
+          required: false,
+          title: 'Input Fidelity',
+          type: { batch: false, cardinality: 'SINGLE', name: 'EnumField' },
+          uiChoiceLabels: null,
+          uiComponent: null,
+          uiHidden: false,
+          uiModelBase: null,
+          uiModelFormat: null,
+          uiModelType: null,
+          uiOrder: null,
+        },
+      },
+    });
+
+    expect(parsed.dynamicInputTemplates.fidelity).toMatchObject({ default: 'low', options: ['low', 'high'] });
+  });
+
+  it('accepts an optional enum dynamic template with no options at the legacy boundary', () => {
+    const parsed = zInvocationNodeData.parse({
+      ...buildNodeData('call_saved_workflow', {}),
+      dynamicInputTemplates: {
+        empty: {
+          description: 'Empty enum',
+          fieldKind: 'input',
+          input: 'any',
+          name: 'empty',
+          options: [],
+          required: false,
+          title: 'Empty enum',
+          type: { batch: false, cardinality: 'SINGLE', name: 'EnumField' },
+          uiHidden: false,
+        },
+      },
+    });
+
+    expect(parsed.dynamicInputTemplates.empty).toMatchObject({ default: '', options: [] });
+  });
 });

@@ -5,16 +5,8 @@ import { createDomRasterBackend } from '@workbench/canvas-engine/render/raster';
 import { describe, expect, it } from 'vitest';
 
 /**
- * Growing a layer cache is the one place the engine moves a whole surface's
- * pixels, and it happens repeatedly mid-stroke. It preserves them by adopting a
- * fresh backing store and blitting the old canvas into it (`resizePreserving`)
- * rather than round-tripping through `getImageData`/`putImageData`. That is
- * measurably faster, but it also means the copy is real GPU work with a real
- * offset — a wrong `dx`/`dy`, or a blit that silently does nothing, would
- * corrupt layer content on any stroke that paints outward.
- *
- * The node tests can only assert the ARGUMENTS, because the stub surface holds
- * no pixels. These assert the pixels.
+ * Real-canvas growth tests verify resizePreserving pixels and offsets; recorded node calls cannot detect failed
+ * blits or content corruption.
  */
 
 /** Distinctly-coloured marks, addressed in layer-local space. */
@@ -94,19 +86,13 @@ describe('growToRect preserves pixels', () => {
   });
 
   it('keeps the pixels across a run of successive growths', () => {
-    // A single stroke crosses many chunk boundaries, so the pixels are copied
-    // again and again. Any per-growth drift (a rounding slip in the offset, or a
-    // blit that resamples) compounds; one growth is not enough to catch it.
+    // Repeated growth catches cumulative offset or resampling drift that a single copy cannot expose.
     const store = createLayerCacheStore(createDomRasterBackend());
     store.growToRect('L', START);
     const entry = store.get('L')!;
     entry.surface.ctx.fillStyle = 'rgb(220,30,90)';
-    entry.surface.ctx.fillRect(100, 100, 10, 10); // layer-local (200,200)
-    // A semi-transparent mark too: this is the one that could drift, since a
-    // copy that un-premultiplies and re-premultiplies loses a step. It must
-    // settle rather than lose a step per growth — a stroke's "before" snapshot
-    // is read off this surface, so drift here would slowly lift the pixels the
-    // gesture is supposed to leave pristine.
+    entry.surface.ctx.fillRect(100, 100, 10, 10); // A semitransparent mark at local (200,200) must stabilize across copies; repeated premultiplication rounding
+    // would corrupt untouched pixels and history snapshots.
     entry.surface.ctx.fillStyle = 'rgba(40,180,220,0.5)';
     entry.surface.ctx.fillRect(20, 20, 10, 10); // layer-local (120,120)
     const settled = entry.surface.ctx.getImageData(25, 25, 1, 1).data;

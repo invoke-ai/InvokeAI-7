@@ -1,42 +1,32 @@
+import type { ProjectWorkflowEntry } from '@features/workflow/core/types';
+import type { WorkflowUiAdapter } from '@features/workflow/ui/WorkflowUiContext';
+
 import { ChakraProvider } from '@chakra-ui/react';
+import { WorkflowUiProvider } from '@features/workflow/ui/WorkflowUiContext';
+import { requestWorkflowRename, workflowUiStore } from '@features/workflow/ui/workflowUiStore';
 import { createProjectGraph } from '@features/workflow/utility';
-import { accountLifecycle } from '@platform/state/accountLifecycle';
 import { system } from '@theme/system';
-import { act, Profiler, StrictMode } from 'react';
+import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { WorkflowUiAdapter } from './WorkflowUiContext';
-
-import { workflowLibrarySyncStore } from './library/workflowLibrarySyncStore';
-import { WorkflowUiProvider } from './WorkflowUiContext';
 import { WorkflowDialogHost } from './WorkflowWidgetChrome';
 
-const deferred = <T,>() => {
-  let reject!: (reason?: unknown) => void;
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
+// The host's other dialogs and runtimes have their own suites; here only the rename dialog is under test.
+vi.mock('./editor/AddNodeDialog', () => ({ AddNodeDialog: () => null }));
+vi.mock('./editor/CallSavedWorkflowSyncRuntime', () => ({ CallSavedWorkflowSyncRuntime: () => null }));
+vi.mock('./library/WorkflowLibraryDialog', () => ({ WorkflowLibraryDialog: () => null }));
+vi.mock('./library/WorkflowPublicationHost', () => ({ WorkflowPublicationHost: () => null }));
+vi.mock('./PendingLibraryWorkflowLoader', () => ({ PendingWorkflowLoader: () => null }));
 
-  return { promise, reject, resolve };
+const TRANSLATIONS: Record<string, string> = {
+  'workflowLibrary.rename': 'Rename',
+  'workflowLibrary.renameTitle': 'Rename workflow',
+  'workflowLibrary.workflowName': 'Workflow name',
 };
 
-// The dialogs pull in heavy leaf UI (node search, the library browser, graph
-// previews) that is irrelevant to the autosave wiring under test here; stub
-// them out so this stays a focused wiring-layer test.
-vi.mock('./editor/AddNodeDialog', () => ({ AddNodeDialog: () => null }));
-vi.mock('./library/WorkflowLibraryDialog', () => ({ WorkflowLibraryDialog: () => null }));
-vi.mock('./PendingLibraryWorkflowLoader', () => ({ PendingLibraryWorkflowLoader: () => null }));
-
-import { onWorkflowLibraryCacheInvalidated } from '@features/workflow/queries';
-
-const { updateLibraryWorkflowMock } = vi.hoisted(() => ({ updateLibraryWorkflowMock: vi.fn() }));
-
-vi.mock('@features/workflow/queries', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  updateLibraryWorkflow: updateLibraryWorkflowMock,
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string) => TRANSLATIONS[key] ?? key }),
 }));
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -44,6 +34,7 @@ vi.mock('@features/workflow/queries', async (importOriginal) => ({
 const createMutablePort = <Snapshot,>(initialSnapshot: Snapshot) => {
   let snapshot = initialSnapshot;
   const listeners = new Set<() => void>();
+
   return {
     port: {
       getSnapshot: () => snapshot,
@@ -61,66 +52,69 @@ const createMutablePort = <Snapshot,>(initialSnapshot: Snapshot) => {
   };
 };
 
-/**
- * Regression coverage for the StrictMode autosaver-disposal bug: the
- * autosaver used to be created once via a `useState` initializer and
- * disposed in a separate effect's cleanup. React StrictMode's dev-only
- * mount→cleanup→mount simulation ran that cleanup without ever re-running
- * the initializer (state is preserved across the simulation, effects are
- * not), permanently disposing the one live instance — autosave then
- * silently no-oped for the rest of the session. The fix creates AND
- * disposes the autosaver within a single mount effect (held in a ref), so
- * the simulation produces a fresh, live instance instead. Mounting under a
- * real `<StrictMode>` here reproduces that simulation; a test that mounted
- * without it would not have caught the bug.
- */
-describe('WorkflowDialogHost library autosave under StrictMode', () => {
+const ALPHA: ProjectWorkflowEntry = { document: { ...createProjectGraph('wf-1'), name: 'Alpha' } };
+const BETA: ProjectWorkflowEntry = { document: { ...createProjectGraph('wf-2'), name: 'Beta' } };
+
+const projectSnapshot = (workflows: readonly ProjectWorkflowEntry[], activeWorkflowId = workflows[0]!.document.id) => {
+  const active = workflows.find((entry) => entry.document.id === activeWorkflowId)!;
+
+  return {
+    activeWorkflow: active,
+    activeWorkflowId,
+    galleryValues: {},
+    id: 'project-1',
+    isWorkflowRunning: false,
+    projectGraph: active.document,
+    workflowValues: {},
+    workflows,
+  };
+};
+
+describe('WorkflowDialogHost rename', () => {
   let host: HTMLDivElement;
   let root: Root;
+  let project: ReturnType<typeof createMutablePort<ReturnType<typeof projectSnapshot>>>;
+  let commands: {
+    addWorkflow: ReturnType<typeof vi.fn>;
+    editGraph: ReturnType<typeof vi.fn>;
+    renameWorkflow: ReturnType<typeof vi.fn>;
+  };
+
+  const settleFrame = () =>
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  const flush = () =>
+    act(async () => {
+      await settleFrame();
+      await settleFrame();
+    });
 
   beforeEach(() => {
     host = document.createElement('div');
     document.body.append(host);
-    updateLibraryWorkflowMock.mockReset();
-    updateLibraryWorkflowMock.mockResolvedValue(undefined);
+    root = createRoot(host);
+    commands = { addWorkflow: vi.fn(), editGraph: vi.fn(), renameWorkflow: vi.fn() };
+    workflowUiStore.patchSnapshot({ renameRequest: null });
   });
 
   afterEach(async () => {
     await act(() => root.unmount());
     host.remove();
+    workflowUiStore.patchSnapshot({ renameRequest: null });
   });
 
-  it('still autosaves a bound workflow after a graph edit', async () => {
-    const cacheInvalidated = vi.fn();
-    const stopListening = onWorkflowLibraryCacheInvalidated(cacheInvalidated);
-
-    const boundGraph = { ...createProjectGraph('workflow-1'), libraryWorkflowId: 'library-workflow-1' };
-    const project = createMutablePort({
-      galleryValues: {},
-      id: 'project-1',
-      isWorkflowRunning: false,
-      projectGraph: boundGraph,
-      workflowValues: {},
-    });
-
+  const renderHost = async (workflows: readonly ProjectWorkflowEntry[]) => {
+    project = createMutablePort(projectSnapshot(workflows));
     // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- intentionally stable for this render lifetime
     const adapter = {
-      commands: {
-        bindLibraryWorkflow: vi.fn(),
-        editGraph: vi.fn(),
-        redo: vi.fn(),
-        replace: vi.fn(),
-        undo: vi.fn(),
-      },
+      commands,
       getProjectGraph: () => project.port.getSnapshot().projectGraph,
       notifications: { error: vi.fn(), info: vi.fn(), success: vi.fn() },
       project: project.port,
-      widgets: { open: vi.fn(), patchValues: vi.fn() },
     } as unknown as WorkflowUiAdapter;
 
-    root = createRoot(host);
-
-    await act(() => {
+    await act(async () => {
       root.render(
         <StrictMode>
           <ChakraProvider value={system}>
@@ -130,223 +124,77 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
           </ChakraProvider>
         </StrictMode>
       );
+      await settleFrame();
     });
+  };
 
-    expect(updateLibraryWorkflowMock).not.toHaveBeenCalled();
+  const dialog = () =>
+    [...document.querySelectorAll<HTMLElement>('[role="dialog"][data-state="open"]')].find(
+      (candidate) => candidate.querySelector('h2')?.textContent === 'Rename workflow'
+    ) ?? null;
+  const input = () => dialog()?.querySelector<HTMLInputElement>('input[name="renameValue"]') ?? null;
 
-    // A graph edit on the already-bound project: a new object identity so the
-    // dialog host's graph-changed effect fires and schedules the debounced
-    // autosave.
-    await act(() => {
-      project.setSnapshot({
-        ...project.port.getSnapshot(),
-        projectGraph: { ...boundGraph, name: 'Edited name' },
-      });
+  const request = async (workflowId: string) => {
+    await act(async () => {
+      requestWorkflowRename(workflowId);
+      await settleFrame();
     });
+    await flush();
+  };
 
-    // Past the 2s debounce.
-    await act(
-      () =>
-        new Promise<void>((resolve) => {
-          setTimeout(resolve, 2100);
-        })
-    );
-    // Let the autosaver's save promise settle.
-    await act(
-      () =>
-        new Promise<void>((resolve) => {
-          setTimeout(resolve, 0);
-        })
-    );
+  const typeAndSubmit = async (name: string) => {
+    const field = input();
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
 
-    expect(updateLibraryWorkflowMock).toHaveBeenCalledTimes(1);
-    expect(updateLibraryWorkflowMock).toHaveBeenCalledWith(
-      'library-workflow-1',
-      expect.objectContaining({ name: 'Edited name' }),
-      expect.any(AbortSignal)
-    );
-    // The library dialog must not keep serving the pre-save payload.
-    expect(cacheInvalidated).toHaveBeenCalledTimes(1);
-    stopListening();
+    await act(async () => {
+      setValue?.call(field, name);
+      field?.dispatchEvent(new Event('input', { bubbles: true }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      field?.closest('form')?.querySelector<HTMLButtonElement>('button[type="submit"]')?.click();
+      await settleFrame();
+    });
+    await flush();
+  };
+
+  it('renames the workflow the request named, then closes, and a later request opens again', async () => {
+    await renderHost([ALPHA, BETA]);
+    expect(dialog()).toBeNull();
+
+    await request('wf-1');
+    expect(input()?.value).toBe('Alpha');
+
+    await typeAndSubmit('Alpha, renamed');
+    expect(commands.renameWorkflow).toHaveBeenCalledWith('wf-1', 'Alpha, renamed');
+    expect(dialog()).toBeNull();
+
+    await request('wf-1');
+    expect(dialog()).not.toBeNull();
   });
 
-  /**
-   * The host used to learn about graph edits through a selector
-   * (`useWorkflowProjectSelector`) feeding a change-detecting effect, which
-   * re-rendered this component on every graph edit just to notice the
-   * autosaver should be poked. Edits reach the project store through
-   * imperative commands, not through this component's own props or state, so
-   * there is nothing here that needs re-rendering to learn about them — a
-   * direct store subscription (held in the same mount effect that owns the
-   * autosaver) can notify the autosaver without forcing React back through
-   * this component's render.
-   */
-  it('schedules an autosave for graph edits made outside React renders', async () => {
-    workflowLibrarySyncStore.setSnapshot({ status: 'idle' });
+  it('shows the request only while its workflow is the active one', async () => {
+    await renderHost([ALPHA, BETA]);
 
-    const boundGraph = { ...createProjectGraph('workflow-1'), libraryWorkflowId: 'library-workflow-1' };
-    const project = createMutablePort({
-      galleryValues: {},
-      id: 'project-1',
-      isWorkflowRunning: false,
-      projectGraph: boundGraph,
-      workflowValues: {},
-    });
+    await request('wf-1');
+    expect(dialog()).not.toBeNull();
 
-    // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- intentionally stable for this render lifetime
-    const adapter = {
-      commands: {
-        bindLibraryWorkflow: vi.fn(),
-        editGraph: vi.fn(),
-        redo: vi.fn(),
-        replace: vi.fn(),
-        undo: vi.fn(),
-      },
-      getProjectGraph: () => project.port.getSnapshot().projectGraph,
-      notifications: { error: vi.fn(), info: vi.fn(), success: vi.fn() },
-      project: project.port,
-      widgets: { open: vi.fn(), patchValues: vi.fn() },
-    } as unknown as WorkflowUiAdapter;
+    // Another surface switched workflows behind the dialog: the request is for Alpha, so it is no longer shown.
+    await act(() => project.setSnapshot(projectSnapshot([ALPHA, BETA], 'wf-2')));
+    await flush();
+    expect(dialog()).toBeNull();
 
-    root = createRoot(host);
+    // That request is over: Alpha becoming active again does not bring it back.
+    await act(() => project.setSnapshot(projectSnapshot([ALPHA, BETA], 'wf-1')));
+    await flush();
+    expect(dialog()).toBeNull();
+    await act(() => project.setSnapshot(projectSnapshot([ALPHA, BETA], 'wf-2')));
+    await flush();
 
-    let renderCount = 0;
-    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test-only render probe, not app code
-    const countRender = () => {
-      renderCount += 1;
-    };
-
-    await act(() => {
-      root.render(
-        <StrictMode>
-          <ChakraProvider value={system}>
-            <WorkflowUiProvider adapter={adapter}>
-              <Profiler id="dialog-host" onRender={countRender}>
-                <WorkflowDialogHost />
-              </Profiler>
-            </WorkflowUiProvider>
-          </ChakraProvider>
-        </StrictMode>
-      );
-    });
-
-    // Only the edit dispatched below is under test; the mount itself renders
-    // (StrictMode doubles it).
-    renderCount = 0;
-
-    // Dispatch a graph edit straight through the project store — the same
-    // path an imperative command handler uses — rather than through a prop
-    // that would force this component to re-render.
-    await act(() => {
-      project.setSnapshot({
-        ...project.port.getSnapshot(),
-        projectGraph: { ...boundGraph, name: 'Edited outside React' },
-      });
-    });
-
-    expect(renderCount).toBe(0);
-    expect(workflowLibrarySyncStore.getSnapshot().status).toBe('dirty');
-  });
-
-  /**
-   * Account rotation (`accountLifecycle.activate`/`.invalidate`) aborts the
-   * signal a save started under and synchronously resets
-   * `workflowLibrarySyncStore` to 'idle' (it is an account-owned resource,
-   * cleared by `clearResources()` inside `rotateScope`) — but the aborted
-   * write's rejection lands a tick later, after that reset. A save's own
-   * `assertAccountScopeCurrent` throw (which turns a late resolution into a
-   * rejection so a stale write never gets treated as successful) is not
-   * enough by itself: `runSave()`'s `.catch` still calls `onStatus('error')`
-   * unconditionally, and without a scope guard on that callback the late
-   * write would land 'error' in the *next* account's store. Modeled on the
-   * account-rotation tests in `useScopedAction.browser.test.tsx`, which use
-   * the real `accountLifecycle` singleton directly.
-   */
-  it('does not park a stale save error in the sync store after an account switch', async () => {
-    const boundGraph = { ...createProjectGraph('workflow-1'), libraryWorkflowId: 'library-workflow-1' };
-    const project = createMutablePort({
-      galleryValues: {},
-      id: 'project-1',
-      isWorkflowRunning: false,
-      projectGraph: boundGraph,
-      workflowValues: {},
-    });
-
-    const request = deferred<void>();
-
-    updateLibraryWorkflowMock.mockReturnValue(request.promise);
-
-    // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- intentionally stable for this render lifetime
-    const adapter = {
-      commands: {
-        bindLibraryWorkflow: vi.fn(),
-        editGraph: vi.fn(),
-        redo: vi.fn(),
-        replace: vi.fn(),
-        undo: vi.fn(),
-      },
-      getProjectGraph: () => project.port.getSnapshot().projectGraph,
-      notifications: { error: vi.fn(), info: vi.fn(), success: vi.fn() },
-      project: project.port,
-      widgets: { open: vi.fn(), patchValues: vi.fn() },
-    } as unknown as WorkflowUiAdapter;
-
-    root = createRoot(host);
-
-    await act(() => {
-      root.render(
-        <StrictMode>
-          <ChakraProvider value={system}>
-            <WorkflowUiProvider adapter={adapter}>
-              <WorkflowDialogHost />
-            </WorkflowUiProvider>
-          </ChakraProvider>
-        </StrictMode>
-      );
-    });
-
-    await act(() => {
-      project.setSnapshot({
-        ...project.port.getSnapshot(),
-        projectGraph: { ...boundGraph, name: 'Edited before switch' },
-      });
-    });
-
-    // Past the debounce: the save has started (captured the pre-switch
-    // account scope) and is now awaiting the still-pending request below.
-    await act(
-      () =>
-        new Promise<void>((resolve) => {
-          setTimeout(resolve, 2100);
-        })
-    );
-
-    expect(updateLibraryWorkflowMock).toHaveBeenCalledTimes(1);
-
-    try {
-      // Switch accounts mid-flight: aborts the pre-switch scope's signal and
-      // synchronously resets the sync store to 'idle' via clearResources().
-      accountLifecycle.activate('workflow-dialog-host-test-account', ':user:workflow-dialog-host-test-account');
-
-      expect(workflowLibrarySyncStore.getSnapshot().status).toBe('idle');
-
-      // The deferred request settles after the switch — the same lag as an
-      // in-flight fetch whose abort rejection arrives after the synchronous
-      // store reset. Resolving (rather than rejecting) exercises the path
-      // the review flagged: `assertAccountScopeCurrent` turns this into a
-      // rejection inside `save()`, so a stale write is never mistaken for a
-      // successful one.
-      await act(async () => {
-        request.resolve();
-        await request.promise.catch(() => undefined);
-        // Give the save's `.then`/`.catch` continuation a turn to run.
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-
-      expect(workflowLibrarySyncStore.getSnapshot().status).toBe('idle');
-    } finally {
-      accountLifecycle.invalidate();
-    }
+    await request('wf-2');
+    expect(input()?.value).toBe('Beta');
+    await typeAndSubmit('Beta, renamed');
+    expect(commands.renameWorkflow).toHaveBeenCalledWith('wf-2', 'Beta, renamed');
+    expect(commands.renameWorkflow).not.toHaveBeenCalledWith('wf-1', expect.anything());
   });
 });

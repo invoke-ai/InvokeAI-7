@@ -9,9 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const centerAreaMocks = vi.hoisted(() => {
   const icon = () => null;
-  // A settled deferred resource, the shape `use()` can read without
-  // suspending — the center view's icon resolves the implementation to decide
-  // whether to show a spinner, and this fixture is always "already loaded".
+  // Use a settled resource so the center icon reads synchronously without suspending.
   const loadedImplementation = () => {
     const promise: Promise<object> & { status?: string; value?: object } = Promise.resolve({});
 

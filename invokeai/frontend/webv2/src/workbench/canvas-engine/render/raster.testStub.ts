@@ -1,23 +1,7 @@
 /**
- * A node-safe `RasterBackend` stub for vitest. Surfaces are backed by a
- * fake 2D context that records every call it receives instead of touching
- * a real canvas, so engine tests can assert on what was drawn without a
- * DOM or `OffscreenCanvas`.
- *
- * The subset of `CanvasRenderingContext2D` the engine currently uses is
- * implemented as recorded methods (save/restore/clearRect/fillRect/
- * strokeRect/drawImage/path building/fill/stroke/clip/createPattern/
- * createLinearGradient/createRadialGradient/setTransform/
- * getImageData/putImageData/setLineDash). Gradients returned by the
- * `create*Gradient` factories record their `addColorStop` calls on the same
- * surface call log. Property assignments (fillStyle,
- * globalAlpha, globalCompositeOperation, ...) are recorded too, via a
- * `{ op: 'set', args: [prop, value] }` entry, so tests can assert that
- * opacity/blend/style state was applied in order. Extend the method table in
- * `createStubCtx` below as later tasks need more of the API surface.
- *
- * Readbacks are INVENTED, since the stub holds no pixels: `getImageData` returns a
- * correctly-sized buffer whose alpha is {@link StubRasterBackendOptions.readbackAlpha}.
+ * Node-safe RasterBackend records drawing calls, context properties and gradient stops without real pixels.
+ * Synthetic getImageData buffers use {@link StubRasterBackendOptions.readbackAlpha}; browser tests verify actual
+ * raster results.
  */
 
 import type { RasterBackend, RasterSurface } from './raster';
@@ -41,12 +25,8 @@ export interface StubRasterBackend extends RasterBackend {
 /** Options for {@link createTestStubRasterBackend}. */
 export interface StubRasterBackendOptions {
   /**
-   * The alpha every pixel of a synthetic readback reports (default `255`).
-   *
-   * A transparent readback MEANS something: the paint-cache trim reads alpha to
-   * decide whether a layer still has content, and clears one that has none. A test
-   * driving an explicitly empty-cache path must therefore declare
-   * `readbackAlpha: 0`; ordinary engine-integration tests default to visible pixels.
+   * Synthetic readback alpha defaults to visible 255. Set zero explicitly for empty-cache tests because trimming
+   * interprets transparent pixels as no content.
    */
   readbackAlpha?: number;
 }
@@ -62,10 +42,8 @@ const createStubImageData = (width: number, height: number, alpha = 0): ImageDat
 };
 
 /**
- * Deterministic per-character advance the stub's {@link measureText} multiplies
- * by the current font's pixel size — the same `0.6` factor the text rasterizer's
- * pure `estimateTextExtent` uses (`TEXT_CHAR_WIDTH_FACTOR`), so a text layer's
- * measured surface size in node tests exactly matches its estimated extent.
+ * Stub text advance matches estimateTextExtent's 0.6*font-size factor, keeping node cache estimates and measured
+ * extents consistent.
  */
 const STUB_CHAR_WIDTH_FACTOR = 0.6;
 
@@ -83,9 +61,6 @@ const createStubCtx = (
     callLog.push({ args, op });
   };
 
-  // Stored non-method property values (fillStyle, globalAlpha, font, etc.).
-  // Declared before the method table so `measureText` can read the current
-  // `font` to produce font-size-dependent metrics.
   const props: Record<string, unknown> = {};
 
   const methods: Record<string, (...args: unknown[]) => unknown> = {
@@ -95,8 +70,6 @@ const createStubCtx = (
     clip: (...args: unknown[]) => log('clip', args),
     closePath: (...args: unknown[]) => log('closePath', args),
     fillText: (...args: unknown[]) => log('fillText', args),
-    // Deterministic, font-size-aware metrics: width = chars × fontSizePx × 0.6.
-    // No DOM/real canvas needed, so text measurement is reproducible in node.
     measureText: (...args: unknown[]) => {
       log('measureText', args);
       const text = String(args[0] ?? '');
@@ -105,17 +78,13 @@ const createStubCtx = (
     },
     createLinearGradient: (...args: unknown[]) => {
       log('createLinearGradient', args);
-      // A recording CanvasGradient stand-in: every addColorStop is logged on
-      // the surface's own call log (as `addColorStop`), so tests can assert the
-      // stop offsets/colors that were applied to the gradient.
       return {
         addColorStop: (...stopArgs: unknown[]) => log('addColorStop', stopArgs),
       } as unknown as CanvasGradient;
     },
     createPattern: (...args: unknown[]) => {
       log('createPattern', args);
-      // A non-null marker standing in for a CanvasPattern, so callers that
-      // guard on a null return (e.g. the checkerboard fill) proceed.
+      // Non-null pattern marker lets guarded fill paths execute.
       return { __stubPattern: true } as unknown as CanvasPattern;
     },
     createRadialGradient: (...args: unknown[]) => {
@@ -150,8 +119,6 @@ const createStubCtx = (
     strokeRect: (...args: unknown[]) => log('strokeRect', args),
   };
 
-  // The proxy records every property assignment (into `props`, declared above)
-  // so tests can assert on applied state.
   const proxy = new Proxy(methods, {
     get(target, prop: string) {
       if (prop in target) {
@@ -190,10 +157,8 @@ class StubRasterSurfaceImpl implements StubRasterSurface {
   }
 
   /**
-   * The stub holds no pixels, so this only records the resize and the offset the
-   * real surface would have blitted the old canvas to. Unlike the real surface
-   * the `ctx` is NOT replaced — keeping one call log per surface is what lets
-   * tests assert on a surface's whole history across a growth.
+   * Records resize/offset without real pixels. Preserve the context log across growth so tests can inspect the
+   * surface's full history.
    */
   resizePreserving(w: number, h: number, dx: number, dy: number): void {
     this.callLog.push({ args: [w, h, dx, dy], op: 'resizePreserving' });
@@ -202,10 +167,6 @@ class StubRasterSurfaceImpl implements StubRasterSurface {
   }
 }
 
-/**
- * Creates a `RasterBackend` whose surfaces are backed by a fake, node-safe
- * 2D context that records draw calls instead of executing them.
- */
 export const createTestStubRasterBackend = (options: StubRasterBackendOptions = {}): StubRasterBackend => ({
   createImageBitmap: (source: ImageBitmapSource): Promise<ImageBitmap> => {
     void source;
@@ -213,8 +174,7 @@ export const createTestStubRasterBackend = (options: StubRasterBackendOptions = 
   },
   createSurface: (width: number, height: number): StubRasterSurface =>
     new StubRasterSurfaceImpl(width, height, options.readbackAlpha ?? 255),
-  // Deterministic fake blob keyed on the surface size, so encode calls are
-  // reproducible in node without touching a real canvas.
+  // Size-keyed fake blobs keep node encoding deterministic.
   encodeSurface: (surface: RasterSurface, type = 'image/png'): Promise<Blob> =>
     Promise.resolve(new Blob([`stub-surface-${surface.width}x${surface.height}`], { type })),
 });

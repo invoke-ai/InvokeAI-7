@@ -21,11 +21,7 @@ import { useTranslation } from 'react-i18next';
 
 import { SelectionActions, SelectionOpModeButtons } from './SelectionOptionsRow';
 
-/**
- * The shared selection form: the path shape (lasso freehand/polygon or marquee
- * rectangle/ellipse), the op mode, and the command cluster. One component set
- * reading the active tool, so the rows keep DOM identity lasso↔marquee.
- */
+/** Share selection rows across lasso/marquee to preserve DOM identity while active-tool stores supply values. */
 const SelectionModeSettings = ({ engine, isSurfaceInteractionLocked }: ToolFormProps) => {
   const { t } = useTranslation();
   const activeTool = useCanvasActiveTool(engine);

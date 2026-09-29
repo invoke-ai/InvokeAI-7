@@ -12,11 +12,7 @@ import { Button, CloseButton, Field } from '@platform/ui';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * Repoints a model whose file moved on disk. The file itself is not moved or
- * copied — only the record's path changes, and only absolute paths are
- * accepted (managed models store paths relative to the models directory).
- */
+/** Update only the record's absolute path; never move files or repoint managed relative paths. */
 export const UpdatePathDialog = ({
   model,
   onClose,

@@ -25,18 +25,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@features/gallery/data/backend', () => ({
-  classifyGalleryUpload: (file: File) => {
-    const type = file.type.toLowerCase();
-    const name = file.name.toLowerCase();
-
-    if (['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(type) || /\.(jpe?g|png|webp)$/.test(name)) {
-      return { kind: 'image' as const };
-    }
-    if (type === 'video/mp4' || name.endsWith('.mp4')) {
-      return { kind: 'video' as const };
-    }
-    return null;
-  },
   createGalleryBoard: vi.fn(),
   deleteGalleryBoard: (...args: unknown[]) => mocks.deleteGalleryBoard(...args),
   downloadGalleryArchive: (...args: unknown[]) => mocks.downloadGalleryArchive(...args),
@@ -72,7 +60,8 @@ vi.mock('react-i18next', () => ({
           values?.board
         )}. ${String(values?.failed)} failed.`,
         'widgets.gallery.uploadSuccessTitle': `Uploaded ${String(values?.count)} files`,
-        'widgets.gallery.uploadUnsupported': 'No supported media files to upload (PNG, JPEG, WebP, or MP4).',
+        'widgets.gallery.uploadUnsupported':
+          'No supported media files to upload (PNG, JPEG, or WebP images; video files; or audio files).',
         'widgets.gallery.uncategorized': 'Uncategorized',
         'widgets.gallery.videoCount': `${String(values?.count)} videos`,
       };
@@ -172,15 +161,21 @@ const adapter: GalleryUiAdapter = {
     setPageInfo: noop,
     setSearchTerm: noop,
     setStarredOnly: noop,
+    setSemanticSearchMode: noop,
+    setSemanticSearchText: noop,
+    commitSemanticSearch: noop,
+    clearSearch: noop,
     setView: noop,
     toggleItemSelection: noop,
     updateSettings: noop,
   },
   galleryValues: {},
   generateValues: {},
+  getItemLabel: () => Promise.resolve(null),
   liveFollowEnabled: false,
   progressSessions: [],
   pinnedProgressSessionId: null,
+  followedProgressSessionId: null,
   followProgressSession: vi.fn(),
   notifications: {
     add: (...args: unknown[]) => mocks.notificationsAdd(...args),
@@ -677,10 +672,7 @@ describe('mixed gallery upload', () => {
 
 describe('setSemanticImageQuery', () => {
   it('applies the reference while resetting pagination and clearing the text term', () => {
-    // Paginated mode with the user on a later page: applying a semantic query
-    // replaces the result set, so the page must snap back to the first one
-    // (mirroring setGallerySearchTerm) and the term the chip replaces must not
-    // keep filtering invisibly.
+    // Replacing the ranking resets pagination and clears the hidden metadata term.
     actionsRef.current?.setSemanticImageQuery({ imageName: 'ref.png', kind: 'image' });
 
     expect(patchGalleryValues).toHaveBeenCalledOnce();
@@ -688,6 +680,7 @@ describe('setSemanticImageQuery', () => {
       galleryPage: 0,
       searchTerm: '',
       semanticImageQuery: { imageName: 'ref.png', kind: 'image' },
+      semanticSearchText: null,
     });
   });
 
@@ -695,6 +688,11 @@ describe('setSemanticImageQuery', () => {
     actionsRef.current?.setSemanticImageQuery(null);
 
     expect(patchGalleryValues).toHaveBeenCalledOnce();
-    expect(patchGalleryValues).toHaveBeenCalledWith({ galleryPage: 0, searchTerm: '', semanticImageQuery: null });
+    expect(patchGalleryValues).toHaveBeenCalledWith({
+      galleryPage: 0,
+      searchTerm: '',
+      semanticImageQuery: null,
+      semanticSearchText: null,
+    });
   });
 });

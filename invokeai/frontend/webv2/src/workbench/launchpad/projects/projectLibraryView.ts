@@ -1,12 +1,6 @@
 import type { ProjectSummary } from '@workbench/projects/library';
 
-/**
- * How the project library is presented: what matches the search, what order it
- * is in, and which bucket each project falls into.
- *
- * All of it is pure and takes `now` as an argument rather than reading the
- * clock, so the date bucketing is testable without freezing time.
- */
+/** Keep filtering, sorting, and grouping pure; inject now for deterministic date buckets. */
 
 export type ProjectSortId = 'edited' | 'created' | 'name';
 
@@ -93,11 +87,7 @@ export const matchesProjectSearch = (summary: ProjectSummary, searchTerm: string
 
 const DATE_GROUP_ORDER: readonly ProjectGroupId[] = ['today', 'week', 'month', 'older'];
 
-/**
- * Group order is fixed: pinned, then what is already open, then recency. A
- * search or an alphabetical sort collapses the date buckets into one `all`
- * group — ranking twelve results under four date headings hides them.
- */
+/** Group pinned, open, then recent projects; search and alphabetical sort collapse date buckets. */
 export const buildProjectGroups = ({
   now,
   openProjectIds,
@@ -149,14 +139,7 @@ export type ProjectRowModel =
   | { kind: 'header'; group: ProjectGroupId; count: number }
   | { kind: 'projects'; group: ProjectGroupId; projects: ProjectSummary[] };
 
-/**
- * Flatten groups into virtualizer rows. `columnCount` is how many cards share
- * a row, so the grid virtualizes by row and the list is just the same shape
- * with one column.
- *
- * A single unnamed group (the search/alphabetical `all` case) renders without
- * a heading — there is nothing to distinguish it from.
- */
+/** Flatten headings and card rows into one virtualizer index; omit the heading for a single unnamed group. */
 export const flattenProjectGroupsToRows = (groups: readonly ProjectGroup[], columnCount: number): ProjectRowModel[] => {
   const perRow = Math.max(1, columnCount);
   const showHeadings = groups.length > 1 || groups[0]?.id !== 'all';

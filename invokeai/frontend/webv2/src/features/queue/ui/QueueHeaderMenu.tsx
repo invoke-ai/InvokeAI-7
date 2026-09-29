@@ -11,11 +11,7 @@ import { QueueMenuItems, useQueueMenuActions } from './queueMenuActions';
 import { useQueueQueryScope } from './queueScope';
 import { useQueueUi } from './QueueUiContext';
 
-/**
- * Queue actions contributed to the frame's shared actions menu via the manifest
- * `headerMenu` slot. This intentionally uses the same action model as the
- * topbar queue menu so backend mutations keep local run coordination in sync.
- */
+/** Share the topbar action model so backend mutations also update local run coordination. */
 export const QueueHeaderMenu = () => {
   const { t } = useTranslation();
   const actions = useQueueMenuActions();

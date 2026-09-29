@@ -1,6 +1,7 @@
 """Tests for the /v1/image_map endpoints: serving, staleness, and user scoping."""
 
 import logging
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,7 +20,11 @@ from invokeai.app.services.image_index.image_index_common import (
     IndexedItem,
 )
 from invokeai.app.services.image_index.image_index_records_sqlite import ImageIndexRecordsSqlite
-from invokeai.app.services.image_index.projection import scope_hash
+from invokeai.app.services.image_index.projection import (
+    DEFAULT_CLUSTER_MIN_SAMPLES,
+    cluster_with_diagnostics,
+    scope_hash,
+)
 from invokeai.app.services.image_records.image_records_common import ImageCategory, ResourceOrigin
 from invokeai.app.services.image_records.image_records_sqlite import SqliteImageRecordStorage
 from invokeai.app.services.invocation_services import InvocationServices
@@ -235,6 +240,7 @@ def mock_services(image_index_service: FakeImageIndexService, tmp_path: Path) ->
         gallery=None,  # type: ignore
         image_index_records=(index_records := ImageIndexRecordsSqlite(db=db)),
         image_index=image_index_service,
+        intermediates=None,  # type: ignore
         external_generation=None,  # type: ignore
     )
     image_index_service.index_records = index_records
@@ -639,14 +645,16 @@ def test_cluster_labels_computed_only_over_accessible_points(
 
 @pytest.fixture(autouse=True)
 def _reset_image_map_router_state():
-    """The throttle and cluster cache are module state, so they outlive a test."""
+    """The throttle, cluster cache and diagnostics log are module state, so they outlive a test."""
     from invokeai.app.api.routers import image_map as image_map_router_module
 
     image_map_router_module._refresh_claims.clear()
     image_map_router_module._cluster_cache.clear()
+    image_map_router_module._cluster_diagnostics_logged.clear()
     yield
     image_map_router_module._refresh_claims.clear()
     image_map_router_module._cluster_cache.clear()
+    image_map_router_module._cluster_diagnostics_logged.clear()
 
 
 def test_refresh_is_throttled_per_user(
@@ -704,13 +712,17 @@ def test_repeat_points_requests_reuse_the_clustering(monkeypatch, mock_invoker: 
     from invokeai.app.api.routers import image_map as image_map_router_module
 
     calls = {"n": 0}
-    real_cluster = image_map_router_module.cluster_at_eps
+    served: list[float | None] = []
+    real_cluster = image_map_router_module.cluster_with_diagnostics
 
-    def counting_cluster(coords, eps, min_samples):
+    def counting_cluster(coords, eps=None, min_samples=DEFAULT_CLUSTER_MIN_SAMPLES):
         calls["n"] += 1
-        return real_cluster(coords, eps, min_samples)
+        labels, diagnostics = real_cluster(coords, eps, min_samples)
+        served.append(diagnostics.resolved_eps)
 
-    monkeypatch.setattr(image_map_router_module, "cluster_at_eps", counting_cluster)
+        return labels, diagnostics
+
+    monkeypatch.setattr(image_map_router_module, "cluster_with_diagnostics", counting_cluster)
 
     names = ["a.png", "b.png", "c.png", "d.png"]
     for name in names:
@@ -724,6 +736,11 @@ def test_repeat_points_requests_reuse_the_clustering(monkeypatch, mock_invoker: 
         assert repeat["points"] == first["points"]
         assert repeat["cluster_eps"] == first["cluster_eps"]
     assert calls["n"] == 1, "identical repeat polls must not recluster"
+    # The eps the client is told to pass back has to be the one that produced
+    # these labels. Resolving it a second time anywhere in the endpoint would
+    # re-apply the 0.01 floor to a budget-shrunk value and report a different
+    # number than DBSCAN ran at.
+    assert first["cluster_eps"] == served[0]
 
     # Every clustering input is part of the key.
     client.get("/api/v1/image_map/points", params={"eps": 0.05, "min_samples": 2}).json()
@@ -737,6 +754,146 @@ def test_repeat_points_requests_reuse_the_clustering(monkeypatch, mock_invoker: 
     reprojected = client.get("/api/v1/image_map/points", params={"eps": 0.5, "min_samples": 2}).json()
     assert calls["n"] == 4, "a rewritten projection must recluster"
     assert reprojected["points"] != first["points"]
+
+
+def test_points_logs_why_a_map_came_back_unclustered(
+    caplog, monkeypatch, mock_invoker: Invoker, client: TestClient
+) -> None:
+    """An all-noise map is indistinguishable from a working one in the response.
+
+    The point cap is the gate a large gallery hits, and nothing the client
+    receives mentions it: every point simply arrives with cluster -1.
+    """
+    from invokeai.app.api.routers import image_map as image_map_router_module
+
+    monkeypatch.setattr("invokeai.app.services.image_index.projection.MAX_CLUSTERED_POINTS", 1)
+    names = ["a.png", "b.png"]
+    for name in names:
+        _seed_embedded_image(mock_invoker, name)
+    _seed_projection(mock_invoker, SYSTEM_USER_ID, imgs(*names), np.zeros((2, 2), dtype=np.float32))
+
+    with caplog.at_level(logging.DEBUG):
+        body = client.get("/api/v1/image_map/points").json()
+
+    assert [point["cluster"] for point in body["points"]] == [-1, -1]
+    assert _diagnostics_levels(caplog) == ["INFO"], "a skipped clustering must be reported, and at INFO"
+    line = _diagnostics_records(caplog)[0].getMessage()
+    assert "MAX_CLUSTERED_POINTS" in line
+    assert "points=2" in line and "unclustered=2" in line and "clusters=0" in line
+
+    # A second request re-clusters (a skipped clustering is never cached, so
+    # this is not a cache hit) and must stay quiet: the map refreshes on every
+    # gallery change, and a gallery stuck above the cap would otherwise emit a
+    # line per refresh forever.
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        client.get("/api/v1/image_map/points")
+    assert image_map_router_module._cluster_cache == {}, "the repeat must have re-clustered, not read a cache"
+    assert _diagnostics_levels(caplog) == []
+
+    # Enough time passing re-arms it, so "open the map again while I watch the
+    # log" works without restarting the server.
+    caplog.clear()
+    stale = time.monotonic() - image_map_router_module._CLUSTER_DIAGNOSTICS_REPEAT_AFTER_SECONDS - 1
+    signature = image_map_router_module._cluster_diagnostics_logged[SYSTEM_USER_ID][0]
+    image_map_router_module._cluster_diagnostics_logged[SYSTEM_USER_ID] = (signature, stale)
+    with caplog.at_level(logging.DEBUG):
+        client.get("/api/v1/image_map/points")
+    assert _diagnostics_levels(caplog) == ["INFO"]
+
+    # A clustering that found clusters explains itself, so it goes to debug.
+    caplog.clear()
+    monkeypatch.setattr("invokeai.app.services.image_index.projection.MAX_CLUSTERED_POINTS", 50_000)
+    with caplog.at_level(logging.DEBUG):
+        client.get("/api/v1/image_map/points", params={"min_samples": 2})
+    assert _diagnostics_levels(caplog) == ["DEBUG"]
+    healthy = _diagnostics_records(caplog)[0].getMessage()
+    assert "MAX_CLUSTERED_POINTS" not in healthy and "resolved_eps=" in healthy
+
+
+def test_a_map_with_no_visible_points_is_not_reported_as_a_clustering(
+    caplog, mock_invoker: Invoker, client: TestClient
+) -> None:
+    """Nothing clustered because there was nothing to cluster; `state` says so already."""
+    _seed_embedded_image(mock_invoker, "a.png")
+    # A projection whose only row is not in the accessible set: the visible
+    # mask empties, and clustering is handed zero points.
+    _seed_projection(mock_invoker, SYSTEM_USER_ID, imgs("gone.png"), np.zeros((1, 2), dtype=np.float32))
+
+    with caplog.at_level(logging.DEBUG):
+        client.get("/api/v1/image_map/points")
+
+    assert _diagnostics_levels(caplog) == []
+
+
+def test_cluster_diagnostics_log_is_bounded_and_kept_per_user() -> None:
+    from invokeai.app.api.routers import image_map as image_map_router_module
+
+    services = SimpleNamespace(logger=logging)
+    diagnostics = cluster_with_diagnostics(np.zeros((4, 2), dtype=np.float32), eps=0.5, min_samples=2)[1]
+    for index in range(image_map_router_module._CLUSTER_DIAGNOSTICS_USERS + 3):
+        image_map_router_module._log_cluster_diagnostics(services, f"user{index}", diagnostics)
+
+    logged = image_map_router_module._cluster_diagnostics_logged
+    assert len(logged) == image_map_router_module._CLUSTER_DIAGNOSTICS_USERS
+    assert "user0" not in logged, "the oldest user must be evicted, not the newest"
+    assert f"user{image_map_router_module._CLUSTER_DIAGNOSTICS_USERS + 2}" in logged
+    # Per user: one user's line must never silence another's.
+    assert len({entry[0] for entry in logged.values()}) == 1
+
+
+def test_a_suppressed_repeat_does_not_push_back_the_re_arm() -> None:
+    """The line re-arms 600s after it was last EMITTED, not last suppressed.
+
+    Refreshing the stored timestamp on every quiet request would hold the line
+    off for as long as the user keeps the map open — which is exactly when
+    they are trying to reproduce it.
+    """
+    from invokeai.app.api.routers import image_map as image_map_router_module
+
+    services = SimpleNamespace(logger=logging)
+    diagnostics = cluster_with_diagnostics(np.zeros((4, 2), dtype=np.float32), eps=0.5, min_samples=2)[1]
+    image_map_router_module._log_cluster_diagnostics(services, "user", diagnostics)
+    emitted_at = image_map_router_module._cluster_diagnostics_logged["user"][1]
+
+    for _ in range(3):
+        image_map_router_module._log_cluster_diagnostics(services, "user", diagnostics)
+
+    assert image_map_router_module._cluster_diagnostics_logged["user"][1] == emitted_at
+
+
+def test_cluster_diagnostics_log_keeps_the_users_it_keeps_hearing_from() -> None:
+    """Recency has to mean "last seen", not "last logged".
+
+    A user whose clustering never changes is the quiet path, and it is exactly
+    the entry worth keeping: evict it and their next request logs again, which
+    is the repetition the guard exists to prevent.
+    """
+    from invokeai.app.api.routers import image_map as image_map_router_module
+
+    services = SimpleNamespace(logger=logging)
+    diagnostics = cluster_with_diagnostics(np.zeros((4, 2), dtype=np.float32), eps=0.5, min_samples=2)[1]
+    cap = image_map_router_module._CLUSTER_DIAGNOSTICS_USERS
+    for index in range(cap):
+        image_map_router_module._log_cluster_diagnostics(services, f"user{index}", diagnostics)
+
+    # user0 says the same thing again — suppressed, but still active.
+    image_map_router_module._log_cluster_diagnostics(services, "user0", diagnostics)
+    image_map_router_module._log_cluster_diagnostics(services, "newcomer", diagnostics)
+
+    logged = image_map_router_module._cluster_diagnostics_logged
+    assert len(logged) == cap
+    assert "user0" in logged, "a suppressed repeat must refresh the entry's recency"
+    assert "user1" not in logged, "the genuinely least recent user is the one to evict"
+
+
+def _diagnostics_records(caplog) -> list[logging.LogRecord]:
+    """The clustering-diagnostics lines captured so far."""
+    return [record for record in caplog.records if "Image map: clustered" in record.getMessage()]
+
+
+def _diagnostics_levels(caplog) -> list[str]:
+    return [record.levelname for record in _diagnostics_records(caplog)]
 
 
 def test_cluster_cache_is_bounded(monkeypatch, mock_invoker: Invoker, client: TestClient) -> None:
@@ -983,10 +1140,7 @@ def test_cluster_labels_skips_the_embedding_gather_when_nothing_clustered(
     _seed_embedded_image(mock_invoker, "a.png")
     _seed_projection(mock_invoker, SYSTEM_USER_ID, imgs("a.png"), np.zeros((1, 2), dtype=np.float32))
 
-    monkeypatch.setattr(
-        "invokeai.app.api.routers.image_map.compute_clusters",
-        lambda coords, eps=None, min_samples=None: np.full((coords.shape[0],), -1, dtype=np.int64),
-    )
+    monkeypatch.setattr("invokeai.app.services.image_index.projection.MAX_CLUSTERED_POINTS", 0)
 
     gathered = []
     original = image_index_service.get_accessible_embeddings

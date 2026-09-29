@@ -3,29 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   EDITABLE_MODEL_FORMATS,
   getModelSourceHref,
-  formatBytes,
   getModelFormatLabel,
   getModelTypeLabel,
   getModelVariantLabel,
   getVariantOptionsFor,
 } from './taxonomy';
-
-describe('formatBytes', () => {
-  it('renders a dash for missing or invalid sizes', () => {
-    expect(formatBytes(null)).toBe('—');
-    expect(formatBytes(undefined)).toBe('—');
-    expect(formatBytes(-1)).toBe('—');
-    expect(formatBytes(Number.NaN)).toBe('—');
-  });
-
-  it('scales across unit boundaries', () => {
-    expect(formatBytes(0)).toBe('0 B');
-    expect(formatBytes(1023)).toBe('1023 B');
-    expect(formatBytes(1024)).toBe('1.0 KB');
-    expect(formatBytes(1024 * 1024)).toBe('1.0 MB');
-    expect(formatBytes(1.5 * 1024 * 1024 * 1024)).toBe('1.5 GB');
-  });
-});
 
 describe('label fallbacks', () => {
   it('title-cases unknown open-union values', () => {
@@ -60,6 +42,14 @@ describe('variant options', () => {
   it('offers per-type variants for encoder-style types regardless of base', () => {
     expect(getVariantOptionsFor('any', 'clip_embed')).toEqual(['large', 'gigantic']);
     expect(getVariantOptionsFor('flux2', 'qwen3_encoder')).toEqual(['qwen3_4b', 'qwen3_8b', 'qwen3_06b']);
+  });
+
+  it('offers both Qwen3-VL sizes, because the field is required on the config', () => {
+    // Required variants must not offer None, which would send invalid null during save.
+    expect(getVariantOptionsFor('any', 'qwen3_vl_encoder')).toEqual(['qwen3_vl_4b', 'qwen3_vl_8b']);
+    expect(getModelVariantLabel('qwen3_vl_8b')).toBe('Qwen3-VL 8B (Ideogram 4)');
+    // MiniMax H3 shares the encoder type but lacks a variant field; size choices would fail saving.
+    expect(getVariantOptionsFor('minimax-h3', 'qwen3_vl_encoder')).toEqual([]);
   });
 
   it('returns empty for pairs with no variant concept, enabling free text', () => {

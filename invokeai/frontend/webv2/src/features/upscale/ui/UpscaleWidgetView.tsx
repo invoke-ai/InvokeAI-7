@@ -48,15 +48,7 @@ import { UpscaleLoraRow, UpscalePromptFields } from './UpscaleFormFields';
 import { UpscaleImageField } from './UpscaleImageField';
 import { useUpscaleUi, useUpscaleUiActions } from './UpscaleUiContext';
 
-/**
- * Every prop identity in this file is stable by construction — module-scope
- * constants for literals, `useCallback`/`useMemo` for anything closing over
- * state, and `memo` on each section. The widget re-renders on every keystroke
- * that patches project state, so an inline `{...}`/`() => …` prop anywhere here
- * re-renders the whole form (prompt editors and model pickers included) for a
- * change that touched one number. The `react-perf` lint rules enforce this;
- * they were previously disabled file-wide.
- */
+/** Keep props stable across project patches so memoized form sections do not rerender for unrelated field edits. */
 
 const VAE_PRECISION_COLLECTION = createListCollection({
   items: [
@@ -221,9 +213,7 @@ export const UpscaleWidgetView = () => {
   const models = useModelsSelector((snapshot) => snapshot.models);
   const modelsStatus = useModelsSelector((snapshot) => snapshot.status);
   const { patchPromptDraft: patchDraft, patchValues, projectId, promptDraft, rawValues } = selection;
-  // Normalizing and reconciling against the model list is the widget's most
-  // expensive derivation; it must not run on unrelated re-renders, and a fresh
-  // `values` identity would re-render every section below.
+  // Reuse normalization/reconciliation results across unrelated renders to preserve section identities.
   const values = useMemo(() => {
     const normalized = normalizeUpscaleWidgetValues(rawValues) ?? createDefaultUpscaleWidgetValues();
 
@@ -241,7 +231,7 @@ export const UpscaleWidgetView = () => {
   );
   const errors = useMemo(
     () => ({
-      cfgScale: getRangeError(t('widgets.upscale.cfgScale'), values.cfgScale, 0, 100),
+      cfgScale: getRangeError(t('widgets.upscale.cfgScale'), values.cfgScale, 1, 100),
       creativity: getRangeError(
         t('widgets.upscale.creativity'),
         values.creativity,
@@ -356,8 +346,7 @@ export const UpscaleWidgetView = () => {
     [patch]
   );
 
-  // One setter per field, created once per `patch` identity: inline
-  // `onChange={(x) => patch({ x })}` props would defeat every `memo` below.
+  // Create field setters per patch identity so inline handlers cannot defeat section memoization.
   const set = useMemo(
     () => ({
       cfgScale: (cfgScale: number) => patch({ cfgScale }),
@@ -383,8 +372,6 @@ export const UpscaleWidgetView = () => {
     }),
     [patch]
   );
-  // Model filters close over the selected main model, so they change only when
-  // that model does — not on every keystroke elsewhere in the form.
   const loraFilter = useCallback(
     (model: ModelConfig) =>
       Boolean(values.model && isLoraModelConfig(model) && isLoraCompatibleWithModel(model, values.model)),
@@ -558,7 +545,7 @@ export const UpscaleWidgetView = () => {
             inputMax={100}
             label={t('widgets.upscale.cfgScale')}
             max={CFG_SLIDER_MAX}
-            min={0}
+            min={1}
             step={0.5}
             value={values.cfgScale}
             onChange={set.cfgScale}

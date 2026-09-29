@@ -107,10 +107,7 @@ interface LayersTreeProps {
 }
 
 /** Which half of the row under the pointer it sits in. */
-/**
- * Groups expose a middle band that drops INTO them — the only comfortable way
- * into an empty group; leaves split at the midline as before.
- */
+/** Use a group's middle drop band to enter it, including empty groups; leaves split at their midpoint. */
 const edgeOf = (
   rect: { top: number; height: number } | undefined,
   y: number,
@@ -161,9 +158,8 @@ const VirtualSlot = ({ children, size, start }: { children: ReactNode; size: num
 };
 
 /**
- * The virtualized, keyboard-first layer tree: one scroll container, one drag context, one menu
- * host, fixed row heights, and a single roving tab stop over stack headers and rows.
- * Rows receive a view model and a command handle; every subscription and commit lives here.
+ * Own subscriptions and commits in one virtualized tree with fixed rows, shared drag/menu hosts, and one roving
+ * tab stop.
  */
 export const LayersTree = ({
   degraded,
@@ -372,8 +368,7 @@ export const LayersTree = ({
     [runStructural, t]
   );
 
-  // Deletes the focused row (or the selection it belongs to) and keeps keyboard
-  // focus in the tree: the nearest surviving row below, else above.
+  // After deletion, focus the nearest surviving row below, otherwise above.
   const removeRows = useCallback(
     (key: string) => {
       const { document: currentDocument, engine: currentEngine, panel: current, visibleRowIds: rows } = latest.current;
@@ -692,8 +687,7 @@ export const LayersTree = ({
     }
   }, [primaryId, rowIndexByKey]);
 
-  // A properties request from elsewhere (a menu, a hotkey) reveals its row, scrolls to it once it is
-  // rendered, and then opens the surface on it exactly once; a request for a node that is gone is dropped.
+  // Reveal external Properties requests, scroll after render, and open once; discard requests for removed nodes.
   useLayoutEffect(() => {
     if (!propertiesRequest) {
       pendingProperties.current = null;
@@ -743,10 +737,7 @@ export const LayersTree = ({
     }
   }, [onRevealProperties, panelRows, virtualItems]);
 
-  // Focus repair: the browser drops focus to the body when a focused row unmounts, so the tree
-  // remembers whether it owned focus and puts it back on the item that now holds the tab stop.
-  // Portaled children (the stack hint card) route focus through this capture
-  // handler while their DOM lives outside the host; only real host focus counts.
+  // Repair focus after row unmount only if the actual tree DOM owned it; portaled focus does not count.
   const handleFocusCapture = useCallback((event: FocusEvent<HTMLElement>) => {
     if (event.currentTarget.contains(event.target as Node)) {
       treeOwnsFocus.current = true;
@@ -944,10 +935,8 @@ export const LayersTree = ({
       rows: stacks[drag.stack].rows,
     });
   }, [drag, stacks]);
-  // Dnd-kit can describe one insertion gap as both "below row N" and "above row N+1". Key the
-  // model check by the semantic command so virtualized auto-scroll does not repeat the same
-  // validation. Finishing the drag clears the target, and the prepared commit revalidates against
-  // the current document before applying the landing.
+  // Cache drag validation by semantic move rather than equivalent visual gaps; clear on completion and revalidate
+  // the prepared landing against the latest document.
   const refusalCommandKey = target ? JSON.stringify(reparentCommandForTarget(target)) : null;
   const refusal = useMemo(
     () =>

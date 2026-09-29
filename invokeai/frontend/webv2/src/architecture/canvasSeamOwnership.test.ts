@@ -31,9 +31,8 @@ const SEAM_MODULES = [
 ];
 
 /**
- * Mutations that restructure the stack forests. Controllers build some as forward/inverse pairs for
- * prepared raster dispatch, while paint creates and rolls back its pointer-down layer by design.
- * Every current owner is enumerated below; the scan matches the formatted literal `type: '…'`.
+ * Enumerate structural-mutation constructors, including prepared inverse pairs and paint rollback; scanning
+ * matches formatted type literals.
  */
 const STRUCTURAL_MUTATION_TYPES = [
   'addCanvasLayer',
@@ -50,10 +49,7 @@ const STRUCTURAL_MUTATION_TYPES = [
   'setCanvasLayersHidden',
   'updateCanvasLayerSource',
 ];
-/**
- * The finite set of modules that construct structural mutations directly. Keeping this explicit
- * prevents new bypasses of the prepared-edit seam.
- */
+/** Explicitly allowlist structural-mutation owners to prevent bypassing the prepared-edit seam. */
 const STRUCTURAL_MUTATION_OWNER_PATHS = new Set([
   'workbench/canvasProjectMutations.ts',
   'workbench/canvas-engine/controllers/booleanMergeController.ts',

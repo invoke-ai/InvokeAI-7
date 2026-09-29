@@ -69,8 +69,7 @@ describe('alphaBounds', () => {
   });
 
   it('finds the rightmost pixel even when a later row is narrower', () => {
-    // Exercises the inward-from-the-right scan: row 0 sets the running maxX, and
-    // row 1 must not be able to lower it, while row 2 must be able to raise it.
+    // Later rows may increase maxX but never decrease it.
     const pixels = buffer(10, 3);
     setAlpha(pixels, 1, 0, 255);
     setAlpha(pixels, 6, 0, 255);

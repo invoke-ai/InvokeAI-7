@@ -1,14 +1,13 @@
 /**
- * A structural history entry: a pair of reducer actions (forward + inverse)
- * dispatched to undo/redo a document-shape change. Unlike a pixel
- * {@link createImagePatchEntry | image patch}, it carries no bitmaps, so
- * structural edits share the engine-owned undo stack with paint edits at a
+ * Structural history stores forward/inverse reducer actions without bitmaps, sharing the pixel undo stack at
  * nominal byte cost.
  */
 
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 
 import type { HistoryEntry } from './history';
+
+import { collectHistoryMediaRefs } from './history';
 
 /** Nominal byte cost for a structural entry (small; actions are plain objects). */
 export const DOCUMENT_PATCH_DEFAULT_BYTES = 256;
@@ -35,6 +34,7 @@ export const createDocumentPatchEntry = (opts: CreateDocumentPatchEntryOptions):
 
   return {
     bytes,
+    heldAssetRefs: collectHistoryMediaRefs(forward, inverse),
     label,
     redo: () => dispatch(forward),
     undo: () => dispatch(inverse),

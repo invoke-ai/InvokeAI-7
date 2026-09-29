@@ -52,9 +52,8 @@ describe('resolvePreviewCompareDrop', () => {
   });
 
   it('refuses to compare the previewed image with itself', () => {
-    // Not merely a no-op: arming a comparison pauses live-follow, so this used
-    // to switch off in-progress images and leave a comparison that sprang open
-    // on the next selection.
+    // Self-comparison must be refused because it pauses follow and can reveal a latent comparison on later
+    // selection.
     const activeData = getGalleryItemDragData([{ kind: 'image', name: 'shown.png' }]);
 
     expect(resolvePreviewCompareDrop(activeData, PREVIEW_COMPARE_DROP_DATA, 'shown.png')).toBeNull();

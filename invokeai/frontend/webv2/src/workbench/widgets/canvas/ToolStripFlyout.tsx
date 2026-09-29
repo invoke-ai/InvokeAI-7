@@ -7,6 +7,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 const HOLD_OPEN_MS = 350;
 const TOOLTIP_POSITIONING = { placement: 'right' } as const;
+/** The flyout opens sideways, so a subtool's tooltip goes below it rather than over the next subtool. */
+const SUBTOOL_TOOLTIP_POSITIONING = { placement: 'bottom' } as const;
 
 export interface ToolFlyoutItem {
   id: string;
@@ -15,11 +17,8 @@ export interface ToolFlyoutItem {
 }
 
 /**
- * A tool-strip slot that owns subtools, Photoshop-style: plain click selects
- * the slot's current subtool; press-and-hold (or right-click, or ArrowRight /
- * the context-menu key) opens a flyout beside the button. Releasing the held
- * pointer over an entry selects it; a quick release leaves the flyout open for
- * a click. The corner tick marks the slot as holding more tools.
+ * Click selects the current subtool; hold, right-click, or keyboard opens the flyout. Release over an entry
+ * selects; quick release leaves it open.
  */
 export const ToolFamilyButton = ({
   currentId,
@@ -178,9 +177,8 @@ export const ToolFamilyButton = ({
   );
   const onPointerMove = useCallback(
     (event: ReactPointerEvent<HTMLButtonElement>) => {
-      // Dragging off the button mid-hold cancels the pending open but keeps an
-      // already-open flyout (the pointer is heading for it). Capture suppresses
-      // pointerleave, so the bounds check runs on the retargeted moves instead.
+      // Cancel pending hold when the pointer leaves, but preserve open flyouts; capture requires bounds checks
+      // instead of pointerleave.
       if (holdTimer.current === null) {
         return;
       }
@@ -297,7 +295,7 @@ const FlyoutItem = ({
 }) => {
   const onClick = useCallback(() => onSelect(item.id), [item.id, onSelect]);
   return (
-    <Tooltip content={item.label} positioning={TOOLTIP_POSITIONING}>
+    <Tooltip content={item.label} positioning={SUBTOOL_TOOLTIP_POSITIONING}>
       <IconButton
         aria-checked={checked}
         aria-label={item.label}

@@ -24,10 +24,7 @@ interface PromptTemplatesButtonProps {
   onApply: (template: PromptTemplateSnapshot | null) => void;
 }
 
-/**
- * `record: null` means the editor is composing a new template; `prefill` carries
- * the prompts handed over from the gallery's "save as prompt template".
- */
+/** A null record creates a template; gallery input may prefill it. */
 type EditorTarget = { record: PromptTemplateRecord | null; prefill?: PendingPromptTemplateDraft };
 
 export const PromptTemplatesButton = ({
@@ -39,11 +36,7 @@ export const PromptTemplatesButton = ({
   const triggerId = useId();
   const [isOpen, setIsOpen] = useState(false);
   const [editorTarget, setEditorTarget] = useState<EditorTarget | null>(null);
-  // The list is behind the popover, so a closed button has nothing to show —
-  // but an applied template still has to be re-read, both to refresh its text
-  // and to notice it has been deleted. Without this the widget's own gating did
-  // nothing: react-query enables a query if any one observer wants it, and this
-  // observer always did.
+  // Enable the catalog query only for an open panel or applied template; any enabled observer triggers fetching.
   const catalog = usePromptTemplates({ isEnabled: isOpen || activeTemplate !== null });
   const popoverIds = useMemo(() => ({ trigger: triggerId }), [triggerId]);
   // A draft handed over from the gallery opens the editor straight away.
@@ -57,8 +50,7 @@ export const PromptTemplatesButton = ({
   const handleOpenChange = useCallback((event: { open: boolean }) => {
     setIsOpen(event.open);
 
-    // Reopening should land on the list rather than resuming a half-written
-    // template the user walked away from.
+    // Reopen at the list rather than resume abandoned drafts.
     if (!event.open) {
       setEditorTarget(null);
     }
@@ -79,10 +71,7 @@ export const PromptTemplatesButton = ({
   const startEdit = useCallback((record: PromptTemplateRecord) => setEditorTarget({ record }), []);
   const closeEditor = useCallback(() => setEditorTarget(null), []);
 
-  /**
-   * Editing the template that is currently applied has to refresh the snapshot,
-   * or the panel would show the new text while the old one keeps generating.
-   */
+  /** Refresh the applied snapshot after edits so displayed and generated text agree. */
   const handleSaved = useCallback(
     (saved: PromptTemplateRecord) => {
       if (activeTemplate?.id === saved.id) {
@@ -94,9 +83,7 @@ export const PromptTemplatesButton = ({
     [activeTemplate?.id, onApply]
   );
 
-  // Deleted in another tab, or by another session of this one. It keeps
-  // applying — that policy is deliberate — so the only thing wrong is that
-  // nothing said so.
+  // Deleted templates still apply their stored snapshot with an explicit notification.
   const isMissing = isPromptTemplateMissing(catalog, activeTemplate);
 
   const tooltip = activeTemplate
@@ -114,8 +101,6 @@ export const PromptTemplatesButton = ({
     >
       <Tooltip content={tooltip} ids={popoverIds}>
         <Popover.Trigger asChild>
-          {/* A labeled primary rather than a bare icon: the label is the word
-              "Templates" until one is applied, then the applied template's name. */}
           <IconButton
             aria-label={t('widgets.generate.promptTemplates.title')}
             // Quiet states only: dimmed while nothing is applied. No accent, no motion.
@@ -127,8 +112,6 @@ export const PromptTemplatesButton = ({
           >
             <LayoutTemplateIcon />
             {activeTemplate ? (
-              // Dimmed when it is gone, the same way the button dims when nothing
-              // is applied — one vocabulary for "not fully live", no new colour.
               <MiddleTruncate
                 as="span"
                 fontSize="2xs"
@@ -150,11 +133,7 @@ export const PromptTemplatesButton = ({
             <Popover.Body p="2.5">
               {editorTarget ? (
                 <PromptTemplateEditor
-                  // The editor seeds its draft on mount. Every other way in goes
-                  // through the panel first, which unmounts it — but the gallery
-                  // handover swaps the target in place, so without this a draft
-                  // opened over an existing template kept that template's text
-                  // and saved a duplicate of it.
+                  // Remount on handover target changes because editor drafts seed only on mount.
                   key={editorTarget.record?.id ?? 'new'}
                   catalog={catalog}
                   prefill={editorTarget.prefill}

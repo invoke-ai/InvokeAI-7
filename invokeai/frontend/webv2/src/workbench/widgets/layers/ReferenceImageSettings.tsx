@@ -32,11 +32,8 @@ import { useTranslation } from 'react-i18next';
 import { useSelectedModelBase } from './useSelectedModelBase';
 
 /**
- * The dedicated Properties editor of one regional reference image — the view a
- * Layers-tree sub-selection opens. The region's own settings never list these:
- * the tree rows are the only inventory, their dot the only enable toggle, and
- * their menu the removal path. Every edit commits the layer's whole
- * `referenceImages` array through one `patch-config`.
+ * Edit regional references through whole-array patch-config; tree rows remain the sole inventory, enable, and
+ * removal controls.
  */
 
 const IP_ADAPTER_METHODS: readonly RegionalGuidanceIPAdapterMethod[] = [
@@ -64,10 +61,6 @@ interface ReferenceImageEditing {
   uploadReferenceImageAsset(refId: string, file: File): void;
 }
 
-/**
- * The commit surface for a region's reference images, plus the drag monitor
- * that routes gallery-image drops onto the per-ref drop zones.
- */
 const useReferenceImageEditing = (
   engine: CanvasPreparedEngine | null,
   layer: CanvasRegionalGuidanceLayerContract

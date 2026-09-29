@@ -1,15 +1,6 @@
 /**
- * The seed/prompt matrix for a generate submission.
- *
- * A generate graph carries one `positive_prompt` string node, so submitting
- * several prompts is a batch dimension over that node rather than several
- * graphs. Backend batch semantics (see
- * `invokeai/app/services/session_queue/session_queue_common.py`): the outer list
- * is a cartesian PRODUCT of groups, and each inner group is ZIPPED, so all of
- * its items must have the same length.
- *
- * The prompt list arrives already expanded — Queue never talks to the expansion
- * route itself.
+ * Prompts arrive pre-expanded. Backend outer groups form a Cartesian product; entries within each group zip and
+ * require equal lengths.
  */
 
 import { SEED_MAX } from '@platform/core/seed';
@@ -41,22 +32,55 @@ export const generateSeedSequence = (start: number, count: number, step: QueueSe
   );
 };
 
+/** A value the backend substitutes into a node field per session. */
+export type QueueBatchItem = number | string | { image_name: string };
+
 /** One value list of a zipped batch group, in the backend's `BatchDatum` shape. */
 export interface QueueBatchDatum {
   field_name: string;
-  items: (number | string)[];
+  items: QueueBatchItem[];
   node_path: string;
 }
+
+/** A batch-node value list, as a workflow submission persists it (camelCase, like `QueueWorkflowSeed`). */
+export interface QueueWorkflowBatchDatum {
+  fieldName: string;
+  items: QueueBatchItem[];
+  nodeId: string;
+}
+
+const isQueueBatchItem = (value: unknown): value is QueueBatchItem =>
+  typeof value === 'string' ||
+  (typeof value === 'number' && Number.isFinite(value)) ||
+  (typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { image_name?: unknown }).image_name === 'string' &&
+    (value as { image_name: string }).image_name.length > 0);
+
+export const isQueueWorkflowBatchDatum = (value: unknown): value is QueueWorkflowBatchDatum => {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+
+  const datum = value as Partial<QueueWorkflowBatchDatum>;
+
+  return (
+    typeof datum.fieldName === 'string' &&
+    datum.fieldName.length > 0 &&
+    typeof datum.nodeId === 'string' &&
+    datum.nodeId.length > 0 &&
+    Array.isArray(datum.items) &&
+    datum.items.length > 0 &&
+    datum.items.length <= MAX_QUEUE_BATCH_ITEMS &&
+    datum.items.every(isQueueBatchItem)
+  );
+};
 
 export interface GeneratePromptBatchDatum extends QueueBatchDatum {
   field_name: 'value';
 }
 
-/**
- * One workflow seed input that varies between runs: its first seed and the
- * direction of the rest. Compact on purpose — the snapshot records the start
- * the plan drew, and the runs expand from it deterministically at send time.
- */
+/** Persist each workflow seed's start and step; expand deterministic runs at send time. */
 export interface QueueWorkflowSeed {
   fieldName: string;
   nodeId: string;
@@ -84,41 +108,99 @@ export const isQueueWorkflowSeed = (value: unknown): value is QueueWorkflowSeed 
   );
 };
 
-export interface WorkflowSeedBatchPlan {
-  /** One zipped group over every varying input, or undefined while every seed holds. */
+export interface WorkflowBatchPlan {
+  /** Batch groups in the backend's shape, or undefined when one graph repeats unchanged. */
   data?: QueueBatchDatum[][];
   runs: number;
 }
 
+const toBackendDatum = (datum: QueueWorkflowBatchDatum): QueueBatchDatum => ({
+  field_name: datum.fieldName,
+  items: datum.items,
+  node_path: datum.nodeId,
+});
+
 /**
- * A workflow batch repeats one graph unless a seed input varies, in which case
- * every varying input joins one zipped group so `batchCount` runs stay
- * `batchCount` runs. A single run needs no data: the plan already wrote each
- * start seed into the graph.
+ * Every combination the backend would produce from `groups`, in its order: the first group varies slowest, and
+ * each group's datums are read in step. Each entry maps a datum to the index of the item that combination uses.
  */
-export const buildWorkflowSeedBatchPlan = ({
+const expandCombinations = (groups: readonly (readonly QueueWorkflowBatchDatum[])[]): number[][] => {
+  let combinations: number[][] = [[]];
+
+  for (const group of groups) {
+    const length = group[0]?.items.length ?? 0;
+    const next: number[][] = [];
+
+    for (const prefix of combinations) {
+      for (let index = 0; index < length; index += 1) {
+        next.push([...prefix, index]);
+      }
+    }
+
+    combinations = next;
+  }
+
+  return combinations;
+};
+
+/**
+ * Without varying seeds the backend multiplies the batch groups itself and repeats the product `batchCount` times.
+ * Once a seed steps, every session must get its own seed, so the product is expanded here into one zipped group,
+ * run-major, with each seed walking straight through it.
+ */
+export const buildQueueWorkflowBatchPlan = ({
   batchCount,
+  batchData,
   seeds,
 }: {
   batchCount: number;
+  batchData: readonly (readonly QueueWorkflowBatchDatum[])[] | undefined;
   seeds: readonly QueueWorkflowSeed[] | undefined;
-}): WorkflowSeedBatchPlan => {
+}): WorkflowBatchPlan => {
   const runs = sanitizeBatchCount(batchCount);
+  const groups = (batchData ?? []).filter((group) => group.length > 0);
+  const hasSeeds = !!seeds && seeds.length > 0;
 
-  if (!seeds || seeds.length === 0 || runs === 1) {
-    return { runs };
+  if (!hasSeeds || (runs === 1 && groups.length === 0)) {
+    return groups.length > 0 ? { data: groups.map((group) => group.map(toBackendDatum)), runs } : { runs };
   }
 
-  return {
-    data: [
-      seeds.map((seed) => ({
-        field_name: seed.fieldName,
-        items: generateSeedSequence(seed.seed, runs, seed.seedStep),
-        node_path: seed.nodeId,
-      })),
-    ],
-    runs: 1,
-  };
+  if (groups.length === 0) {
+    return {
+      data: [
+        seeds.map((seed) => ({
+          field_name: seed.fieldName,
+          items: generateSeedSequence(seed.seed, runs, seed.seedStep),
+          node_path: seed.nodeId,
+        })),
+      ],
+      runs: 1,
+    };
+  }
+
+  const combinations = expandCombinations(groups);
+  const total = combinations.length * runs;
+  const zipped: QueueBatchDatum[] = seeds.map((seed) => ({
+    field_name: seed.fieldName,
+    items: generateSeedSequence(seed.seed, total, seed.seedStep),
+    node_path: seed.nodeId,
+  }));
+
+  groups.forEach((group, groupIndex) => {
+    for (const datum of group) {
+      const items: QueueBatchItem[] = [];
+
+      for (let run = 0; run < runs; run += 1) {
+        for (const combination of combinations) {
+          items.push(datum.items[combination[groupIndex] as number] as QueueBatchItem);
+        }
+      }
+
+      zipped.push({ field_name: datum.fieldName, items, node_path: datum.nodeId });
+    }
+  });
+
+  return { data: [zipped], runs: 1 };
 };
 
 export interface GeneratePromptBatchPlanInput {
@@ -146,12 +228,8 @@ const generateLegacySeedSequence = (start: number, count: number): number[] =>
   Array.from({ length: sanitizeBatchCount(count) }, (_, index) => (start + index) % SEED_MAX);
 
 /**
- * The expansion items queued before seed modes were planned with, reproduced so
- * recovery replays them as recorded. Those items knew only a random toggle,
- * which the runtime maps to a step of 1 or 0: the toggle decided whether one
- * prompt (or per-iteration prompts) stepped or held, while several prompts with
- * sharing disabled always stepped per image, and the sequence wrapped at
- * `SEED_MAX` exclusive. New submissions never take this path.
+ * Recovery preserves legacy random-toggle seed rules, including exclusive SEED_MAX wrapping; new submissions never
+ * use this path.
  */
 export const buildLegacyGeneratePromptBatchPlan = ({
   batchCount,
@@ -205,18 +283,8 @@ export const buildLegacyGeneratePromptBatchPlan = ({
 };
 
 /**
- * With a single prompt this reproduces the pre-dynamic-prompts payload exactly,
- * which `promptBatch.test.ts` pins:
- * - stepping seed -> one zipped group of `batchCount` seeds and repeated
- *   prompts, `runs: 1`
- * - held seed -> one zipped group of length 1, `runs: batchCount`
- *
- * With several prompts the seed behaviour decides the shape, but only while the
- * seed steps — a held seed is the same for every image whatever the behaviour:
- * - `per-iteration` -> seeds become their own group, so the product is
- *   `iterations x prompts` and every prompt in an iteration shares its seed
- * - `per-image` -> one distinct sequential seed per image, zipped against the
- *   prompt list repeated `batchCount` times, `runs: 1`
+ * Held seeds reuse one value. Stepping per-iteration seeds form a product with prompts; per-image seeds zip with
+ * repeated prompts.
  */
 export const buildGeneratePromptBatchPlan = ({
   batchCount,

@@ -115,11 +115,7 @@ export const getSamPanelViewModel = (
   sourceLabel: formatSourceLabel(session.layerName, session.sourceRect.width, session.sourceRect.height),
 });
 
-/**
- * SAM-flavored adapter over {@link OperationStatusSlot}: the always-mounted
- * status slot that reserves its width so status/error text appearing never
- * shifts the surrounding controls.
- */
+/** Reserve OperationStatusSlot width so SAM status/error text cannot shift controls. */
 export const SamStatusSlot = ({
   error,
   errorText,

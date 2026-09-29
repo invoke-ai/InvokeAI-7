@@ -5,12 +5,7 @@ import { Button, Scrollable } from '@platform/ui';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * Single-select tag filter for the library grid. The counts come from the
- * backend for the whole category, not the loaded page, so a chip's number
- * still means "how many workflows carry this tag" after infinite scroll has
- * only fetched the first page.
- */
+/** Tag counts cover the whole backend category, not merely loaded infinite-scroll pages. */
 
 // A ScrollArea root defaults to `height: 100%` and grows to its content's
 // max-content width, so a chip strip needs both an explicit height and an

@@ -20,10 +20,7 @@ export interface LayerChangeInput {
   readonly hasTransformSession: boolean;
   /** Whether an open text-edit session belongs to this layer. */
   readonly hasTextEditSession: boolean;
-  /**
-   * Whether this source swap is the bitmap store's own echo. Lazy because it is
-   * only ever asked on the source-changed path, and answering costs a lookup.
-   */
+  /** Lazily checks bitmap self-echo only when the source changed. */
   readonly isSelfEcho: () => boolean;
 }
 
@@ -48,22 +45,9 @@ export type LayerChangeDecision =
     };
 
 /**
- * What has to happen to one layer's engine-side state after the document
- * changed it. Pure: the caller performs the effects in loop order.
- *
- * The three outcomes are genuinely different, and conflating them has real
- * costs. A prop or transform change — opacity, blend, lock, visibility, rename,
- * nudge — replaces the layer object while leaving its SOURCE reference intact,
- * so the rasterized pixels remain valid. Invalidating there would be wasteful
- * for an image layer and *destructive* for an unflushed paint layer, whose
- * `bitmap: null` source rasterizes to a cleared surface and would wipe strokes
- * that live only in the cache until their debounced upload lands. The
- * compositor applies transform, opacity and blend at draw time, so a recomposite
- * is all such a change needs.
- *
- * A genuine source swap does invalidate — unless it is the echo of a write the
- * bitmap store just made, where the cache already holds exactly those pixels and
- * re-rasterizing would re-fetch them and risk a flicker.
+ * Pure layer-change decisions, applied by the caller in order. Properties and transforms need only recomposition;
+ * rerasterizing them could erase unflushed paint. Source swaps invalidate except bitmap-store self-echoes, whose
+ * pixels already match.
  */
 export const decideLayerChange = (input: LayerChangeInput): LayerChangeDecision => {
   const { layer, previousImageName } = input;

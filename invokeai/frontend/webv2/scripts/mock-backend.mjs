@@ -7,6 +7,7 @@ import {
   assertMockBackendProfileName,
   collectCanvasLeaves,
   createMockBackendFixture,
+  getFixtureProjectWorkflowDocument,
   getMockBackendFixtureCounts,
   MOCK_BACKEND_FIXED_EPOCH,
 } from './mock-backend-fixtures.mjs';
@@ -27,14 +28,7 @@ const schemaUnsupported = (minimum, maximum) =>
 
 const clientMaximum = (value) => (Number.isInteger(value) && value >= 1 ? value : DEFAULT_CANVAS_SCHEMA_VERSION);
 
-/**
- * Disposable in-memory InvokeAI backend for browser release/performance tests.
- *
- * `empty` and `representative` are explicit workload profiles. A reset without
- * a profile restores the profile selected at server startup; callers may switch
- * deterministically with `POST /__reset?profile=representative`. No socket.io
- * server is provided, so realtime transport remains stably disconnected.
- */
+/** In-memory test backend; no Socket.IO. POST /__reset restores the startup profile unless ?profile= overrides it. */
 
 const FIXED_EPOCH_MS = Date.parse(MOCK_BACKEND_FIXED_EPOCH);
 const TINY_PNG = Buffer.from(
@@ -43,9 +37,7 @@ const TINY_PNG = Buffer.from(
 );
 const FIXTURE_VIDEO = readFileSync(resolve(import.meta.dirname, 'mock-assets/fixture-video.mp4'));
 const FIXTURE_VIDEO_POSTER = readFileSync(resolve(import.meta.dirname, 'mock-assets/fixture-video.webp'));
-// Served verbatim from the same file the backend pins in
-// `tests/backend/architectures/test_capabilities_fixture.py`, so the journey tests exercise the
-// payload the real route returns rather than a stand-in that can drift from it.
+// Share the backend-pinned capabilities fixture to keep journey payloads aligned with the real API.
 const ARCHITECTURE_CAPABILITIES = JSON.parse(
   readFileSync(
     resolve(import.meta.dirname, '../src/features/generation/core/__fixtures__/architectureCapabilities.json'),
@@ -54,26 +46,47 @@ const ARCHITECTURE_CAPABILITIES = JSON.parse(
 );
 
 /**
- * Fault switches, orthogonal to the workload profiles.
- *
- * The Generate panel gates its entire form on `GET /api/v2/models/capabilities`, so its outage,
- * retry and recovery states are unreachable while that route always succeeds. `POST /__faults`
- * (`{"capabilities": "error" | "empty" | "ok"}`, also accepted as a query parameter) makes the
- * route fail for the rest of the session; `POST /__reset` clears the faults with the state.
+ * POST /__faults sets capabilities to error, empty, or ok, and `intermediatesCaller` to admin or user, until POST
+ * /__reset; independent of workload profile. `user` also turns on multi-user auth with a non-admin session: sign in
+ * with any email and password (or reload a page that already holds the token) to reach the non-admin UI.
  */
 const CAPABILITY_FAULTS = new Set(['ok', 'error', 'empty']);
+const INTERMEDIATES_CALLERS = new Set(['admin', 'user']);
 
-const createFaults = () => ({ capabilities: 'ok' });
+const createFaults = () => ({ capabilities: 'ok', intermediatesCaller: 'admin' });
 
 const MOCK_USER_ID = 'fixture-user';
 
+/** The intermediates rows a summary shows under its filters; a `matching` preview scope resolves the same way. */
+const matchingIntermediates = (rows, { isAdmin, ownerFilter, projectId, search }) => {
+  const needle = (search ?? '').toLowerCase();
+  return rows
+    .filter((row) => ownerFilter === null || row.user_id === ownerFilter)
+    .filter((row) => projectId === null || row.project_id === projectId)
+    .filter(
+      (row) =>
+        !needle ||
+        [row.project_name, ...(isAdmin ? [row.user_display_name, row.user_email] : [])].some((value) =>
+          (value ?? '').toLowerCase().includes(needle)
+        )
+    );
+};
+const MOCK_USER_TOKEN = 'mock-user-token';
+
+const mockNonAdminUser = () => ({
+  created_at: '2026-01-01T00:00:00Z',
+  display_name: 'Fixture User',
+  email: 'fixture-user@example.com',
+  is_active: true,
+  is_admin: false,
+  last_login_at: null,
+  updated_at: '2026-01-01T00:00:00Z',
+  user_id: MOCK_USER_ID,
+});
+
 const clone = (value) => structuredClone(value);
 
-/**
- * Two starter bundles, so the Launchpad's "no models installed" onboarding can
- * actually be exercised. An empty response renders no call to action at all,
- * which made the most important path on a fresh install unverifiable.
- */
+/** Starter bundles keep fresh-install onboarding reachable in journeys. */
 const STARTER_MODEL = {
   base: 'sd-1',
   description: 'Fixture starter model',
@@ -100,7 +113,8 @@ const createState = (profile) => {
 
   return {
     boards: new Map(fixture.boards.map((board) => [board.board_id, clone(board)])),
-    clientState: new Map(),
+    // Dismiss the alpha notice so journeys start on the requested page.
+    clientState: new Map([['webv2:workbench-settings', JSON.stringify({ alphaNoticeAcknowledged: true })]]),
     images: new Map(fixture.images.map((image) => [image.image_name, clone(image)])),
     models: new Map(fixture.models.map((model) => [model.key, clone(model)])),
     mutationClock: 0,
@@ -112,21 +126,19 @@ const createState = (profile) => {
     openApiDocument: clone(fixture.openApiDocument),
     profile,
     projects: new Map(fixture.projects.map((project) => [project.project_id, clone(project)])),
+    intermediates: fixture.intermediates.map(clone),
+    intermediatesOperations: new Map(),
+    intermediatesPreviews: new Map(),
     queueItems: new Map(fixture.queueItems.map((item) => [item.item_id, clone(item)])),
     videos: new Map(fixture.videos.map((video) => [video.video_name, clone(video)])),
     workflows: new Map(fixture.workflows.map((workflow) => [workflow.workflow_id, clone(workflow)])),
+    nextWorkflowNumber: fixture.workflows.length + 1,
+    /** Every workflow-library request since the last reset, so journeys can prove which writes happened. */
+    workflowRequests: [],
   };
 };
 
-/**
- * Put media back under names a fresh state does not have, without its projects or boards.
- *
- * A restore has to be provably free of name adoption: board media must take a new identity even
- * when the destination already holds an image with the archived name — on the same server it always
- * does, and reusing it would move a stranger's picture onto the restored board. Reset alone cannot
- * express that, because it clears everything, so the journey names the collisions it wants kept.
- * The media lands unboarded, exactly as media whose board was deleted would.
- */
+/** Seed unboarded name collisions to verify imports copy board media instead of adopting existing items. */
 const seedCollisionMedia = (state, names) => {
   const source = createMockBackendFixture('representative');
   const requested = new Set(names);
@@ -152,22 +164,10 @@ const timestamp = (state) => {
   return value;
 };
 
-/**
- * The projection's timestamp. Fixed, and deliberately NOT `timestamp(state)`:
- * that advances the fixture's mutation clock on every call, so the map's two
- * endpoints would answer with different `updated_at` values and the client
- * would discard every cluster-label response as belonging to another
- * projection — and it would drift the clock on plain GETs besides.
- */
+/** Keep both map endpoints on one fixed projection timestamp; timestamp(state) advances on every call. */
 const IMAGE_MAP_UPDATED_AT = '2026-01-01 00:00:00.000';
 
-/**
- * One map point per gallery item, at deterministic coordinates so the map is
- * comparable across runs. Cluster ids are assigned round-robin rather than
- * derived from position — nothing here runs DBSCAN, and the client only needs
- * ids that are stable and non-empty. Videos plot beside images, which is the
- * whole point of the kind field.
- */
+/** Use deterministic coordinates and round-robin cluster IDs; this fixture does not run clustering. */
 const imageMapPoints = (state, includeVideos) => {
   const items = [
     ...[...state.images.keys()].map((name) => ({ kind: 'image', name })),
@@ -224,7 +224,7 @@ const getStateCounts = (state) => ({
   nodes: invocationNodeCount(state),
   projects: state.projects.size,
   queueItems: state.queueItems.size,
-  workflowNodes: state.projects.values().next().value?.data?.projectGraph?.nodes?.length ?? 0,
+  workflowNodes: getFixtureProjectWorkflowDocument(state.projects.values().next().value?.data)?.nodes?.length ?? 0,
 });
 
 const getProfileInfo = (state) => ({
@@ -266,8 +266,7 @@ const getOptionalBoolean = (url, name) => {
   return value === null ? undefined : value === 'true';
 };
 
-// `media_origin` is the one metadata key the DTO surfaces (the real server projects it out
-// of the metadata blob in SQL); the rest of a fixture's metadata stays behind /metadata.
+// Only media_origin belongs in the DTO; other metadata is served by /metadata.
 const toVideoDto = (video) => ({
   board_id: video.board_id,
   created_at: video.created_at,
@@ -474,10 +473,7 @@ const listVideos = (state, url) => {
 const projectIdForBoard = (state, boardId) =>
   [...state.projects.values()].find((project) => project.board_id === boardId)?.project_id ?? null;
 
-/**
- * Visible board membership, matching `GET /projects/{id}/board-snapshot`: intermediates and the
- * canvas's private `other` category are excluded, and the result is sorted by kind then name.
- */
+/** Match /board-snapshot visibility and ordering: exclude intermediate/other items, sort by kind then name. */
 const boardSnapshotItems = (state, boardId) => {
   const visible = (category) => ['general', 'control', 'mask', 'user'].includes(category);
   const items = [
@@ -722,6 +718,7 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
         if (method === 'POST') {
           const body = await readJsonBody(request);
           const requested = url.searchParams.get('capabilities') ?? body.capabilities;
+          const caller = url.searchParams.get('intermediatesCaller') ?? body.intermediatesCaller;
 
           if (requested !== undefined && requested !== null) {
             if (!CAPABILITY_FAULTS.has(requested)) {
@@ -729,6 +726,14 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
             }
 
             faults.capabilities = requested;
+          }
+
+          if (caller !== undefined && caller !== null) {
+            if (!INTERMEDIATES_CALLERS.has(caller)) {
+              return json(400, { detail: `Unknown intermediates caller: ${String(caller)}` });
+            }
+
+            faults.intermediatesCaller = caller;
           }
         }
 
@@ -742,17 +747,26 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
       if (method === 'GET' && path === '/api/v1/auth/status') {
         return json(200, {
           admin_email: null,
-          multiuser_enabled: false,
+          multiuser_enabled: faults.intermediatesCaller === 'user',
           setup_required: false,
           strict_password_checking: false,
         });
       }
 
-      // --- Image map -------------------------------------------------------
-      // Enough of the semantic map for the widget to render: every fixture
-      // item gets a point, laid out on a deterministic spiral so clusters are
-      // stable across runs. Videos are served only when the client asks for
-      // them, exactly as the backend does.
+      if (faults.intermediatesCaller === 'user' && path.startsWith('/api/v1/auth/')) {
+        if (method === 'POST' && path === '/api/v1/auth/login') {
+          return json(200, { expires_in: 86_400, token: MOCK_USER_TOKEN, user: mockNonAdminUser() });
+        }
+        if (method === 'GET' && path === '/api/v1/auth/me') {
+          return request.headers.authorization === `Bearer ${MOCK_USER_TOKEN}`
+            ? json(200, mockNonAdminUser())
+            : json(401, { detail: 'Not authenticated' });
+        }
+        if (method === 'POST' && (path === '/api/v1/auth/media-cookie' || path === '/api/v1/auth/logout')) {
+          return json(200, { success: true });
+        }
+      }
+
       if (method === 'GET' && path === '/api/v1/image_map/points') {
         const includeVideos = url.searchParams.get('include_videos') === 'true';
         const points = imageMapPoints(state, includeVideos);
@@ -771,8 +785,7 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
       if (method === 'GET' && path === '/api/v1/image_map/cluster_labels') {
         return json(200, {
           labels: { 0: { alternates: ['sunset', 'coastline'], label: 'beaches' } },
-          // Same value and same kind filter as /points: the client compares
-          // both before it will use a label set.
+          // Labels must match /points on both projection timestamp and visible set.
           updated_at: IMAGE_MAP_UPDATED_AT,
           visible_hash: `visible-${String(url.searchParams.get('include_videos') === 'true')}`,
         });
@@ -783,9 +796,7 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
         const isVideo = url.searchParams.get('kind') === 'video';
         const exists = isVideo ? state.videos.has(name) : state.images.has(name);
 
-        // 404 for an item this namespace does not hold, like the real route —
-        // which is what lets the label cache's definitive-miss path be
-        // exercised against the mock at all.
+        // Match the real route's 404 so tests can exercise definitive label-cache misses.
         if (!exists) {
           return json(404, { detail: 'This item has no stored embedding to label' });
         }
@@ -838,9 +849,7 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
           const projectNumber = state.nextProjectNumber;
           const name = requested.name ?? `Project Name #${projectNumber}`;
 
-          // Creating a project either adopts the board it was given or makes one. Adopting is what
-          // lets an import upload its media before the project exists, so that creating the project
-          // is the import's single commit point.
+          // Adopting a prepopulated board makes project creation the import commit point.
           let boardId = requested.board_id ?? null;
           if (boardId === null) {
             boardId = `mock-project-board-${projectNumber}`;
@@ -1116,6 +1125,253 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
         return json(200, []);
       }
 
+      if ((method === 'PUT' || method === 'DELETE') && /^\/api\/v1\/intermediates\/holds\/[^/]+$/.test(path)) {
+        response.writeHead(204);
+        return response.end();
+      }
+
+      if (method === 'GET' && path === '/api/v1/intermediates/summary') {
+        // Mirrors IntermediatesService.get_summary: non-admins see only their rows and may not name another owner.
+        const isAdmin = faults.intermediatesCaller === 'admin';
+        const ownerId = url.searchParams.get('owner_id');
+        if (!isAdmin && ownerId !== null && ownerId !== MOCK_USER_ID) {
+          return json(403, { detail: 'Only administrators can inspect other accounts' });
+        }
+        const ownerFilter = isAdmin ? ownerId : MOCK_USER_ID;
+        const sort = url.searchParams.get('sort') ?? 'reclaimable_bytes';
+        const descending = (url.searchParams.get('order') ?? 'desc') === 'desc';
+        const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0));
+        const limit = Math.max(1, Number(url.searchParams.get('limit') ?? 50));
+        const rows = matchingIntermediates(state.intermediates, {
+          isAdmin,
+          ownerFilter,
+          projectId: url.searchParams.get('project_id'),
+          search: url.searchParams.get('search'),
+        }).sort((left, right) =>
+          (left.project_name ?? '').toLowerCase().localeCompare((right.project_name ?? '').toLowerCase())
+        );
+        if (sort === 'reclaimable_bytes') {
+          rows.sort((left, right) => (right.reclaimable_bytes - left.reclaimable_bytes) * (descending ? 1 : -1));
+        } else if (descending) {
+          rows.reverse();
+        }
+        const totals = rows.reduce(
+          (acc, row) => ({
+            rows: acc.rows + 1,
+            safe_images: acc.safe_images + row.images.safe,
+            safe_videos: acc.safe_videos + row.videos.safe,
+            in_use_images: acc.in_use_images + row.images.referenced + row.images.active + row.images.recent,
+            in_use_videos: acc.in_use_videos + row.videos.referenced + row.videos.active + row.videos.recent,
+            reclaimable_bytes: acc.reclaimable_bytes + row.reclaimable_bytes,
+            unknown_size_count: acc.unknown_size_count + row.unknown_size_count,
+          }),
+          {
+            rows: 0,
+            safe_images: 0,
+            safe_videos: 0,
+            in_use_images: 0,
+            in_use_videos: 0,
+            reclaimable_bytes: 0,
+            unknown_size_count: 0,
+          }
+        );
+        return json(200, {
+          items: rows.slice(offset, offset + limit),
+          total: rows.length,
+          offset,
+          limit,
+          totals,
+          recent_grace_seconds: 1800,
+          measuring: false,
+          can_manage_everyone: isAdmin,
+        });
+      }
+
+      if (method === 'POST' && path === '/api/v1/intermediates/previews') {
+        const requested = await readJsonBody(request);
+        // Mirrors IntermediatesService._authorize_scope.
+        const isAdmin = faults.intermediatesCaller === 'admin';
+        const scope = requested?.scope ?? {};
+        if (scope.kind === 'everyone' && !isAdmin) {
+          return json(403, { detail: "Only administrators can clear everyone's intermediates" });
+        }
+        if (scope.kind === 'owner' && !scope.user_id) {
+          return json(422, { detail: 'An owner scope names the account to clear' });
+        }
+        if (scope.kind === 'owner' && scope.user_id !== MOCK_USER_ID && !isAdmin) {
+          return json(403, { detail: "Only administrators can clear another account's intermediates" });
+        }
+        if (scope.kind === 'selection' && !(scope.targets?.length > 0)) {
+          return json(422, { detail: 'A selection scope names at least one row' });
+        }
+        if (scope.kind === 'selection' && !isAdmin && scope.targets.some((target) => target.user_id !== MOCK_USER_ID)) {
+          return json(403, { detail: "Only administrators can clear another account's intermediates" });
+        }
+        if (scope.kind === 'matching' && !isAdmin && scope.user_id && scope.user_id !== MOCK_USER_ID) {
+          return json(403, { detail: "Only administrators can delete another account's intermediates" });
+        }
+        if (scope.kind === 'matching' && (scope.excluded?.length ?? 0) > 1000) {
+          return json(422, { detail: 'Too many excluded rows' });
+        }
+        const previewId = `preview-${state.intermediatesPreviews.size + 1}`;
+        const targets =
+          scope.kind === 'selection'
+            ? state.intermediates.filter((row) =>
+                scope.targets.some(
+                  (target) => target.user_id === row.user_id && (target.project_id ?? null) === row.project_id
+                )
+              )
+            : scope.kind === 'owner'
+              ? state.intermediates.filter((row) => row.user_id === scope.user_id)
+              : scope.kind === 'matching'
+                ? // Mirrors IntermediatesService._resolve_scope: the summary's filters minus the excluded rows.
+                  matchingIntermediates(state.intermediates, {
+                    isAdmin,
+                    ownerFilter: isAdmin ? (scope.user_id ?? null) : MOCK_USER_ID,
+                    projectId: scope.project_id ?? null,
+                    search: scope.search ?? null,
+                  }).filter(
+                    (row) =>
+                      !(scope.excluded ?? []).some(
+                        (target) => target.user_id === row.user_id && (target.project_id ?? null) === row.project_id
+                      )
+                  )
+                : state.intermediates;
+        if (scope.kind === 'matching' && targets.length === 0) {
+          return json(422, { detail: 'No rows match the filter' });
+        }
+        const force = requested?.mode === 'force';
+        const affectedDocuments = force
+          ? targets
+              .filter((row) => row.images.referenced + row.videos.referenced > 0)
+              .map((row) => ({
+                kind: 'project',
+                user_id: row.user_id,
+                user_display_name: row.user_display_name,
+                user_email: row.user_email,
+                owner_id: row.project_id ?? 'unassigned',
+                name: row.project_name,
+                references: row.images.referenced + row.videos.referenced,
+              }))
+          : [];
+        const impact = targets.reduce(
+          (acc, row) => ({
+            delete_images: acc.delete_images + row.images.safe + (force ? row.images.referenced : 0),
+            delete_videos: acc.delete_videos + row.videos.safe + (force ? row.videos.referenced : 0),
+            keep_referenced_images: acc.keep_referenced_images + (force ? 0 : row.images.referenced),
+            keep_referenced_videos: acc.keep_referenced_videos + (force ? 0 : row.videos.referenced),
+            keep_active_images: acc.keep_active_images + row.images.active,
+            keep_active_videos: acc.keep_active_videos + row.videos.active,
+            keep_recent_images: acc.keep_recent_images + row.images.recent,
+            keep_recent_videos: acc.keep_recent_videos + row.videos.recent,
+            reclaimable_bytes: acc.reclaimable_bytes + row.reclaimable_bytes + (force ? row.referenced_bytes : 0),
+            unknown_size_count: acc.unknown_size_count + row.unknown_size_count,
+          }),
+          {
+            delete_images: 0,
+            delete_videos: 0,
+            keep_referenced_images: 0,
+            keep_referenced_videos: 0,
+            keep_active_images: 0,
+            keep_active_videos: 0,
+            keep_recent_images: 0,
+            keep_recent_videos: 0,
+            reclaimable_bytes: 0,
+            unknown_size_count: 0,
+          }
+        );
+        if (force && affectedDocuments.length > 10_000) {
+          return json(422, { detail: 'This force delete would break more than 10000 documents; narrow the scope' });
+        }
+        const preview = {
+          preview_id: previewId,
+          mode: requested?.mode ?? 'safe',
+          scope: {
+            kind: scope.kind ?? 'owner',
+            targets: scope.targets ?? [],
+            user_id: scope.user_id ?? null,
+            project_id: scope.project_id ?? null,
+            search: scope.search ?? null,
+            excluded: scope.excluded ?? [],
+          },
+          created_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + 600_000).toISOString(),
+          target_rows: targets.length,
+          impact,
+          affected_documents: affectedDocuments.slice(0, 200),
+          affected_documents_total: affectedDocuments.length,
+        };
+        state.intermediatesPreviews.set(previewId, { preview, targets });
+        return json(201, preview);
+      }
+
+      if (method === 'GET' && path === '/api/v1/intermediates/operations') {
+        // Newest first; the real server retains a handful of settled operations per account.
+        return json(200, { items: [...state.intermediatesOperations.values()].reverse().slice(0, 5) });
+      }
+
+      if (method === 'POST' && path === '/api/v1/intermediates/operations') {
+        const requested = await readJsonBody(request);
+        // Mirrors IntermediatesService.start_operation: a preview is confirmed once.
+        const frozen = state.intermediatesPreviews.get(requested?.preview_id);
+        if (!frozen) {
+          return json(404, { detail: 'Preview expired or unknown; request a new one' });
+        }
+        state.intermediatesPreviews.delete(requested.preview_id);
+        const operationId = `operation-${state.intermediatesOperations.size + 1}`;
+        const { impact } = frozen.preview;
+        const operation = {
+          operation_id: operationId,
+          user_id: MOCK_USER_ID,
+          mode: frozen.preview.mode,
+          scope: frozen.preview.scope,
+          status: 'completed',
+          created_at: new Date().toISOString(),
+          started_at: new Date().toISOString(),
+          completed_at: new Date().toISOString(),
+          error: null,
+          target_images: impact.delete_images,
+          target_videos: impact.delete_videos,
+          progress: {
+            processed_images: impact.delete_images,
+            processed_videos: impact.delete_videos,
+            deleted_images: impact.delete_images,
+            deleted_videos: impact.delete_videos,
+            retained_images: 0,
+            retained_videos: 0,
+            failed_images: 0,
+            failed_videos: 0,
+            reclaimed_bytes: impact.reclaimable_bytes,
+            unknown_size_count: impact.unknown_size_count,
+            pending_disk_cleanup: 0,
+          },
+        };
+        for (const row of frozen.targets) {
+          row.images = {
+            ...row.images,
+            safe: 0,
+            referenced: frozen.preview.mode === 'force' ? 0 : row.images.referenced,
+          };
+          row.videos = {
+            ...row.videos,
+            safe: 0,
+            referenced: frozen.preview.mode === 'force' ? 0 : row.videos.referenced,
+          };
+          row.reclaimable_bytes = 0;
+          row.unknown_size_count = 0;
+        }
+        state.intermediatesOperations.set(operationId, operation);
+        return json(202, operation);
+      }
+
+      {
+        const operationMatch = /^\/api\/v1\/intermediates\/operations\/([^/]+)$/.exec(path);
+        if (method === 'GET' && operationMatch) {
+          const operation = state.intermediatesOperations.get(decodeURIComponent(operationMatch[1]));
+          return operation ? json(200, operation) : json(404, { detail: 'Not found' });
+        }
+      }
+
       if (method === 'GET' && path === '/api/v1/fonts') {
         return json(200, {
           items: [],
@@ -1125,9 +1381,7 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
         });
       }
 
-      // Dynamic prompt expansion. Enough of the `{a|b}` grammar for journeys to
-      // exercise the preview and the batch dimension; the real generator lives
-      // in the backend.
+      // Implements only the {a|b} subset needed by journeys.
       if (method === 'POST' && path === '/api/v1/utilities/dynamicprompts') {
         const requested = await readJsonBody(request);
         const prompt = typeof requested?.prompt === 'string' ? requested.prompt : '';
@@ -1370,8 +1624,7 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
           const now = timestamp(state);
 
           state.nextImageNumber += 1;
-          // A genuinely new identity: `board_images` keys on the name, so a copy must own its own.
-          // Category and provenance travel; starring does not (callers use /images/star).
+          // Copies need a new board_images key; retain category/provenance, but set starring separately.
           state.images.set(imageName, {
             ...clone(source),
             board_id: boardId,
@@ -1446,6 +1699,15 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
         const imageName = decodeURIComponent(imageAssetMatch[1]);
 
         return state.images.has(imageName) ? writePng(response) : json(404, { detail: 'Image not found' });
+      }
+
+      const imageWorkflowMatch = /^\/api\/v1\/images\/i\/([^/]+)\/workflow$/.exec(path);
+      if (method === 'GET' && imageWorkflowMatch) {
+        const image = state.images.get(decodeURIComponent(imageWorkflowMatch[1]));
+
+        return image
+          ? json(200, { graph: image.graph ?? null, workflow: image.workflow ?? null })
+          : json(404, { detail: 'Image not found' });
       }
 
       const imageMetadataMatch = /^\/api\/v1\/images\/i\/([^/]+)\/metadata$/.exec(path);
@@ -1654,36 +1916,168 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
           : json(404, { detail: 'Video not found' });
       }
 
-      const workflowMatch = /^\/api\/v1\/workflows\/i\/([^/]+)(?:\/opened_at)?$/.exec(path);
+      if (path.startsWith('/api/v1/workflows')) {
+        state.workflowRequests.push({ method, path });
+      }
+
+      if (method === 'GET' && path === '/__workflow-requests') {
+        return json(200, { requests: state.workflowRequests });
+      }
+
+      const workflowRecord = (workflow) => ({ ...workflow, thumbnail_url: workflow.thumbnail_url ?? null });
+      const workflowListItem = ({ workflow: _workflow, ...item }) => workflowRecord(item);
+      const workflowTags = (workflow) =>
+        String(workflow.tags ?? '')
+          .split(',')
+          .map((tag) => tag.trim())
+          .filter(Boolean);
+
+      if (path === '/api/v1/workflows/tags') {
+        const categories = url.searchParams.getAll('categories');
+        const tags = new Set();
+
+        for (const workflow of state.workflows.values()) {
+          if (categories.length === 0 || categories.includes(workflow.category)) {
+            workflowTags(workflow).forEach((tag) => tags.add(tag));
+          }
+        }
+
+        return json(200, [...tags].sort());
+      }
+
+      if (path === '/api/v1/workflows/counts_by_tag') {
+        const categories = url.searchParams.getAll('categories');
+        const counts = {};
+
+        for (const tag of url.searchParams.getAll('tags')) {
+          counts[tag] = [...state.workflows.values()].filter(
+            (workflow) =>
+              (categories.length === 0 || categories.includes(workflow.category)) &&
+              workflowTags(workflow).includes(tag)
+          ).length;
+        }
+
+        return json(200, counts);
+      }
+
+      const workflowMatch = /^\/api\/v1\/workflows\/i\/([^/]+)(\/opened_at)?$/.exec(path);
       if (workflowMatch) {
         const workflowId = decodeURIComponent(workflowMatch[1]);
+        const suffix = workflowMatch[2] ?? '';
         const workflow = state.workflows.get(workflowId);
 
         if (!workflow) {
           return json(404, { detail: 'Workflow not found' });
         }
 
-        return json(200, {
-          name: workflow.name,
-          workflow: workflow.workflow,
-          workflow_id: workflow.workflow_id,
-        });
+        if (suffix === '/opened_at' && method === 'PUT') {
+          workflow.opened_at = timestamp(state);
+          return json(200, null);
+        }
+
+        if (method === 'GET') {
+          return json(200, workflowRecord(workflow));
+        }
+
+        if (method === 'DELETE') {
+          if (workflow.category === 'default') {
+            return json(403, { detail: 'Bundled workflows cannot be deleted' });
+          }
+          state.workflows.delete(workflowId);
+          return json(200, null);
+        }
+
+        if (method === 'PATCH') {
+          const body = await readJsonBody(request);
+          const submitted = body.workflow ?? {};
+
+          if (submitted.id !== workflowId) {
+            return json(400, { detail: 'The workflow id in the body does not match the URL' });
+          }
+          if (workflow.category === 'default') {
+            return json(403, { detail: 'Bundled workflows cannot be modified' });
+          }
+          if (body.expected_revision !== undefined && body.expected_revision !== workflow.revision) {
+            return json(409, {
+              detail: {
+                current_revision: workflow.revision,
+                expected_revision: body.expected_revision,
+                message: `Workflow ${workflowId} is at revision ${String(workflow.revision)}`,
+                reason: 'revision-conflict',
+              },
+            });
+          }
+
+          const { id: _id, ...content } = submitted;
+
+          workflow.workflow = { ...content, meta: { ...content.meta, category: 'user' } };
+          workflow.name = content.name ?? workflow.name;
+          workflow.description = content.description ?? workflow.description;
+          workflow.tags = content.tags ?? workflow.tags;
+          workflow.revision += 1;
+          workflow.updated_at = timestamp(state);
+
+          return json(200, workflowRecord(workflow));
+        }
+      }
+
+      if (method === 'POST' && (path === '/api/v1/workflows' || path === '/api/v1/workflows/')) {
+        const body = await readJsonBody(request);
+        const { id: _id, ...content } = body.workflow ?? {};
+        const reservedId = typeof body.workflow_id === 'string' ? body.workflow_id : null;
+
+        if (reservedId !== null && !/^[0-9a-f-]{36}$/i.test(reservedId)) {
+          return json(400, { detail: 'A reserved workflow id must be a UUID' });
+        }
+
+        const existing = reservedId === null ? null : state.workflows.get(reservedId);
+
+        if (existing) {
+          // A retried creation is accepted only for the same content; anything else under the id is a conflict.
+          return JSON.stringify(existing.workflow) ===
+            JSON.stringify({ ...content, meta: { ...content.meta, category: 'user' } })
+            ? json(200, workflowRecord(existing))
+            : json(409, { detail: { message: 'The workflow id is already in use', reason: 'id-conflict' } });
+        }
+
+        const workflowId = reservedId ?? `mock-workflow-${String(state.nextWorkflowNumber++).padStart(4, '0')}`;
+        const created = {
+          category: 'user',
+          created_at: timestamp(state),
+          description: content.description ?? '',
+          is_public: true,
+          name: content.name ?? '',
+          opened_at: null,
+          revision: 1,
+          tags: content.tags ?? '',
+          thumbnail_url: null,
+          updated_at: null,
+          user_id: MOCK_USER_ID,
+          workflow: { ...content, meta: { ...content.meta, category: 'user' } },
+          workflow_id: workflowId,
+        };
+
+        created.updated_at = created.created_at;
+        state.workflows.set(workflowId, created);
+
+        return json(200, workflowRecord(created));
       }
 
       if (method === 'GET' && (path === '/api/v1/workflows' || path === '/api/v1/workflows/')) {
         const categories = url.searchParams.getAll('categories');
         const query = url.searchParams.get('query')?.trim().toLocaleLowerCase() ?? '';
-        const page = Math.max(1, Number(url.searchParams.get('page') ?? 1) || 1);
+        const tags = url.searchParams.getAll('tags');
+        // The API pages from 0; the client asks for page 0 first.
+        const page = Math.max(0, Number(url.searchParams.get('page') ?? 0) || 0);
         const perPage = Math.max(1, Number(url.searchParams.get('per_page') ?? 20) || 20);
         const items = [...state.workflows.values()].filter(
           (workflow) =>
             (categories.length === 0 || categories.includes(workflow.category)) &&
-            (!query || `${workflow.name} ${workflow.description}`.toLocaleLowerCase().includes(query))
+            (!query || `${workflow.name} ${workflow.description}`.toLocaleLowerCase().includes(query)) &&
+            (tags.length === 0 || tags.some((tag) => workflowTags(workflow).includes(tag)))
         );
         const pages = Math.max(1, Math.ceil(items.length / perPage));
-        const pageItems = items
-          .slice((page - 1) * perPage, page * perPage)
-          .map(({ workflow: _workflow, ...item }) => item);
+        const pageItems = items.slice(page * perPage, (page + 1) * perPage).map(workflowListItem);
 
         return json(200, { items: pageItems, page, pages, total: items.length });
       }

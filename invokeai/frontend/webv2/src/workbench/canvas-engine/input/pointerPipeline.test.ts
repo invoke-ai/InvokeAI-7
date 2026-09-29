@@ -390,8 +390,7 @@ describe('pointer pipeline: temporary modifier tools', () => {
     const h = createHarness();
     h.pipeline.onPointerEnter();
     h.pipeline.onKeyDown(makeKeyEvent({ code: 'Space' }));
-    // Flagged `temporary` so a session-bearing tool (transform) can tell this
-    // apart from a real switch and keep its session alive across the hold.
+    // Temporary switches preserve sessions across modifier holds.
     expect(h.setTool).toHaveBeenLastCalledWith('view', { temporary: true });
     h.pipeline.onKeyUp(makeKeyEvent({ code: 'Space' }));
     expect(h.setTool).toHaveBeenLastCalledWith('brush', { temporary: true });
@@ -505,8 +504,6 @@ describe('pointer pipeline: temporary modifier tools', () => {
     const h = createHarness({ tools: ['view', 'brush', 'colorPicker'] });
     h.pipeline.onPointerEnter();
 
-    // Typing space/alt in an input, textarea, or contenteditable belongs to that
-    // field, not the canvas — the temp-tool hold must not fire.
     h.pipeline.onKeyDown(makeKeyEvent({ code: 'Space', target: { tagName: 'INPUT' } }));
     h.pipeline.onKeyDown(makeKeyEvent({ code: 'Space', target: { tagName: 'textarea' } }));
     h.pipeline.onKeyDown(makeKeyEvent({ code: 'AltLeft', target: { isContentEditable: true } }));

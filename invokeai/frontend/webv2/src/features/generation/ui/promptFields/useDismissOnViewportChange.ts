@@ -1,10 +1,6 @@
 import { useMountEffect } from '@platform/react/useMountEffect';
 
-/**
- * Dismisses a rect-anchored surface once scrolling or resizing makes its stored
- * viewport coordinates stale. Scrolls inside a popover don't count: the anchor
- * lives in the page, and the surface scrolling its own list moves nothing.
- */
+/** Dismiss stale page-space anchors on scrolling, excluding the popover's own scroll. */
 export const useDismissOnViewportChange = (enabled: boolean, dismiss: () => void): void => {
   useMountEffect(() => {
     if (!enabled) {

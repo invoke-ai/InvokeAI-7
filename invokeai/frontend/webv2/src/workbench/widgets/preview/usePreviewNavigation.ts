@@ -1,40 +1,37 @@
 import type { GalleryImageItem, GalleryItem, GalleryItemKey, GalleryView } from '@features/gallery';
 import type {
   GalleryItemsPage,
+  GalleryNavigationEntry,
   GallerySemanticReference,
   getGallerySelectedImageQuery,
 } from '@features/gallery/contracts';
-import type { QueueItem } from '@features/queue/contracts';
+import type { GalleryItemsFilter } from '@features/gallery/queries';
+import type { QueueItem, QueueProgressSession } from '@features/queue/contracts';
 import type { InfiniteData } from '@tanstack/react-query';
 import type { KeyboardEvent } from 'react';
 
-import { compareGalleryItems, gallerySemanticReferenceKey, toGalleryItemKey } from '@features/gallery/contracts';
+import {
+  compareGalleryItems,
+  gallerySemanticReferenceKey,
+  getGalleryNavigationStep,
+  getGallerySessionNavigationKey,
+  toGalleryItemKey,
+} from '@features/gallery/contracts';
 import {
   flattenGalleryItemsData,
   GALLERY_MAX_ROWS,
   GALLERY_PAGE_SIZE,
   galleryItemsInfiniteOptions,
+  galleryStarredStripOptions,
 } from '@features/gallery/queries';
 import { parseDateTokens } from '@platform/search/dateTokens';
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
-import type { PreviewNavigationItem } from './previewNavigation';
-
-import {
-  getPreviewNavigationCursor,
-  getPreviewNavigationSequence,
-  getPreviewNavigationTarget,
-} from './previewNavigation';
-
 /**
- * Everything behind the preview's left/right stepping, in one place: the board
- * items query, the local/backend merge, the sequence + cursor, the navigate
- * action with its boundary-page fetch, and the neighbor prefetch. The view
- * consumes the result; `previewNavigation.ts` keeps the pure sequence math.
- *
- * Gallery selection and the live-follow preference remain the sources of
- * truth; nothing here stores a cursor.
+ * Own Preview query merging, cursor derivation, boundary fetches, and neighbor prefetch. Follow Gallery's
+ * session/starred/list order, but traverse the full bounded starred query beyond the grid's folded rows;
+ * selection/follow remain authoritative.
  */
 
 const EMPTY_PREVIEW_ITEMS: GalleryItem[] = [];
@@ -92,13 +89,8 @@ export const mergePreviewBoardItems = (
 ): GalleryItem[] => {
   const backendKeys = new Set(backendItems.map(toGalleryItemKey));
 
-  // Relevance order IS the list: re-sorting it by date would reorder what the
-  // user is looking at, and local generations are not members of a ranked
-  // result set at all (the gallery grid overlays none of them either). The
-  // caller still passes the SELECTED item, which is kept when the ranking does
-  // not contain it — a selection made outside the result set (an upload, an
-  // image-map click, stepping off the live tile) would otherwise leave the
-  // cursor pointing at nothing, which reads as both arrows going dead.
+  // Preserve ranking order and exclude local generations; retain out-of-ranking selection as a cursor anchor so
+  // arrows remain usable.
   if (isRanked) {
     const anchors = localItems.filter((item) => !backendKeys.has(toGalleryItemKey(item)));
 
@@ -117,23 +109,56 @@ export const mergePreviewBoardItems = (
   );
 };
 
+const toItemEntries = (items: readonly GalleryItem[]): GalleryNavigationEntry[] =>
+  items.map((item) => ({ item, kind: 'item' }));
+
+/**
+ * A step's destination: a saved item, a running session, a page not loaded yet (`more`), or nothing (null).
+ */
+export type PreviewNeighbor =
+  | { kind: 'item'; item: GalleryItem }
+  | { kind: 'more' }
+  | { kind: 'session'; id: string }
+  | null;
+
+export interface PreviewNeighbors {
+  next: PreviewNeighbor;
+  previous: PreviewNeighbor;
+}
+
+const NO_NEIGHBORS: PreviewNeighbors = { next: null, previous: null };
+
+const toNeighbor = (entry: GalleryNavigationEntry | null): PreviewNeighbor =>
+  entry === null
+    ? null
+    : entry.kind === 'item'
+      ? { item: entry.item, kind: 'item' }
+      : { id: entry.id, kind: 'session' };
+
 export interface PreviewNavigationState {
+  /** Every saved item the arrows can reach, in order: the starred strip, then the listing. */
   boardItems: GalleryItem[];
   handleNavigationKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
   isLoadingBoard: boolean;
-  navigate: (offset: -1 | 1) => void;
+  /** Resolves true once a step was dispatched; false when there was nowhere to go or the step went stale. */
+  navigate: (offset: -1 | 1) => Promise<boolean>;
+  /** What each step would land on, so a swipe can show it before committing. */
+  neighbors: PreviewNeighbors;
+  /** The selection's index in `boardItems`; -1 while following live or off the list. */
   navigationCursor: number;
   /** Identity of the backing query — the action context's filter identity. */
   navigationQueryKey: string;
-  navigationSequence: PreviewNavigationItem<GalleryItem>[];
   /** The page a selection of `item` is stamped with — see the action context's `getItemSelectionPage`. */
   getSelectionPage: (item: GalleryItem) => number;
   selectPreviewItem: (item: GalleryItem) => void;
 }
 
 export const usePreviewNavigation = ({
+  followedSessionId,
+  followSession,
   isComparing,
   localItems,
+  progressSessions,
   queueItems,
   galleryPage,
   galleryPaginationMode,
@@ -142,8 +167,10 @@ export const usePreviewNavigation = ({
   selectedItem,
   selectedItemKey,
   semanticQuery,
-  shouldFollowLive,
 }: {
+  /** The live session on screen, when the preview is following one; the cursor sits on it. */
+  followedSessionId: string | null;
+  followSession: (sessionId: string) => void;
   /** The page the gallery grid is on; a ranked list mirrors it (see below). */
   galleryPage: number;
   /** The gallery's own pagination mode, likewise mirrored by a ranked list. */
@@ -151,6 +178,8 @@ export const usePreviewNavigation = ({
   isComparing: boolean;
   /** Recent local generations, already normalized to gallery items. */
   localItems: GalleryImageItem[];
+  /** The gallery's in-progress tiles, in its order; only running ones can be stepped onto. */
+  progressSessions: readonly QueueProgressSession[];
   queueItems: QueueItem[];
   selectGalleryItem: (item: GalleryItem, selectionPage: number) => void;
   selectedImageQuery: ReturnType<typeof getGallerySelectedImageQuery>;
@@ -158,9 +187,7 @@ export const usePreviewNavigation = ({
   selectedItemKey: GalleryItemKey | null;
   /** The gallery's active similarity search, or null for the board listing. */
   semanticQuery: GallerySemanticReference | null;
-  shouldFollowLive: boolean;
 }): PreviewNavigationState => {
-  const hasSelectedItem = selectedItem !== null;
   const selectedImageSearch = useMemo(
     () => parseDateTokens(selectedImageQuery.searchTerm),
     [selectedImageQuery.searchTerm]
@@ -168,32 +195,26 @@ export const usePreviewNavigation = ({
   const navigationBoardId = selectedImageQuery.boardId;
   const navigationGalleryView = selectedImageQuery.galleryView;
   const navigationOrderDir = selectedImageQuery.imageOrderDir;
-  // Navigate the saved selection's listing even while live progress overlays it.
-  const navigationStarredOnly = selectedImageQuery.starredOnly || selectedItem?.starred === true;
+  // The grid partitions: its listing is unstarred-only, with the starred
+  // items in the strip above it, unless the starred filter is on.
+  const navigationStarredOnly = selectedImageQuery.starredOnly;
   // A ranked filmstrip follows the gallery's current search.
   const navigationSemanticQuery = semanticQuery;
   const navigationSemanticKey = gallerySemanticReferenceKey(navigationSemanticQuery);
-  const hasNavigationContext = hasSelectedItem;
-  const navigationContextKey = `${shouldFollowLive}:${selectedItemKey ?? ''}:${navigationBoardId}:${navigationGalleryView}:${navigationOrderDir}:${selectedImageQuery.paginationMode}:${selectedImageQuery.page}:${selectedImageQuery.searchTerm}:${navigationStarredOnly}:${navigationSemanticKey}`;
+  // Following live has a cursor too, so the listing loads for the step off it.
+  const hasNavigationContext = selectedItem !== null || followedSessionId !== null;
+  const navigationContextKey = `${followedSessionId ?? ''}:${selectedItemKey ?? ''}:${navigationBoardId}:${navigationGalleryView}:${navigationOrderDir}:${selectedImageQuery.paginationMode}:${selectedImageQuery.page}:${selectedImageQuery.searchTerm}:${navigationStarredOnly}:${navigationSemanticKey}`;
   const navigationQueryKey = `${navigationBoardId}:${navigationGalleryView}:${navigationOrderDir}:${selectedImageQuery.paginationMode}:${selectedImageQuery.searchTerm}:${navigationStarredOnly}:${navigationSemanticKey}`;
 
-  // Lets a boundary fetch that resolves after the user has moved on compare the
-  // context it started in against the one now on screen, and drop its stale
-  // result. Written from a LAYOUT effect: layout effects run synchronously
-  // inside the commit, so no promise continuation can observe the new UI with
-  // the old key — a passive effect leaves a post-paint gap where exactly that
-  // interleaving happens. (Render-phase ref writes are rejected by the
-  // compiler, and an effect event cannot be called from a promise
-  // continuation.)
+  // Publish navigation context in layout effect so boundary-fetch continuations cannot observe new UI with a stale
+  // fence.
   const navigationContextKeyRef = useRef(navigationContextKey);
 
   useLayoutEffect(() => {
     navigationContextKeyRef.current = navigationContextKey;
   }, [navigationContextKey]);
 
-  // A paginated navigation stays anchored to the page the preview opened on,
-  // and re-anchors only when the underlying query identity changes. Derived
-  // state rather than a ref so the compiler can see the dependency.
+  // Keep paginated navigation anchored until query identity changes; expose the dependency as derived state.
   const [navigationAnchor, setNavigationAnchor] = useState({
     page: selectedImageQuery.page,
     queryKey: navigationQueryKey,
@@ -204,35 +225,17 @@ export const usePreviewNavigation = ({
     setNavigationAnchor({ page: selectedImageQuery.page, queryKey: navigationQueryKey });
   }
 
-  // Stickiness is a PAGINATED concern: stepping across pages stamps each
-  // item's own page, and the window must not move out from under the cursor
-  // when it does. An infinite anchor is read live. Preview's own steps never
-  // rewrite it — they stamp the window's anchor, see selectPreviewItem — so
-  // the only thing that changes it is a selection made elsewhere: a grid
-  // click, a reveal, a result arriving under live-follow. Each of those names
-  // the window that holds the new selection, and Preview has to move to it.
-  // Held sticky, the anchor outlived every one of them: a click on the newest
-  // image at the top of the board left Preview walking rows 1800+ for a
-  // selection at row 0.
-  // A strip selection is stamped with the grid's page, which indexes the
-  // unstarred listing; the strip is the top of the starred one.
-  const isStripSelection = navigationStarredOnly && !selectedImageQuery.starredOnly;
-  const navigationAnchorPage = isStripSelection
-    ? 0
-    : selectedImageQuery.paginationMode === 'paginated'
+  // Only paginated anchors are sticky. Infinite steps preserve their anchor, while external selections must
+  // immediately reanchor the window.
+  const navigationAnchorPage =
+    selectedImageQuery.paginationMode === 'paginated'
       ? hasStaleNavigationAnchor
         ? selectedImageQuery.page
         : navigationAnchor.page
       : selectedImageQuery.page;
   const isPaginatedWindow = selectedImageQuery.paginationMode === 'paginated';
-  // A selection deeper than the base window's reach (a deep reveal from the
-  // image map) anchors navigation at its own page — walking from offset 0
-  // could never arrive at the cursor. Such a window is a slice from the
-  // middle of the board, and it is one-way by design: it cannot grow upward
-  // past its anchor, because the grid shares the cache entry and rows spliced
-  // in above its viewport would shift the content under the user. So the
-  // anchor must stay where the selection was made, and the exclusions below
-  // that hinge on "is this window mid-board?" are all derived from it.
+  // Anchor deep navigation at the selection page. Shared infinite windows cannot grow upward without shifting grid
+  // content, so retain that anchor and derive mid-board exclusions from it.
   const deepAnchorOffset =
     !isPaginatedWindow &&
     navigationSemanticQuery === null &&
@@ -240,12 +243,7 @@ export const usePreviewNavigation = ({
       ? navigationAnchorPage * GALLERY_PAGE_SIZE
       : 0;
 
-  // A ranked list mirrors the GRID's paging instead of the stamped context.
-  // The stamped page indexes the board listing, and a board page applied to a
-  // ranking lands on an unrelated slice — or, past the end of a ranking that is
-  // shorter than the board, on an empty one whose only member is the anchored
-  // selection, leaving both arrows with nowhere to step. Setting a search also
-  // resets the grid's page, which the stamped record never sees.
+  // Rankings follow grid paging, not stamped board pages, which can address unrelated or empty ranking slices.
   const navigationWindow =
     navigationSemanticQuery !== null
       ? galleryPaginationMode === 'paginated'
@@ -257,6 +255,19 @@ export const usePreviewNavigation = ({
         ? ({ kind: 'anchor', offset: navigationAnchorPage * GALLERY_PAGE_SIZE } as const)
         : ({ kind: 'infinite', offset: deepAnchorOffset } as const);
 
+  const listingFilter = useMemo(
+    (): GalleryItemsFilter => ({
+      boardId: navigationBoardId,
+      createdFrom: selectedImageSearch.range?.from,
+      createdTo: selectedImageSearch.range?.to,
+      galleryView: navigationGalleryView,
+      orderDir: navigationOrderDir,
+      searchTerm: selectedImageSearch.text,
+      ...(navigationSemanticQuery ? { semanticQuery: navigationSemanticQuery } : {}),
+    }),
+    [navigationBoardId, navigationGalleryView, navigationOrderDir, navigationSemanticQuery, selectedImageSearch]
+  );
+
   const {
     data: boardItemsData,
     fetchNextPage: fetchNextBoardItemsPage,
@@ -267,23 +278,28 @@ export const usePreviewNavigation = ({
     isFetchingNextPage: isFetchingNextBoardItemsPage,
     isFetchingPreviousPage: isFetchingPreviousBoardItemsPage,
   } = useInfiniteQuery({
-    ...galleryItemsInfiniteOptions(
-      {
-        boardId: navigationBoardId,
-        createdFrom: selectedImageSearch.range?.from,
-        createdTo: selectedImageSearch.range?.to,
-        galleryView: navigationGalleryView,
-        orderDir: navigationOrderDir,
-        searchTerm: selectedImageSearch.text,
-        ...(navigationSemanticQuery ? { semanticQuery: navigationSemanticQuery } : {}),
-        // The grid partitions: the listing is unstarred-only unless the
-        // selection was made under the starred filter.
-        starred: navigationStarredOnly,
-      },
-      navigationWindow
-    ),
+    ...galleryItemsInfiniteOptions({ ...listingFilter, starred: navigationStarredOnly }, navigationWindow),
     enabled: hasNavigationContext,
   });
+
+  // Share Gallery's bounded starred strip except for ranked, starred-only, or mid-board windows.
+  const hasStrip =
+    hasNavigationContext && !navigationStarredOnly && navigationSemanticQuery === null && deepAnchorOffset === 0;
+  const { data: stripData } = useQuery({ ...galleryStarredStripOptions(listingFilter), enabled: hasStrip });
+  const stripItems = useMemo(() => {
+    if (!hasStrip) {
+      return EMPTY_PREVIEW_ITEMS;
+    }
+
+    const items = stripData?.items ?? EMPTY_PREVIEW_ITEMS;
+
+    // A starred selection beyond the strip's bound (the grid hides it behind
+    // "Show all") still belongs to the starred partition: it joins the strip
+    // section so the arrows have somewhere to step from.
+    return selectedItem?.starred && !items.some((item) => toGalleryItemKey(item) === selectedItemKey)
+      ? [...items, selectedItem]
+      : items;
+  }, [hasStrip, selectedItem, selectedItemKey, stripData]);
 
   const getSelectionPageIn = useCallback(
     (item: GalleryItem, data: typeof boardItemsData): number => {
@@ -292,27 +308,8 @@ export const usePreviewNavigation = ({
         page.items.some((candidate) => toGalleryItemKey(candidate) === itemKey)
       );
       const pageParam = pageIndex === undefined || pageIndex < 0 ? undefined : data?.pageParams[pageIndex];
-      // `page` is stamped as a BOARD page and read as one everywhere else, so
-      // a ranked window's page params — offsets into the ranking — must not be
-      // written into it. Neither may the grid's own page: in paginated mode
-      // the footer paginates the RANKING, so that number is a rank page too.
-      // Carrying the page the preview opened on is no better — the item
-      // picked out of a ranking is nowhere near the board slice it names, and
-      // a deep one strands navigation there once the chip is cleared. What
-      // holds in both modes is the top of the listing: setting a search and
-      // clearing it both reset the grid to page 0, so that is the board
-      // context a ranked session hands back.
-      //
-      // In an INFINITE window the page is the anchor of the window that holds
-      // the item, which is what a grid click stamps too (the grid's own page,
-      // whatever row was clicked). Stamping the item's row instead rolls the
-      // window forward with the cursor: the anchor is read live, so each step
-      // past a page boundary re-keys the query at the new row, the old entry
-      // is discarded, and — a deep window being one-way — everything the user
-      // just walked through is unreachable. An item the window does not hold
-      // at all (a recent the listing has not caught up with, the compare
-      // slot's image) is stamped at the top: that is where a recent lives,
-      // and the base window's reach is the best guess for anything else.
+      // Stamp ranked picks with board page zero, never ranking offsets. Infinite picks retain their window anchor
+      // to preserve prior pages; items outside the window use the top-of-board context.
       return navigationSemanticQuery !== null
         ? 0
         : selectedImageQuery.paginationMode === 'paginated'
@@ -346,16 +343,8 @@ export const usePreviewNavigation = ({
     [queueItems]
   );
   const navigationLocalItems = useMemo(() => {
-    // recentImages bridges "generation finished" to "the backend list has the
-    // row"; dropping a completed batch during that window made arrow keys skip
-    // the images just generated. So local items stay unconditionally, except
-    // where the backend window is a *subset* of the board and dedupe cannot
-    // help: an active search or starred filter (backend-filtered, local items
-    // are not), and any window anchored mid-board — paginated, or the infinite window a deep
-    // reveal anchors — where settled recents would splice in permanently.
-    // Recents belong at the TOP of the listing, so a window nowhere near the
-    // top is not theirs to join; the grid draws the same line for its own
-    // window. There, only in-flight work and the selection merge.
+    // Keep recent results until listings catch up, except in filtered or mid-board windows where they do not
+    // belong. Those windows merge only in-flight work and selection.
     const hasActiveSearch =
       navigationStarredOnly || selectedImageSearch.text.trim() !== '' || selectedImageSearch.range !== undefined;
 
@@ -392,113 +381,140 @@ export const usePreviewNavigation = ({
     [navigationBoardId, navigationGalleryView, navigationLocalItems, navigationOrderDir]
   );
   const previewLocalBoardItems = useMemo(() => {
-    if (!selectedItem || localBoardItems.some((item) => toGalleryItemKey(item) === selectedItemKey)) {
-      return localBoardItems;
+    // A recent starred since it landed has moved to the strip.
+    const listingLocalItems = hasStrip ? localBoardItems.filter((item) => !item.starred) : localBoardItems;
+
+    if (
+      !selectedItem ||
+      (hasStrip && selectedItem.starred) ||
+      listingLocalItems.some((item) => toGalleryItemKey(item) === selectedItemKey)
+    ) {
+      return listingLocalItems;
     }
 
-    return [selectedItem, ...localBoardItems];
-  }, [localBoardItems, selectedItem, selectedItemKey]);
+    return [selectedItem, ...listingLocalItems];
+  }, [hasStrip, localBoardItems, selectedItem, selectedItemKey]);
   const backendBoardItems = useMemo(() => flattenPreviewItems(boardItemsData), [boardItemsData]);
-  // Recents belong to a board listing; a ranked list gets only the selection,
-  // and only as the cursor anchor described in mergePreviewBoardItems.
+  // Rankings accept only selection as cursor anchor, never board recents.
   const previewMergeItems = useMemo(
     () =>
       navigationSemanticQuery === null ? previewLocalBoardItems : selectedItem ? [selectedItem] : EMPTY_PREVIEW_ITEMS,
     [navigationSemanticQuery, previewLocalBoardItems, selectedItem]
   );
+  // The listing and the strip refetch independently, so an item just starred
+  // can sit on both sides for a moment; the strip keeps it.
+  const stripKeys = useMemo(() => new Set(stripItems.map(toGalleryItemKey)), [stripItems]);
+  const mergeListingItems = useCallback(
+    (backendItems: GalleryItem[]) =>
+      mergePreviewBoardItems(backendItems, previewMergeItems, navigationOrderDir, {
+        isRanked: navigationSemanticQuery !== null,
+      }).filter((item) => !stripKeys.has(toGalleryItemKey(item))),
+    [navigationOrderDir, navigationSemanticQuery, previewMergeItems, stripKeys]
+  );
+  const listingItems = useMemo(
+    () => (hasNavigationContext ? mergeListingItems(backendBoardItems) : EMPTY_PREVIEW_ITEMS),
+    [backendBoardItems, hasNavigationContext, mergeListingItems]
+  );
   const boardItems = useMemo(
-    () =>
-      !hasNavigationContext
-        ? EMPTY_PREVIEW_ITEMS
-        : mergePreviewBoardItems(backendBoardItems, previewMergeItems, navigationOrderDir, {
-            isRanked: navigationSemanticQuery !== null,
-          }),
-    [backendBoardItems, hasNavigationContext, navigationOrderDir, navigationSemanticQuery, previewMergeItems]
+    () => (stripItems.length === 0 ? listingItems : [...stripItems, ...listingItems]),
+    [listingItems, stripItems]
   );
   const isLoadingBoard = hasNavigationContext && isFetchingBoardItems;
-  const navigationSequence = useMemo(() => getPreviewNavigationSequence({ boardImages: boardItems }), [boardItems]);
-  const navigationCursor = getPreviewNavigationCursor(navigationSequence, {
-    isFollowingLive: shouldFollowLive,
-    selectedItemKey,
-  });
+  const sessionEntries = useMemo(
+    (): GalleryNavigationEntry[] =>
+      progressSessions.map((session) => ({ id: session.id, kind: 'session', navigable: session.state === 'running' })),
+    [progressSessions]
+  );
+  const stripEntries = useMemo(() => toItemEntries(stripItems), [stripItems]);
+  const navigationSections = useMemo(
+    () => [sessionEntries, stripEntries, toItemEntries(listingItems)],
+    [listingItems, sessionEntries, stripEntries]
+  );
+  const cursorKey = followedSessionId !== null ? getGallerySessionNavigationKey(followedSessionId) : selectedItemKey;
+  const navigationCursor =
+    followedSessionId !== null || selectedItemKey === null
+      ? -1
+      : boardItems.findIndex((item) => toGalleryItemKey(item) === selectedItemKey);
 
-  // One navigation action shared by the arrow keys and the footer buttons.
-  // Comparison and live following never step through saved images.
+  // Preview is the only surface that walks a paginated listing across its pages, so at a loaded edge the next page
+  // wins over the strip seam; the strip is reached from the listing's first page.
+  const isAtLoadedBackendBoundary = useCallback(
+    (offset: -1 | 1): boolean =>
+      followedSessionId === null &&
+      selectedItemKey !== null &&
+      (offset === 1
+        ? backendBoardItems.at(-1) !== undefined &&
+          toGalleryItemKey(backendBoardItems.at(-1)!) === selectedItemKey &&
+          hasNextBoardItemsPage
+        : backendBoardItems[0] !== undefined &&
+          toGalleryItemKey(backendBoardItems[0]) === selectedItemKey &&
+          hasPreviousBoardItemsPage),
+    [backendBoardItems, followedSessionId, hasNextBoardItemsPage, hasPreviousBoardItemsPage, selectedItemKey]
+  );
+
+  // Share navigation between keyboard, footer, and swipe; comparison does not step saved images.
   const navigate = useCallback(
-    (offset: -1 | 1) => {
-      if (isComparing || shouldFollowLive) {
-        return;
+    (offset: -1 | 1): Promise<boolean> => {
+      if (isComparing) {
+        return Promise.resolve(false);
       }
 
-      const target = getPreviewNavigationTarget(navigationSequence, navigationCursor, offset);
-      const isAtLoadedBackendBoundary =
-        selectedItemKey !== null &&
-        (offset === 1
-          ? backendBoardItems.at(-1) !== undefined &&
-            toGalleryItemKey(backendBoardItems.at(-1)!) === selectedItemKey &&
-            hasNextBoardItemsPage
-          : backendBoardItems[0] !== undefined &&
-            toGalleryItemKey(backendBoardItems[0]) === selectedItemKey &&
-            hasPreviousBoardItemsPage);
-
-      if (!isAtLoadedBackendBoundary) {
-        if (!target) {
-          return;
+      const direction = offset === 1 ? 'right' : 'left';
+      const stepTo = (entry: GalleryNavigationEntry | null, data: typeof boardItemsData): boolean => {
+        if (entry?.kind === 'session') {
+          followSession(entry.id);
+        } else if (entry) {
+          stampSelection(entry.item, data);
         }
 
-        selectPreviewItem(target.item);
-        return;
+        return entry !== null;
+      };
+
+      if (!isAtLoadedBackendBoundary(offset)) {
+        return Promise.resolve(
+          stepTo(getGalleryNavigationStep(navigationSections, cursorKey, direction), boardItemsData)
+        );
       }
 
       if (offset === 1 ? isFetchingNextBoardItemsPage : isFetchingPreviousBoardItemsPage) {
-        return;
+        return Promise.resolve(false);
       }
 
       const fetchBoundaryPage = offset === 1 ? fetchNextBoardItemsPage : fetchPreviousBoardItemsPage;
 
-      void fetchBoundaryPage().then((result) => {
+      return fetchBoundaryPage().then((result) => {
         if (result.isError || navigationContextKeyRef.current !== navigationContextKey) {
-          return;
+          return false;
         }
 
-        const nextBackendBoardItems = flattenPreviewItems(result.data);
-        const nextBoardItems = mergePreviewBoardItems(nextBackendBoardItems, previewMergeItems, navigationOrderDir, {
-          isRanked: navigationSemanticQuery !== null,
-        });
-        const nextNavigationSequence = getPreviewNavigationSequence({ boardImages: nextBoardItems });
-        const nextNavigationCursor = getPreviewNavigationCursor(nextNavigationSequence, {
-          isFollowingLive: shouldFollowLive,
-          selectedItemKey,
-        });
-        const nextTarget = getPreviewNavigationTarget(nextNavigationSequence, nextNavigationCursor, offset);
+        // Against the data just fetched: the item is not in the pages this
+        // render closed over, and a lookup there would read it as an item
+        // the window does not hold.
+        const nextSections = [
+          sessionEntries,
+          stripEntries,
+          toItemEntries(mergeListingItems(flattenPreviewItems(result.data))),
+        ];
 
-        if (nextTarget?.kind === 'item') {
-          // Against the data just fetched: the item is not in the pages this
-          // render closed over, and a lookup there would read it as an item
-          // the window does not hold.
-          stampSelection(nextTarget.item, result.data);
-        }
+        return stepTo(getGalleryNavigationStep(nextSections, cursorKey, direction), result.data);
       });
     },
     [
-      backendBoardItems,
+      boardItemsData,
+      cursorKey,
       fetchNextBoardItemsPage,
       fetchPreviousBoardItemsPage,
-      hasNextBoardItemsPage,
-      hasPreviousBoardItemsPage,
+      followSession,
+      isAtLoadedBackendBoundary,
       isComparing,
       isFetchingNextBoardItemsPage,
       isFetchingPreviousBoardItemsPage,
+      mergeListingItems,
       navigationContextKey,
-      navigationCursor,
-      navigationOrderDir,
-      navigationSemanticQuery,
-      navigationSequence,
-      previewMergeItems,
-      selectedItemKey,
-      selectPreviewItem,
-      shouldFollowLive,
+      navigationSections,
+      sessionEntries,
       stampSelection,
+      stripEntries,
     ]
   );
 
@@ -512,7 +528,7 @@ export const usePreviewNavigation = ({
         return;
       }
 
-      if (isComparing || shouldFollowLive) {
+      if (isComparing) {
         return;
       }
 
@@ -520,19 +536,32 @@ export const usePreviewNavigation = ({
       // arrow press a second time.
       event.preventDefault();
       event.stopPropagation();
-      navigate(event.key === 'ArrowLeft' ? -1 : 1);
+      void navigate(event.key === 'ArrowLeft' ? -1 : 1);
     },
-    [isComparing, navigate, shouldFollowLive]
+    [isComparing, navigate]
   );
 
-  // Warm the browser cache for the sequence neighbors so arrow-key navigation
-  // swaps without a decode flash.
-  const previousNeighbor = navigationSequence[navigationCursor - 1];
-  const nextNeighbor = navigationSequence[navigationCursor + 1];
+  // The same resolution navigate() makes, so a swipe reveals what committing it will select.
+  const neighbors = useMemo((): PreviewNeighbors => {
+    if (isComparing) {
+      return NO_NEIGHBORS;
+    }
+
+    const resolve = (offset: -1 | 1): PreviewNeighbor =>
+      isAtLoadedBackendBoundary(offset)
+        ? { kind: 'more' }
+        : toNeighbor(getGalleryNavigationStep(navigationSections, cursorKey, offset === 1 ? 'right' : 'left'));
+
+    return { next: resolve(1), previous: resolve(-1) };
+  }, [cursorKey, isAtLoadedBackendBoundary, isComparing, navigationSections]);
+
+  // Prefetch the images a step would land on to avoid decode flashes during navigation.
   const previousNeighborUrl =
-    previousNeighbor?.kind === 'item' && previousNeighbor.item.kind === 'image' ? previousNeighbor.item.fullUrl : null;
+    neighbors.previous?.kind === 'item' && neighbors.previous.item.kind === 'image'
+      ? neighbors.previous.item.fullUrl
+      : null;
   const nextNeighborUrl =
-    nextNeighbor?.kind === 'item' && nextNeighbor.item.kind === 'image' ? nextNeighbor.item.fullUrl : null;
+    neighbors.next?.kind === 'item' && neighbors.next.item.kind === 'image' ? neighbors.next.item.fullUrl : null;
 
   useEffect(() => {
     [previousNeighborUrl, nextNeighborUrl].forEach((url) => {
@@ -547,9 +576,9 @@ export const usePreviewNavigation = ({
     handleNavigationKeyDown,
     isLoadingBoard,
     navigate,
+    neighbors,
     navigationCursor,
     navigationQueryKey,
-    navigationSequence,
     getSelectionPage,
     selectPreviewItem,
   };

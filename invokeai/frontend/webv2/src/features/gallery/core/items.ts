@@ -1,6 +1,6 @@
 import { normalizeServerTimestamp } from '@platform/time/serverTimestamp';
 
-import type { GalleryImage, GalleryOrderDir, GeneratedImageContract } from './types';
+import type { GalleryImage, GalleryOrderDir, GeneratedImageContract, GeneratedVideoContract } from './types';
 
 export type GalleryItemKind = 'image' | 'video';
 
@@ -35,11 +35,7 @@ export interface GalleryVideoItem extends GalleryItemBase {
   durationSeconds: number;
   fps?: number;
   kind: 'video';
-  /**
-   * How the video entered the gallery, when the server marked it. `'audio_upload'` means an
-   * uploaded audio file the ingest converter wrapped into a rendered-waveform video — its
-   * frames are a picture of the sound, not footage.
-   */
+  /** `audio_upload` identifies audio converted into a waveform video rather than footage. */
   mediaOrigin?: string;
 }
 
@@ -91,12 +87,8 @@ export const assertNeverGalleryItem = (item: never): never => {
 const compareSqliteBinaryText = (a: string, b: string): number => (a === b ? 0 : a < b ? -1 : 1);
 
 /**
- * Chronological comparison across the two timestamp shapes the gallery mixes:
- * backend rows carry SQLite's `created_at` ("2026-08-29 13:01:20.649") while
- * overlaid recents carry the queue's `submittedAt` (ISO, "2026-08-29T02:28:40.566Z").
- * Comparing the raw strings reads the 'T' separator as later than every
- * space-separated time on the same day, so an older overlaid recent would sort
- * above every newer backend image (and below them, with ascending order).
+ * Normalize SQLite and ISO timestamps before comparing; their space/T separators otherwise misorder same-day
+ * items.
  */
 const compareCreatedAt = (a: string, b: string): number =>
   compareSqliteBinaryText(normalizeServerTimestamp(a), normalizeServerTimestamp(b));
@@ -140,6 +132,23 @@ export const legacyGeneratedImageToGalleryItem = (image: LegacyGalleryImage): Ga
   width: image.width,
 });
 
+export const generatedVideoToGalleryItem = (video: GeneratedVideoContract): GalleryVideoItem => ({
+  boardId: video.boardId ?? 'none',
+  category: video.category,
+  createdAt: video.createdAt ?? video.queuedAt,
+  durationSeconds: video.durationSeconds,
+  ...(video.fps === undefined ? {} : { fps: video.fps }),
+  fullUrl: video.videoUrl,
+  height: video.height,
+  isIntermediate: video.isIntermediate,
+  kind: 'video',
+  ...(video.mediaOrigin === undefined ? {} : { mediaOrigin: video.mediaOrigin }),
+  name: video.videoName,
+  starred: false,
+  thumbnailUrl: video.thumbnailUrl,
+  width: video.width,
+});
+
 export const galleryImageItemToGalleryImage = (item: GalleryImageItem): GalleryImage => ({
   boardId: item.boardId,
   createdAt: item.createdAt,
@@ -171,3 +180,101 @@ export const formatGalleryVideoDuration = (durationSeconds: number): string => {
   const hours = Math.floor(totalMinutes / 60);
   return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 };
+
+/** Share upload acceptance and classification here to prevent drift without adding an initial bundle request. */
+
+/**
+ * Audio uploads become waveform videos. Video/audio MIME wildcards mirror server checks; extensions cover unknown
+ * MIME types. Images deliberately offer only round-trippable formats.
+ */
+const GALLERY_UPLOAD_FORMATS: Record<GalleryItemKind, { extensions: readonly string[]; mimes: readonly string[] }> = {
+  image: {
+    extensions: ['.png', '.jpg', '.jpeg', '.webp'],
+    mimes: ['image/png', 'image/jpeg', 'image/webp'],
+  },
+  video: {
+    extensions: [
+      '.mp4',
+      '.mov',
+      '.m4v',
+      '.webm',
+      '.mkv',
+      '.avi',
+      '.mpg',
+      '.mpeg',
+      '.3gp',
+      '.wmv',
+      '.asf',
+      '.mp3',
+      '.m4a',
+      '.aac',
+      '.wav',
+      '.flac',
+      '.ogg',
+      '.oga',
+      '.opus',
+      '.aiff',
+      '.aif',
+      '.wma',
+    ],
+    mimes: ['video/*', 'audio/*'],
+  },
+};
+
+/**
+ * Keep top-level declarations tree-shakeable; scanning the small format table avoids retaining this module's
+ * barrels.
+ */
+const GALLERY_UPLOAD_KINDS = ['image', 'video'] as const;
+
+/**
+ * The file input `accept` list for the given kinds. Advisory only — every browser offers an
+ * "All files" escape hatch, so callers still classify what comes back.
+ */
+export const getGalleryUploadAccept = (kinds: readonly GalleryItemKind[]): string =>
+  kinds
+    .flatMap((kind) => [...GALLERY_UPLOAD_FORMATS[kind].mimes, ...GALLERY_UPLOAD_FORMATS[kind].extensions])
+    .join(',');
+
+/**
+ * Which upload route a picked file belongs to, or null when no route takes it. An exact MIME
+ * match wins over a wildcard, and both win over the filename, so a file the OS typed is never
+ * routed by its extension.
+ */
+export const classifyGalleryUpload = (file: Pick<File, 'name' | 'type'>): { kind: GalleryItemKind } | null => {
+  const mimeType = file.type.toLowerCase();
+
+  // The legacy alias some Windows tools emit; the image route accepts it, but no picker
+  // needs to advertise it, so it is classified without being offered.
+  if (mimeType === 'image/jpg') {
+    return { kind: 'image' };
+  }
+  for (const kind of GALLERY_UPLOAD_KINDS) {
+    if (GALLERY_UPLOAD_FORMATS[kind].mimes.includes(mimeType)) {
+      return { kind };
+    }
+  }
+  for (const kind of GALLERY_UPLOAD_KINDS) {
+    // `video/*` matches any `video/` type, mirroring ACCEPTED_*_MIME_PREFIXES on the routes.
+    if (
+      GALLERY_UPLOAD_FORMATS[kind].mimes.some((mime) => mime.endsWith('/*') && mimeType.startsWith(mime.slice(0, -1)))
+    ) {
+      return { kind };
+    }
+  }
+
+  const lowerName = file.name.toLowerCase();
+
+  for (const kind of GALLERY_UPLOAD_KINDS) {
+    if (GALLERY_UPLOAD_FORMATS[kind].extensions.some((extension) => lowerName.endsWith(extension))) {
+      return { kind };
+    }
+  }
+
+  return null;
+};
+
+/** Virtual "by date" boards (`by_date:<YYYY-MM-DD>`) list items but can never receive them. */
+export const DATE_BOARD_ID_PREFIX = 'by_date:';
+
+export const isDateBoardId = (boardId: string): boolean => boardId.startsWith(DATE_BOARD_ID_PREFIX);

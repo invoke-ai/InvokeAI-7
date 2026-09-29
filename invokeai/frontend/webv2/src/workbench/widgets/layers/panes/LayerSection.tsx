@@ -42,10 +42,8 @@ const selectSelectedNode = (project: {
 }): CanvasNodeContract | null => getDocumentNode(project.canvas.document, project.canvas.document.selectedLayerId);
 
 /**
- * The Layer section of the Properties pane: the selected layer's type-specific
- * settings (blend mode and opacity live in the fixed row above the tree —
- * `LayerBlendRow`). Every editor commits through the same document seams it
- * always did — this is the one implementation, reparented.
+ * Render selected-layer editors here; blend/opacity remain in LayerBlendRow and all edits retain their document
+ * seams.
  */
 export const LayerSection = ({ disabled }: { disabled: boolean }) => {
   const { t } = useTranslation();

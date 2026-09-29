@@ -84,6 +84,8 @@ const _zImageDTO = z.object({
   node_id: z.string().nullish(),
   starred: z.boolean(),
   has_workflow: z.boolean(),
+  project_id: z.string().nullish(),
+  file_size_bytes: z.number().nullish(),
   board_id: z.string().nullish(),
   image_subfolder: z.string().optional(),
 });
@@ -123,6 +125,7 @@ export type QwenVLEncoderModelConfig = Extract<InternalAnyModelConfig, { type: '
 export type Qwen3VLEncoderModelConfig = Extract<InternalAnyModelConfig, { type: 'qwen3_vl_encoder' }>;
 export type WanT5EncoderModelConfig = Extract<InternalAnyModelConfig, { type: 'wan_t5_encoder' }>;
 type Gemma2EncoderModelConfig = Extract<InternalAnyModelConfig, { type: 'gemma2_encoder' }>;
+type Gemma4EncoderModelConfig = Extract<InternalAnyModelConfig, { type: 'gemma4_encoder' }>;
 type PiDDecoderModelConfig = Extract<InternalAnyModelConfig, { type: 'pid_decoder' }>;
 export type SpandrelImageToImageModelConfig = Extract<InternalAnyModelConfig, { type: 'spandrel_image_to_image' }>;
 export type CheckpointModelConfig = Extract<InternalAnyModelConfig, { type: 'main'; format: 'checkpoint' }>;
@@ -432,6 +435,11 @@ export const isAnimaQwen3EncoderModelConfig = (config: AnyModelConfig): config i
   return config.type === 'qwen3_encoder' && config.variant === 'qwen3_06b';
 };
 
+/** Z-Image consumes 2560-wide embeddings, so only the 4B encoder fits - Klein 9B's 8B one (4096) does not. */
+export const isZImageQwen3EncoderModelConfig = (config: AnyModelConfig): config is Qwen3EncoderModelConfig => {
+  return config.type === 'qwen3_encoder' && config.variant === 'qwen3_4b';
+};
+
 export const isMistralEncoderModelConfig = (config: AnyModelConfig): config is MistralEncoderModelConfig => {
   return config.type === 'mistral_encoder';
 };
@@ -463,6 +471,10 @@ export const isWanT5EncoderModelConfig = (config: AnyModelConfig): config is Wan
 
 export const isGemma2EncoderModelConfig = (config: AnyModelConfig): config is Gemma2EncoderModelConfig => {
   return config.type === 'gemma2_encoder';
+};
+
+export const isGemma4EncoderModelConfig = (config: AnyModelConfig): config is Gemma4EncoderModelConfig => {
+  return config.type === 'gemma4_encoder';
 };
 
 export const isPiDDecoderModelConfig = (config: AnyModelConfig): config is PiDDecoderModelConfig => {

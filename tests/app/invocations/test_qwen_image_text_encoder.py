@@ -639,7 +639,8 @@ class TestQuantizedEncoderRelease:
                 loader,
                 side_effect=lambda _ctx: (handoff.pop(), torch.device("cpu"), cleanup),
             ),
-            patch("transformers.AutoTokenizer.from_pretrained", return_value=MagicMock()),
+            # The node takes its tokenizer from the model cache now, so `context` (a MagicMock)
+            # supplies it; nothing here reads one off disk.
             patch("transformers.Qwen2_5_VLProcessor", return_value=processor),
         ):
             return invocation._encode(context, images=[])

@@ -70,8 +70,7 @@ describe('fillMaskedRegion', () => {
       targetOrigin: { x: 0, y: 0 },
     });
 
-    // Transparency lock: the final blit is source-atop, so colour lands ONLY where
-    // the target is already opaque (never fills transparent space).
+    // Source-atop fill preserves transparency by coloring only existing target coverage.
     expect(compositeOps(target)).toContain('source-atop');
     expect(compositeOps(target)).not.toContain('source-over');
   });

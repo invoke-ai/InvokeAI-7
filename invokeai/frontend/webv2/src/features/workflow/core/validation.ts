@@ -21,12 +21,7 @@ import { isConnectorNode, isInvocationNode } from './types';
 
 export const LOOP_LINKAGE_FIELD = 'loop_linkage';
 
-/**
- * Connection validation, ported from the legacy editor's
- * `validateConnectionTypes` / `validateConnection`. Connector nodes are
- * pass-through routing nodes: their source type is resolved from the first
- * upstream invocation output when one exists.
- */
+/** Resolve connector passthrough types from the first upstream invocation output before validating connections. */
 
 const isSingle = (type: FieldType): boolean => type.cardinality === 'SINGLE';
 const isCollection = (type: FieldType): boolean => type.cardinality === 'COLLECTION';
@@ -184,13 +179,8 @@ export const getCompatibleInputTemplate = (
     inputTemplates.find(
       (inputTemplate) =>
         !inputTemplate.uiHidden &&
-        // `metadata` sorts first on every WithMetadata node (no `ui_order`, and it precedes
-        // the authored fields in the schema). When the source type could not be resolved we
-        // skip the type check below entirely and take the first candidate, so it would win
-        // every time and bury the node's real input. A resolved source type still reaches it
-        // — dragging an actual MetadataField output onto a save node should land on
-        // `metadata`, and this function also gates which nodes the Add Node dialog offers
-        // for a pending connection.
+        // Skip internal inputs for unresolved source guesses, but retain them for known matching types such as
+        // MetadataField.
         !(sourceType === null && inputTemplate.fieldKind === 'internal') &&
         inputTemplate.input !== 'direct' &&
         (sourceType === null || validateConnectionTypes(sourceType, inputTemplate.type))
@@ -271,7 +261,7 @@ const getTargetFieldType = (
   index: WorkflowGraphIndex = createWorkflowGraphIndex(document.nodes, document.edges)
 ): FieldType | null | undefined => {
   if (isInvocationNode(node)) {
-    const inputTemplate = templates[node.data.type]?.inputs[handle];
+    const inputTemplate = node.data.dynamicInputTemplates?.[handle] ?? templates[node.data.type]?.inputs[handle];
 
     return inputTemplate && inputTemplate.input !== 'direct' ? inputTemplate.type : undefined;
   }
@@ -584,7 +574,7 @@ export const validateConnection = (
 
   const targetTemplate = templates[targetNode.data.type];
   const sourceFieldType = getSourceFieldType(sourceNode, sourceHandle, document, templates, index);
-  const targetField = targetTemplate?.inputs[targetHandle];
+  const targetField = targetNode.data.dynamicInputTemplates?.[targetHandle] ?? targetTemplate?.inputs[targetHandle];
 
   if (sourceFieldType === undefined || !targetField) {
     return 'One of the fields has no known definition.';

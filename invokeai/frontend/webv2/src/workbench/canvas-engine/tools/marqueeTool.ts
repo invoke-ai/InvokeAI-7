@@ -1,30 +1,7 @@
 /**
- * The marquee tool: rectangular and elliptical pixel-selection by drag.
- *
- * One tool covers both shapes, switched by `marqueeOptions.kind` — they share
- * every part of the gesture, and splitting them would double the entry in the
- * `ToolId` union, the tool strip, and the options bar for one differing line.
- * This mirrors `ShapeToolOptions.kind`.
- *
- * Interaction contract:
- * - **Pointer-down** (primary button) anchors the drag.
- * - **Pointer-move** (past a small threshold) publishes a live outline to
- *   `stores.marqueePreview` — it never dispatches and never touches the mask.
- *   **shift** constrains to a square/circle; **alt** draws from the press point
- *   as the CENTRE rather than a corner. Both compose.
- * - **Commit** (pointer-up after a real drag): one `ctx.commitSelection` with
- *   the shape's closed path and the boolean op resolved from the modifiers, or
- *   the persistent op mode when none are held — the same resolution the lasso
- *   uses (`selectionOpFor`), so the whole mask/boolean pipeline is reused
- *   unchanged. A degenerate (sub-pixel) drag commits nothing.
- * - **Cancel** (Esc / pointercancel): drops the preview, no commit.
- *
- * Note the modifier overlap: shift/alt pick the boolean op AND shape the rect.
- * That is deliberate and matches Photoshop — alt-dragging a marquee subtracts a
- * region drawn from its centre.
- *
- * Selection edits are transient interaction state: not dispatches, not undoable.
- * Zero React, zero import-time side effects.
+ * Rect/ellipse marquee previews do not change the mask. Shift constrains aspect; Alt draws from center. On release
+ * those same modifiers choose the shared boolean op, intentionally composing shape and operation.
+ * Degenerate/cancelled drags do not commit; engine selection history records accepted changes.
  */
 
 import type { Rect, Vec2 } from '@workbench/canvas-engine/types';
@@ -72,11 +49,7 @@ const constrainedDelta = (start: Vec2, end: Vec2, square: boolean): Vec2 => {
   return { x: (dx < 0 ? -1 : 1) * side, y: (dy < 0 ? -1 : 1) * side };
 };
 
-/**
- * The integer, normalized document rect for a marquee drag from `start` to
- * `end`. With `fromCenter` the press point is the centre, so the constrained
- * delta is mirrored through it — giving a rect twice the drag extent.
- */
+/** Normalized integer marquee bounds; centered mode mirrors the constrained delta around the press point. */
 export const marqueeRect = (start: Vec2, end: Vec2, constraints: MarqueeConstraints): Rect => {
   const delta = constrainedDelta(start, end, constraints.square);
   const a = constraints.fromCenter ? { x: start.x - delta.x, y: start.y - delta.y } : start;

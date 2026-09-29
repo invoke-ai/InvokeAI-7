@@ -36,6 +36,7 @@ describe('getQueueRecallCapabilities', () => {
       prompts: true,
       remix: true,
       seed: true,
+      workflow: false,
     });
   });
 
@@ -47,6 +48,7 @@ describe('getQueueRecallCapabilities', () => {
       prompts: true,
       remix: false,
       seed: true,
+      workflow: false,
     });
   });
 
@@ -110,9 +112,7 @@ describe('buildQueueRecallValues', () => {
     ).toBeNull();
   });
 
-  // A snapshot is the other story: it stores the prompt as *authored*, so the
-  // template that shaped it has to come back too. Recalling `a cat` and dropping
-  // `Cinematic` silently generated something other than the item recalled from.
+  // Snapshots store authored prompts, so recall must restore their template too.
   it('recalls the snapshot`s own template alongside its authored prompt', () => {
     const promptTemplate = { id: 't1', name: 'Cinematic', negativePrompt: '', positivePrompt: '{prompt}, cinematic' };
     const snapshot = makeValues({ positivePrompt: 'a cat', promptTemplate });
@@ -179,6 +179,7 @@ describe('buildVideoQueueRecallPatch', () => {
       seed: true,
       dimensions: false,
       clipSkip: false,
+      workflow: false,
     });
     expect(
       planQueueRecall('all', { current: null, isVideoItem: true, meta: {}, snapshot: null, videoSnapshot: snapshot })

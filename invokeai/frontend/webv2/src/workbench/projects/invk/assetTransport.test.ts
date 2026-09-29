@@ -68,8 +68,7 @@ describe('import rollback transport', () => {
   });
 
   it('sends authoritative image and video identities to their batch-delete routes', async () => {
-    // Imported at the top rather than probed for: a `toBeTypeOf` guard with an early return passes
-    // silently if the export ever disappears, which is the one thing this test exists to catch.
+    // Import and assert unconditionally so a missing export cannot skip coverage.
     const signal = new AbortController().signal;
 
     mocks.apiFetchJson.mockResolvedValue({});
@@ -134,10 +133,7 @@ describe('board media transport', () => {
     expect(Object.fromEntries(uploadQuery())).toEqual(query);
   });
 
-  /**
-   * A document reference is not gallery content: it goes up unboarded, under the canvas's private
-   * category. The two upload paths must not drift into each other.
-   */
+  /** Document-reference uploads remain private and unboarded. */
   it('keeps document-reference uploads unboarded and private', async () => {
     mocks.apiFetch.mockResolvedValue(
       new Response(JSON.stringify({ height: 1, image_name: 'fresh.png', width: 1 }), { status: 201 })

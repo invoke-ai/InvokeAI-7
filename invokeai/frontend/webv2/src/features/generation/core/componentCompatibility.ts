@@ -4,6 +4,8 @@ import { getArchitectureCapabilityRow } from './architectureCapabilities';
 
 export type GenerateComponentCandidate = {
   base: string;
+  /** Which Ideogram 4 transformer branch a single file holds. Only `ideogram-4` mains carry it. */
+  branch?: unknown;
   format?: string;
   key?: string;
   /** VAE latent width. Only `wan` ships more than one, and its two are different decoders. */
@@ -75,7 +77,28 @@ export const isAnimaQwen3Encoder: GenerateComponentFilter = (model) =>
 export const isNonAnimaQwen3Encoder: GenerateComponentFilter = (model) =>
   model.type === 'qwen3_encoder' && model.variant !== 'qwen3_06b';
 
-export const isFlux2MistralEncoder: GenerateComponentFilter = (model) => model.type === 'mistral_encoder';
+/** Ministral and Mistral encoders require distinct variants. */
+const MINISTRAL_3B_VARIANT = 'ministral3_3b';
+
+export const isFlux2MistralEncoder: GenerateComponentFilter = (model) =>
+  model.type === 'mistral_encoder' && model.variant !== MINISTRAL_3B_VARIANT;
+
+export const isErnieImageMistralEncoder: GenerateComponentFilter = (model) =>
+  model.type === 'mistral_encoder' && model.variant === MINISTRAL_3B_VARIANT;
+
+/** Krea's 4B encoder is incompatible with Ideogram's 8B encoder. */
+export const isKrea2Qwen3VlEncoder: GenerateComponentFilter = (model) =>
+  model.type === 'qwen3_vl_encoder' && model.variant === 'qwen3_vl_4b';
+
+export const isIdeogram4Qwen3VlEncoder: GenerateComponentFilter = (model) =>
+  model.type === 'qwen3_vl_encoder' && model.variant === 'qwen3_vl_8b';
+
+/** Exclude only single-file unconditional branches; Diffusers bundles both branches. */
+export const isIdeogram4UnconditionalBranch: GenerateComponentFilter = (model) =>
+  model.type === 'main' &&
+  model.base === 'ideogram-4' &&
+  model.format === 'checkpoint' &&
+  model.branch === 'unconditional';
 
 export const isFlux2Qwen3EncoderForModel = (selectedModel: GenerateModelConfig): GenerateComponentFilter => {
   if (selectedModel.variant === 'dev') {
@@ -138,19 +161,7 @@ export const getCompatibleDiffusersComponentSource = <T extends GenerateComponen
 ): T | undefined =>
   source && isCompatibleDiffusersComponentSourceForModel(selectedModel, source) ? source : undefined;
 
-/**
- * Whether an architecture's decode accepts this VAE, as the backend declares it.
- *
- * The single reader of `vae.accepted` from the served capability table — the same `VaeFacet` the
- * loaders and `accepts_vae()` read in `architectures/defs/<base>.py`. Which VAE families a base can
- * decode used to be hand-written here as a `switch` over literal base lists, and that copy drifted:
- * it offered Anima a FLUX VAE, which decodes a WAN21_16 latent in FLUX's basis and returns a
- * magenta smear rather than an error (6.10 dB PSNR, measured).
- *
- * Fail closed, like `resolveGenerateWidgetValues` and `getGenerationValidationReasons`: with no
- * table, or no row for this base, nothing is offered. Choosing a VAE the graph then rejects is
- * worse than an empty picker that fills in as soon as the table lands.
- */
+/** Backend rows own VAE compatibility; missing rows fail closed. */
 const acceptsVae = (base: string, model: GenerateComponentCandidate, variant?: unknown): boolean => {
   if (model.type !== 'vae') {
     return false;
@@ -181,12 +192,7 @@ export const isVaeAcceptedByBase =
   (model) =>
     acceptsVae(base, model, variant);
 
-/**
- * The one VAE rule for a Generate model. The component picker and its validation filter with
- * `isVaeAcceptedByBase(model.base, model.variant)` and the graph builder with this, so a VAE the user can select is
- * always one the graph sends -- the served row decides for both, including cross-base families such
- * as a Qwen-Image VAE installed under `anima`.
- */
+/** Picker, validator, and compiler share the served VAE rule. */
 export const isVaeCompatibleWithGenerateModel = (model: GenerateModelConfig, vae: VaeModelConfig): boolean => {
   if (model.type === 'external_image_generator') {
     return false;

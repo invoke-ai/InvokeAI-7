@@ -130,9 +130,8 @@ export const createDefaultUpscaleWidgetValues = (models: readonly ModelConfig[] 
 };
 
 /**
- * Heals older/partial persisted values without silently clamping invalid user
- * input. Range checks remain invocation validation so actionable errors can be
- * shown instead of changing a saved project behind the user's back.
+ * Heal partial persisted values without clamping invalid user input; invocation validation supplies actionable
+ * range errors.
  */
 export const normalizeUpscaleWidgetValues = (value: unknown): UpscaleWidgetValues | null => {
   if (!isRecord(value)) {
@@ -270,7 +269,7 @@ export const getUpscaleValidationReasons = (values: UpscaleWidgetValues, models?
   addRangeReason(reasons, 'Tile size', values.tileSize, UPSCALE_TILE_SIZE_MIN, UPSCALE_TILE_SIZE_MAX);
   addRangeReason(reasons, 'Tile overlap', values.tileOverlap, UPSCALE_TILE_OVERLAP_MIN, UPSCALE_TILE_OVERLAP_MAX);
   addRangeReason(reasons, 'Steps', values.steps, 1, 1000);
-  addRangeReason(reasons, 'CFG scale', values.cfgScale, 0, 100);
+  addRangeReason(reasons, 'CFG scale', values.cfgScale, 1, 100);
   addRangeReason(reasons, 'Seed', values.seed, 0, SEED_MAX);
 
   if (models) {

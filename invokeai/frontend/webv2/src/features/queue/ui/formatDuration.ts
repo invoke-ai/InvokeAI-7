@@ -1,8 +1,4 @@
-/**
- * Compact execution-time labels for queue items ("4.37s", "1m 23s"). Computed
- * from the backend's `started_at`/`completed_at` ISO timestamps; returns null
- * when either is missing so callers can omit the field.
- */
+/** Return no duration when either backend timestamp is missing. */
 export const formatDuration = (startedAt?: string | null, completedAt?: string | null): string | null => {
   if (!startedAt || !completedAt) {
     return null;

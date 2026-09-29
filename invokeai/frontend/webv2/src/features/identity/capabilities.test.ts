@@ -26,6 +26,7 @@ describe('Identity route capabilities', () => {
       canManagePromptTemplates: false,
       canManageSharedSystemPrompts: false,
       canManageUsers: false,
+      canClearOthersIntermediates: false,
     });
   });
 
@@ -39,6 +40,7 @@ describe('Identity route capabilities', () => {
       canManagePromptTemplates: true,
       canManageSharedSystemPrompts: true,
       canManageUsers: false,
+      canClearOthersIntermediates: false,
     });
   });
 
@@ -62,6 +64,7 @@ describe('Identity route capabilities', () => {
       canManagePromptTemplates: false,
       canManageSharedSystemPrompts: false,
       canManageUsers: false,
+      canClearOthersIntermediates: false,
     });
     expect(getCapabilities(session({ user: { ...baseUser, is_admin: true } }))).toEqual({
       canManageAppConfig: true,
@@ -72,6 +75,7 @@ describe('Identity route capabilities', () => {
       canManagePromptTemplates: true,
       canManageSharedSystemPrompts: true,
       canManageUsers: true,
+      canClearOthersIntermediates: true,
     });
   });
 });

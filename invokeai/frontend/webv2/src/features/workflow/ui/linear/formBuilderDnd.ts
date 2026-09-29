@@ -1,17 +1,8 @@
 import type { WorkflowForm } from '@features/workflow/contracts';
 
 /**
- * Pure dnd-kit plumbing for the form builder: droppable id encoding/decoding
- * and the drop-target -> reparent resolution the old native-DnD `onDrop`
- * handlers computed inline. Kept side-effect free so it can be unit tested
- * without mounting the builder; `FormBuilderTab` only wires this to
- * `editGraph({ type: 'moveFormElementTo', ... })` at `onDragEnd`.
- *
- * `WorkflowForm` elements each carry their own `parentId` (maintained by
- * `moveFormElementTo` in `core/document.ts`), so parent lookup is a direct
- * read rather than a scan over every container — mirrors how `getFormChildren`
- * resolves the root the same as any other container (`form.elements[id]`,
- * `type === 'container'`).
+ * Resolve drop IDs into pure reparent commands; use maintained parentId links rather than scanning containers and
+ * commit at drag end.
  */
 
 export type FormDropTarget =
@@ -53,13 +44,7 @@ export const isFormDescendantOrSelf = (form: WorkflowForm, ancestorId: string, c
 export const getFormDropEdge = (referenceY: number, overTop: number, overHeight: number): 'above' | 'below' =>
   referenceY < overTop + overHeight / 2 ? 'above' : 'below';
 
-/**
- * The container a droppable would actually land the dragged element inside:
- * `into:X` lands inside `X` itself; `edge:X` lands inside `X`'s own parent
- * (it resolves to a sibling reorder around `X`). Unifying both kinds onto
- * this one axis is what makes the tiebreak below a single "deepest wins"
- * comparison instead of two separate rules.
- */
+/** Compare landing containers: into:X targets X, while edge:X targets X's parent. */
 const formDropLandingContainerId = (form: WorkflowForm, droppableId: string): string | null => {
   const parsed = parseFormDroppableId(droppableId);
 
@@ -89,15 +74,8 @@ const formContainerDepth = (form: WorkflowForm, containerId: string): number => 
 };
 
 /**
- * Innermost-wins tiebreak for overlapping droppables, restoring the native-DnD
- * `stopPropagation` semantics the port lost. `into:X` is DOM-nested inside
- * `edge:X`'s box, so hovering it always matches both; the deeper landing
- * container wins, and among equal depths an edge beats an into (a specific
- * insertion point is more precise intent than "append here").
- *
- * Depth is computed per candidate rather than against the running winner, so
- * the result does not depend on collision order — two incomparable siblings
- * plus a deeper third must still pick the deepest.
+ * Choose deepest landing container, then prefer precise edge insertion at equal depth. Independent depth
+ * calculation makes collision ordering irrelevant.
  */
 export const pickInnermostFormCollision = (collisions: { id: string }[], form: WorkflowForm): string | null => {
   if (collisions.length === 0) {
@@ -138,11 +116,8 @@ export const pickInnermostFormCollision = (collisions: { id: string }[], form: W
 };
 
 /**
- * Resolves a drop target to a `moveFormElementTo` call, or null when the move
- * is disallowed (dropping onto self, into own subtree, or an unresolvable
- * target). The reducer re-validates and no-ops on any of these too — this is
- * the same guard duplicated at the droppable level so drop zones for invalid
- * targets don't render mid-drag.
+ * Reject self, descendant, and unresolved drops before rendering affordances; reducer validation independently
+ * enforces the same move constraints.
  */
 export const resolveFormDrop = (
   form: WorkflowForm,

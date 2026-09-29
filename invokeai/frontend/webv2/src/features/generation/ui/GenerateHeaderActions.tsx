@@ -19,11 +19,6 @@ import {
   settingsMatchModelDefaults,
 } from './shared/modelDefaultSettings';
 
-/**
- * Widget-header actions: the preset library (save/apply/rename/delete named
- * settings snapshots) and reset-every-model-governed-setting-to-model-defaults.
- * They sit in the header because they act on the whole panel, not one zone.
- */
 export const GenerateHeaderActions = () => {
   const { t } = useTranslation();
   const ui = useGenerationUi();
@@ -49,8 +44,7 @@ export const GenerateHeaderActions = () => {
       return;
     }
 
-    // Flush pending debounced edits first so this patch lands on top of them;
-    // the patch only carries model-governed keys, so flushed prompt edits survive.
+    // Flush before patching so reset preserves pending prompt edits.
     flushGenerateDrafts();
     ui.settings.patchGenerateSettings(getModelDefaultsPatch(settings, selectedModel, vaeModels), projectId);
   };

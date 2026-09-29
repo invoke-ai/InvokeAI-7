@@ -6,28 +6,28 @@ part a loader can get wrong without anything raising — every failure below wou
 surface as a model that loads cleanly and generates noise.
 """
 
-import json
-
 import pytest
 import torch
+from safetensors.torch import save_file
 
 from invokeai.backend.quantization.int8_convrot import (
     CONVROT_GROUP_SIZE,
+    Int8ConvrotLinear,
     cast_unquantized,
     check_int8_scale_layout,
     drop_unconsumed_quantization_sidecars,
     extract_int8_convrot_markers,
+    install_int8_convrot_layers,
     predict_int8_cast_size,
+    read_comfy_quant_markers,
+    reject_foreign_quantization_scales,
     reject_unmarked_int8_weights,
     split_int8_convrot_layers,
     swap_in_int8_linears,
 )
+from tests.fixtures.quantized_payloads import comfy_quant_marker
 
 MARKER = {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": CONVROT_GROUP_SIZE}
-
-
-def _marker_blob(marker: dict) -> torch.Tensor:
-    return torch.frombuffer(bytearray(json.dumps(marker).encode("utf-8")), dtype=torch.uint8)
 
 
 class TestWhichLayersAreClaimed:
@@ -35,7 +35,7 @@ class TestWhichLayersAreClaimed:
         sd = {
             "blocks.0.attn.wq.weight": torch.zeros(4, CONVROT_GROUP_SIZE, dtype=torch.int8),
             "blocks.0.attn.wq.weight_scale": torch.ones(4, 1),
-            "blocks.0.attn.wq.comfy_quant": _marker_blob(MARKER),
+            "blocks.0.attn.wq.comfy_quant": comfy_quant_marker(MARKER),
         }
         markers = extract_int8_convrot_markers(sd)
 
@@ -48,7 +48,7 @@ class TestWhichLayersAreClaimed:
         sd = {
             "layer.weight": torch.zeros(4, 4, dtype=torch.float8_e4m3fn),
             "layer.weight_scale": torch.ones(1),
-            "layer.comfy_quant": _marker_blob({"format": "float8_e4m3fn"}),
+            "layer.comfy_quant": comfy_quant_marker({"format": "float8_e4m3fn"}),
         }
         assert extract_int8_convrot_markers(sd) == {}
         assert "layer.comfy_quant" in sd
@@ -61,7 +61,7 @@ class TestWhichLayersAreClaimed:
             "txtfusion.0.weight": torch.zeros(8, 8, dtype=torch.bfloat16),
             "blocks.0.attn.wq.weight": torch.zeros(4, CONVROT_GROUP_SIZE, dtype=torch.int8),
             "blocks.0.attn.wq.weight_scale": torch.ones(4, 1),
-            "blocks.0.attn.wq.comfy_quant": _marker_blob(MARKER),
+            "blocks.0.attn.wq.comfy_quant": comfy_quant_marker(MARKER),
         }
         assert set(extract_int8_convrot_markers(sd)) == {"blocks.0.attn.wq"}
 
@@ -73,7 +73,7 @@ class TestWhichLayersAreClaimed:
     def test_the_group_size_travels_with_each_marker(self) -> None:
         """Every marker in the Krea-2 build says 256, but the flag is per tensor and another
         producer may vary it, so it is read rather than assumed."""
-        sd = {"layer.comfy_quant": _marker_blob({"format": "int8_tensorwise", "convrot_groupsize": 64})}
+        sd = {"layer.comfy_quant": comfy_quant_marker({"format": "int8_tensorwise", "convrot_groupsize": 64})}
         assert extract_int8_convrot_markers(sd)["layer"]["convrot_groupsize"] == 64
 
 
@@ -326,7 +326,179 @@ class TestTheKeysTheOrphanCheckAndTheSidecarDropActOn:
         sd = {
             "blocks.0.input_scaler.weight": torch.ones(4, 4),
             "blocks.0.attn.input_scale": torch.ones(1),
-            "blocks.0.attn.comfy_quant": _marker_blob({"format": "float8_e4m3fn"}),
+            "blocks.0.attn.comfy_quant": comfy_quant_marker({"format": "float8_e4m3fn"}),
         }
 
         assert set(drop_unconsumed_quantization_sidecars(sd)) == {"blocks.0.input_scaler.weight"}
+
+
+class TestTheForeignScaleCheck:
+    """`reject_foreign_quantization_scales` decides which unclaimed `weight_scale` is fatal.
+
+    Inside the int8 branch the fp8 pipeline is skipped, so a scaled-fp8 layer that came along would
+    be cast without its scale -- off by `1/weight_scale`, silently. Both filters below exist because
+    the failure is fatal and a false positive costs a user a checkpoint that worked.
+    """
+
+    @staticmethod
+    def _model() -> torch.nn.Module:
+        model = torch.nn.Module()
+        model.proj = torch.nn.Linear(4, 4)
+        model.other = torch.nn.Linear(4, 4)
+        return model
+
+    def test_an_fp8_weight_this_model_consumes_is_fatal(self) -> None:
+        sd = {
+            "proj.weight": torch.zeros(4, 4, dtype=torch.int8),
+            "proj.weight_scale": torch.ones(4, 1),
+            "other.weight": torch.zeros(4, 4, dtype=torch.float8_e4m3fn),
+            "other.weight_scale": torch.ones(()),
+        }
+
+        with pytest.raises(ValueError, match=r"other\.weight_scale"):
+            reject_foreign_quantization_scales(sd, {"proj": MARKER}, "Ideogram 4", self._model())
+
+    def test_a_scale_on_a_dense_weight_is_not(self) -> None:
+        """A merged single file carries a bundled encoder too, and these loaders do not prefix-filter
+        it out. The weight's dtype is what tells a foreign *quantized* layer from a foreign dense
+        one; a dense weight loads correctly whatever sits beside it."""
+        sd = {"other.weight": torch.zeros(4, 4), "other.weight_scale": torch.ones(())}
+
+        reject_foreign_quantization_scales(sd, {}, "Ideogram 4", self._model())
+
+    def test_a_scale_on_a_module_this_model_does_not_have_is_not(self) -> None:
+        """An all-in-one export bundles a scaled-fp8 *submodel* beside the int8 transformer. Those
+        keys are discarded by the load rather than cast, so they cannot load unscaled."""
+        sd = {
+            "text_encoder.fc.weight": torch.zeros(4, 4, dtype=torch.float8_e4m3fn),
+            "text_encoder.fc.weight_scale": torch.ones(()),
+        }
+
+        reject_foreign_quantization_scales(sd, {}, "Ideogram 4", self._model())
+
+
+class TestTheSharedInstall:
+    """`install_int8_convrot_layers` owns the order the five steps have to run in.
+
+    Each loader used to write the sequence out by hand, and two of them wrote it out incompletely:
+    Z-Image and the PiD decoder both skipped the foreign-scale check and would cast a mixed
+    checkpoint's fp8 weights without their scales. The order is what these pin -- every step is
+    individually covered above, and a partial sequence raises nothing at all.
+    """
+
+    @staticmethod
+    def _model() -> torch.nn.Module:
+        model = torch.nn.Module()
+        model.keeps = torch.nn.Linear(CONVROT_GROUP_SIZE, 4, bias=False)
+        model.widens = torch.nn.Linear(CONVROT_GROUP_SIZE, 4, bias=False)
+        return model
+
+    @staticmethod
+    def _int8_layer(path: str) -> dict[str, torch.Tensor]:
+        return {
+            f"{path}.weight": torch.ones(4, CONVROT_GROUP_SIZE, dtype=torch.int8),
+            f"{path}.weight_scale": torch.ones(4, 1),
+        }
+
+    def test_a_foreign_scale_is_refused_before_a_single_byte_is_reserved(self) -> None:
+        """The reservation is the expensive step -- it evicts other models to make room. A load that
+        is about to be refused must not first ask the cache to free memory for it."""
+        sd = {**self._int8_layer("keeps"), "widens.weight": torch.zeros(4, 4, dtype=torch.float8_e4m3fn)}
+        sd["widens.weight_scale"] = torch.ones(())
+        reserved: list[int] = []
+
+        with pytest.raises(ValueError, match=r"widens\.weight_scale"):
+            install_int8_convrot_layers(
+                self._model(),
+                sd,
+                {"keeps": MARKER},
+                torch.float32,
+                architecture="Z-Image",
+                reserve=reserved.append,
+            )
+
+        assert reserved == []
+
+    def test_the_reservation_is_made_before_the_split_widens_anything(self) -> None:
+        """A locked model cannot be evicted, so the first reservation has to already cover the peak.
+        Reserving after the split lets its dequantized tensors land on an unreserved cache."""
+        sd = {**self._int8_layer("keeps"), **self._int8_layer("widens")}
+        widths: list[torch.dtype] = []
+
+        install_int8_convrot_layers(
+            self._model(),
+            sd,
+            {"keeps": MARKER, "widens": MARKER},
+            torch.float32,
+            architecture="Z-Image",
+            reserve=lambda _bytes: widths.append(sd["widens.weight"].dtype),
+            skip_patterns=("widens",),
+        )
+
+        assert widths == [torch.int8]
+        # And the split did run afterwards, or the assertion above would pass vacuously.
+        assert sd["widens.weight"].dtype is torch.float32
+
+    def test_only_the_surviving_layers_are_installed_and_returned(self) -> None:
+        """A marker on a layer the split widened must not reach the swap: it would install an
+        `Int8ConvrotLinear` over a weight that is no longer int8."""
+        model = self._model()
+        sd = {**self._int8_layer("keeps"), **self._int8_layer("widens")}
+
+        surviving = install_int8_convrot_layers(
+            model,
+            sd,
+            {"keeps": MARKER, "widens": MARKER},
+            torch.float32,
+            architecture="Z-Image",
+            reserve=lambda _bytes: None,
+            skip_patterns=("widens",),
+        )
+
+        assert set(surviving) == {"keeps"}
+        assert isinstance(model.keeps, Int8ConvrotLinear)
+        assert not isinstance(model.widens, Int8ConvrotLinear)
+
+    def test_the_reservation_charges_int8_its_byte_and_adds_the_caller_s_own_bytes(self) -> None:
+        """Krea-2 and Z-Image hold nvfp4 layers beside the int8 ones, so one reservation covers the
+        whole load. Spelled out rather than recomputed with `predict_int8_cast_size`: an expectation
+        derived from the implementation cannot notice the implementation charging the wrong width."""
+        reserved: list[int] = []
+
+        install_int8_convrot_layers(
+            self._model(),
+            self._int8_layer("keeps"),
+            {"keeps": MARKER},
+            torch.float32,
+            architecture="Z-Image",
+            reserve=reserved.append,
+            extra_reserved_bytes=4096,
+        )
+
+        # The layer stays int8, so it is charged one byte per code -- not float32's four -- plus its
+        # float32 scale column, plus what the caller asked for on top.
+        codes = 4 * CONVROT_GROUP_SIZE
+        scale = 4 * 4
+        assert reserved == [codes + scale + 4096]
+
+
+def test_read_comfy_quant_markers_reads_a_marker_off_a_file(tmp_path) -> None:
+    """The scheme, from the file rather than from a state dict.
+
+    Two callers need it that way: a loader deciding whether to commit to a ~20 GiB read, and model
+    identification, whose state dict is on the meta device and therefore has no bytes to parse.
+    Unrelated tensors are not reported, and a weight without a marker contributes nothing.
+    """
+    marker_json = b'{"format": "fp8_scaled", "convrot": false}'
+    path = tmp_path / "tiny.safetensors"
+    save_file(
+        {
+            "blocks.0.mlp.fc2.weight": torch.zeros(2, 2),
+            "blocks.0.mlp.fc2.comfy_quant": torch.frombuffer(marker_json, dtype=torch.uint8).clone(),
+            "unrelated.weight": torch.zeros(1),
+        },
+        str(path),
+    )
+
+    markers = read_comfy_quant_markers(path)
+    assert markers == {"blocks.0.mlp.fc2": {"format": "fp8_scaled", "convrot": False}}

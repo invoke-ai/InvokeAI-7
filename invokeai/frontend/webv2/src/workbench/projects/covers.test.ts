@@ -4,11 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type * as coversModule from './covers';
 
-/**
- * The cover index: a per-user blob that lets the library grid show thumbnails
- * without fetching every project's document. It is an index, not a truth, so
- * every failure here has to degrade to "no cover" rather than to an error.
- */
+/** Cover-index failure degrades to missing thumbnails. */
 
 const api = vi.hoisted(() => {
   const clientState = new Map<string, string>();
@@ -102,13 +98,7 @@ describe('loadProjectCovers', () => {
   });
 });
 
-/**
- * The index is one blob and every write replaces it, so a record made before
- * the first read must not reach the KV — it would delete every project's cover
- * but its own. Autosave reaches `recordProjectCover` from the editor, which
- * loads the index only when the project switcher opens, so this ordering is the
- * ordinary one for anyone who reloads straight into a project.
- */
+/** Do not replace the KV blob before the initial read succeeds. */
 describe('recordProjectCover before the index has loaded', () => {
   it('shows the cover immediately without writing over an index it has not read', async () => {
     api.__clientState.set('webv2:project-covers', '{"other":"b.png"}');
@@ -118,8 +108,7 @@ describe('recordProjectCover before the index has loaded', () => {
     expect(covers.getProjectCoverImageName('p1')).toBe('a.png');
     expect(api.setClientStateValue).not.toHaveBeenCalled();
 
-    // Recording kicks off the read it was waiting for; drain it so the write
-    // lands inside this test rather than after it.
+    // Drain triggered reads and writes before the test ends.
     await covers.loadProjectCovers();
 
     expect(api.setClientStateValue).toHaveBeenCalledTimes(1);

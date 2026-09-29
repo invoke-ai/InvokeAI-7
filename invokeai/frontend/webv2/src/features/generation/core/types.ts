@@ -78,6 +78,23 @@ export interface ImageWithDims {
   height: number;
 }
 
+/**
+ * What a widget suggests to Expand Prompt for its model family. Each part applies only until the
+ * user picks a model or system prompt themselves.
+ */
+export interface ExpandPromptSuggestion {
+  /** Source of the family's released enhancer, preselected when an installed text LLM has it. */
+  modelSource: string | null;
+  /** How the model is listed among the starter models, for the hint shown when it is not installed. */
+  modelName: string | null;
+  /** For a text-only rewrite. */
+  systemPromptId: string | null;
+  /** Replaces `systemPromptId` whenever `image` is actually sent; a prompt written for an image must not run without one. */
+  imageSystemPromptId: string | null;
+  /** An image the rewrite may describe from, such as a video's first frame. */
+  image: ImageWithDims | null;
+}
+
 export interface CroppableImageWithDims {
   original: { image: ImageWithDims };
   crop?: {
@@ -151,12 +168,7 @@ export type AspectRatioId =
   | '9:21'
   | '1:8';
 
-/**
- * Which of the fields below are panel arrangement rather than generation
- * intent is stated once, as `GENERATE_UI_STATE_KEYS` in `./settings` — beside
- * the normalization that already enumerates them, and where it costs no module
- * of its own. This interface stays type-only.
- */
+/** GENERATE_UI_STATE_KEYS defines the UI-only keys; this module owns their types. */
 export interface GenerateSettings {
   batchCount: number;
   modelKey: string;
@@ -165,11 +177,7 @@ export interface GenerateSettings {
   negativePromptEnabled: boolean;
   negativePrompt: string;
   negativePromptHeightPx: number;
-  /**
-   * The active prompt template, copied rather than referenced by id so the pure
-   * submit reducer can resolve prompts with no catalog lookup. See
-   * `core/promptTemplates.ts`.
-   */
+  /** Stored template snapshots allow pure submission without catalog lookup. */
   promptTemplate: PromptTemplateSnapshot | null;
   /** Show the merged prompt read-only instead of the authored text. */
   promptTemplateViewMode: boolean;
@@ -219,11 +227,13 @@ export interface GenerateSettings {
   qwen3VLEncoderModel: ComponentModelConfig | null;
   /** Wan 2.2's UMT5-XXL text encoder. */
   wanT5EncoderModel: ComponentModelConfig | null;
-  /**
-   * The low-noise expert of a Wan 2.2 A14B mixture-of-experts pair. Optional: without it the
-   * high-noise expert runs the whole schedule, which still produces an image at lower quality.
-   */
+  /** The low-noise expert is optional; the selected expert can span the full schedule. */
   wanLowNoiseModel: MainModelConfig | null;
+  /**
+   * Ideogram 4's unconditional transformer branch. Required with a single-file main, which holds
+   * only the conditional branch; null for a diffusers pipeline, which bundles both.
+   */
+  ideogram4UnconditionalModel: MainModelConfig | null;
   /** Optional Diffusers main model used as a component source for split/quantized model families. */
   componentSourceModel: MainModelConfig | null;
   /** Guidance for the low-noise half of a Wan A14B schedule; null reuses `cfgScale`. */
@@ -244,11 +254,7 @@ export interface GenerateSettings {
   krea2SeedVarianceEnabled: boolean;
   krea2SeedVarianceStrength: number;
   krea2SeedVarianceRandomizePercent: number;
-  /**
-   * PiD (Pixel Diffusion Decoder) replaces the VAE decode with a caption-conditioned
-   * 4x super-resolution decode. Off by default; requires a PiD decoder and a Gemma-2
-   * caption encoder.
-   */
+  /** PiD replaces VAE decode with caption-conditioned 4× output; requires a PiD decoder and Gemma-2 encoder. */
   pidMode: PidMode;
   /** PiD decoder checkpoint. Trained per backbone, so it must match the main model's base. */
   pidDecoderModel: ComponentModelConfig | null;
@@ -265,10 +271,7 @@ export interface GenerateSettings {
  */
 export type PidMode = 'off' | 'fit' | 'native';
 
-/**
- * Ideogram 4 sampler presets. Each fixes a step count and guidance schedule; the explicit
- * step / guidance / mu overrides are applied on top when set.
- */
+/** Use preset defaults unless steps, guidance, or mu is explicitly overridden. */
 export type Ideogram4SamplerPreset = 'V4_QUALITY_48' | 'V4_DEFAULT_20' | 'V4_TURBO_12';
 
 export interface GenerateWidgetValues extends GenerateSettings {

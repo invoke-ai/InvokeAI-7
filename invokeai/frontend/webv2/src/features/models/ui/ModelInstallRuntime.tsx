@@ -13,11 +13,8 @@ import { socketHub } from '@platform/transport/socketHub';
 import { useInstallOutcomeToasts } from './useInstallOutcomeToasts';
 
 /**
- * App-wide install runtime: install socket events, reconnect refresh, and
- * outcome toasts. Mounted once in the authenticated layout so installs
- * progress, refresh the library, and announce completion no matter which
- * surface queued them. Exactly one instance may exist — the outcome toasts
- * keep per-instance seen state.
+ * Mount exactly one authenticated install runtime; per-instance toast history would otherwise duplicate completion
+ * announcements.
  */
 export const ModelInstallRuntime = () => {
   useMountEffect(() => {
@@ -40,10 +37,8 @@ export const ModelInstallRuntime = () => {
         return;
       }
 
-      // Only revalidate stores something already read — an app-wide mount
-      // must not fetch model data for sessions that never open a models
-      // surface. An install finishing while a store is idle still lands via
-      // the socket handler's scheduled refresh.
+      // Reconnect only refreshes previously read stores; install completions separately schedule refreshes for
+      // idle stores.
       if (getModelsSnapshot().status !== 'idle') {
         void refreshModels();
       }

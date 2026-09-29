@@ -1,5 +1,6 @@
 /* oxlint-disable react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-new-object-as-prop */
 import type { GalleryItem, GalleryItemRef } from '@features/gallery/contracts';
+import type { ImageIndexAvailability } from '@features/gallery/data/backend';
 import type { GalleryItemsFilter } from '@features/gallery/data/queries';
 import type { QueueProgressSession } from '@features/queue/contracts';
 import type { StreamingImageSource } from '@platform/ui/streaming-image/streamingImageSource';
@@ -19,8 +20,9 @@ import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { requestGalleryItemReveal } from '@features/gallery/core/selection';
 import { getGallerySettings } from '@features/gallery/core/settings';
 import { GalleryUiProvider, type GalleryUiAdapter } from '@features/gallery/react';
-import { GALLERY_STARRED_SEPARATOR_HEIGHT_PX } from '@features/gallery/ui/galleryGridLayout';
+import { GALLERY_PINNED_FOOTER_PX } from '@features/gallery/ui/galleryGridLayout';
 import { isGalleryImageDragData } from '@features/gallery/utility';
+import { getFollowedProgressSession } from '@features/queue/contracts';
 import { parseDateTokens } from '@platform/search/dateTokens';
 import { accountLifecycle } from '@platform/state/accountLifecycle';
 import { getContrastRatio } from '@platform/ui/theme/contrastRatio.testing';
@@ -47,6 +49,8 @@ const mocks = vi.hoisted(() => ({
   itemProgress: null as { percentage: number; message: string } | null,
   progressFrame: null as { dataUrl: string; width: number; height: number } | null,
   fetchNames: vi.fn(),
+  getItemLabel: vi.fn<GalleryUiAdapter['getItemLabel']>(),
+  indexAvailability: { modelName: null, state: 'disabled' } as ImageIndexAvailability,
   measure: vi.fn(),
   scrollToIndex: vi.fn(),
   setPage: vi.fn(),
@@ -62,6 +66,10 @@ const getNamesKey = (filter: unknown) => ['test-gallery-item-names', JSON.string
 
 vi.mock('@features/gallery/data/queries', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
+  imageIndexAvailabilityOptions: () => ({
+    queryFn: () => mocks.indexAvailability,
+    queryKey: ['test-image-index-availability'],
+  }),
   galleryItemNamesOptions: (filter: unknown) => ({
     queryFn: () => mocks.fetchNames(filter),
     queryKey: getNamesKey(filter),
@@ -254,6 +262,7 @@ const createGallery = (overrides: Partial<GalleryStateView> = {}): GalleryStateV
     selectedItemKey: 'image:first.png',
     selectedItemKeys: ['image:first.png'],
     semanticImageQuery: null,
+    semanticSearchText: null,
     settings: { ...getGallerySettings({ paginationMode: 'paginated' }), imageDensityPercent: 0 },
     starredOnly: false,
     ...overrides,
@@ -268,6 +277,7 @@ const actionMocks = {
   setStarredOnly: vi.fn(),
   toggleItemInSelection: vi.fn(),
   updateSettings: vi.fn(),
+  uploadFiles: vi.fn(),
 };
 const imageActionMocks = {
   deleteItems: vi.fn(),
@@ -315,7 +325,7 @@ const createActions = (): GalleryActions =>
     toggleImageInSelection: actionMocks.toggleItemInSelection,
     toggleItemInSelection: actionMocks.toggleItemInSelection,
     updateSettings: actionMocks.updateSettings,
-    uploadFiles: vi.fn(),
+    uploadFiles: actionMocks.uploadFiles,
   }) as unknown as GalleryActions;
 
 type CanonicalContextTarget = {
@@ -338,7 +348,12 @@ const ContextMenuProbe = ({ target }: { target: CanonicalContextTarget }) => (
 );
 const NoopProvider = ({ children }: { children: ReactNode }) => children;
 
-const createAdapter = (progressSessions: QueueProgressSession[]): GalleryUiAdapter =>
+// Live-follow state travels as arguments so the compiler's memoization sees it change.
+const createAdapter = (
+  progressSessions: QueueProgressSession[],
+  liveFollowEnabled: boolean,
+  pinnedProgressSessionId: string | null
+): GalleryUiAdapter =>
   ({
     ItemActionsProvider: NoopProvider,
     ImageContextMenu: ContextMenuProbe,
@@ -361,9 +376,13 @@ const createAdapter = (progressSessions: QueueProgressSession[]): GalleryUiAdapt
     },
     galleryValues: {},
     generateValues: {},
-    liveFollowEnabled: currentLiveFollowEnabled,
+    getItemLabel: mocks.getItemLabel,
+    liveFollowEnabled,
     progressSessions,
-    pinnedProgressSessionId: null,
+    pinnedProgressSessionId,
+    followedProgressSessionId: liveFollowEnabled
+      ? (getFollowedProgressSession(progressSessions, pinnedProgressSessionId)?.id ?? null)
+      : null,
     followProgressSession,
     notifications: { add: noop, reportError: noop },
     projectId: 'project-1',
@@ -376,6 +395,7 @@ let root: Root | null = null;
 let queryClient: QueryClient | null = null;
 let currentGallery = createGallery();
 let currentLiveFollowEnabled = false;
+let currentPinnedSessionId: string | null = null;
 let currentProgressSessions: QueueProgressSession[] = [];
 const followProgressSession = vi.fn();
 let currentStrip: GalleryStarredStrip = EMPTY_GALLERY_STARRED_STRIP;
@@ -399,11 +419,15 @@ const Harness = ({
   background = 'bg',
   coMountPreviewSources = false,
   gallery,
+  liveFollowEnabled,
+  pinnedSessionId,
   progressSessions,
 }: {
   background?: 'bg' | 'bg.panel';
   coMountPreviewSources?: boolean;
   gallery: GalleryStateView;
+  liveFollowEnabled: boolean;
+  pinnedSessionId: string | null;
   progressSessions: QueueProgressSession[];
 }) => {
   const sensors = useSensors(
@@ -427,7 +451,7 @@ const Harness = ({
     <I18nextProvider i18n={i18n}>
       <ChakraProvider value={system}>
         <QueryClientProvider client={queryClient!}>
-          <GalleryUiProvider adapter={createAdapter(progressSessions)}>
+          <GalleryUiProvider adapter={createAdapter(progressSessions, liveFollowEnabled, pinnedSessionId)}>
             <GalleryWidgetContext value={contextValue}>
               <DndContext sensors={sensors}>
                 <DragMonitor />
@@ -483,6 +507,8 @@ const renderGallery = async (
         background={background}
         coMountPreviewSources={coMountPreviewSources}
         gallery={gallery}
+        liveFollowEnabled={currentLiveFollowEnabled}
+        pinnedSessionId={currentPinnedSessionId}
       />
     )
   );
@@ -508,18 +534,18 @@ const pointer = (type: string, target: EventTarget, clientX: number, clientY: nu
 };
 
 beforeEach(() => {
-  // The reveal channel is a module singleton, so a request from a previous
-  // test would otherwise be adopted by the next mount (grids deliberately
-  // honor a request that predates them). Drain it with one that can never
-  // match an item here.
+  // Drain singleton reveal intent with an unmatchable request so later tests cannot adopt it.
   requestGalleryItemReveal('image:__drained__');
   accountLifecycle.activate('grid-user');
   vi.clearAllMocks();
   registeredCommands.clear();
   currentGallery = createGallery();
   mocks.itemProgress = null;
+  mocks.indexAvailability = { modelName: null, state: 'disabled' };
+  mocks.getItemLabel.mockReset();
   currentProgressSessions = [];
   currentLiveFollowEnabled = false;
+  currentPinnedSessionId = null;
   mocks.progressFrame = null;
   currentStrip = EMPTY_GALLERY_STARRED_STRIP;
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -616,36 +642,33 @@ describe('GalleryImageGrid mixed item cells', () => {
     expect(getButton('Show all starred items').getBoundingClientRect().height).toBeLessThanOrEqual(24);
   });
 
-  it('keeps the starred label and grid together before a dedicated trailing gap', async () => {
+  it('pins the strip in a ruled block above the listing, open or collapsed', async () => {
     setStrip([starred]);
     const gallery = createGallery({ items: [createItem('image', 'regular.png')], settings: DENSE_SETTINGS });
     await renderGallery(gallery);
 
-    const listRect = host?.querySelector('[role="list"]')?.getBoundingClientRect();
+    const pinned = host!.querySelector<HTMLElement>('[data-gallery-pinned]')!;
+    const listingTop = () => host!.querySelector('[data-gallery-section="regular"]')!.getBoundingClientRect().top;
     const headerRect = getButton('Collapse starred items').parentElement?.getBoundingClientRect();
     const starredRect = getButton('Select starred.png for preview').getBoundingClientRect();
-    const regularRect = getButton('Select regular.png for preview').getBoundingClientRect();
 
-    expect((headerRect?.top ?? 0) - (listRect?.top ?? 0)).toBeCloseTo(0, 0);
+    expect(pinned.contains(getButton('Collapse starred items'))).toBe(true);
+    expect(pinned.contains(getButton('Select starred.png for preview'))).toBe(true);
+    expect(pinned.contains(getButton('Select regular.png for preview'))).toBe(false);
     expect(starredRect.top - (headerRect?.bottom ?? 0)).toBeLessThan(4);
-    // The trailing gap holds a hairline separator while the section is open.
-    expect(regularRect.top - starredRect.bottom).toBeCloseTo(8 + GALLERY_STARRED_SEPARATOR_HEIGHT_PX, 0);
-    expect(host?.querySelector('[data-gallery-starred-separator]')).not.toBeNull();
+    // The block closes with a rule and a margin; the listing starts after them.
+    expect(getComputedStyle(pinned).borderBottomWidth).toBe('1px');
+    expect(listingTop() - pinned.getBoundingClientRect().bottom).toBeCloseTo(GALLERY_PINNED_FOOTER_PX - 1, 0);
 
-    // The disclosure is a persisted setting, so collapsing goes through the
-    // owner and comes back as the next render's settings.
     await click(getButton('Collapse starred items'));
     expect(actionMocks.updateSettings).toHaveBeenCalledExactlyOnceWith({ starredSectionCollapsed: true });
     await renderGallery({ ...gallery, settings: { ...DENSE_SETTINGS, starredSectionCollapsed: true } });
 
+    const collapsedPinned = host!.querySelector<HTMLElement>('[data-gallery-pinned]')!;
     const collapsedHeaderRect = getButton('Expand starred items').parentElement?.getBoundingClientRect();
-    const collapsedRegularRect = getButton('Select regular.png for preview').getBoundingClientRect();
-    const collapsedSectionGap = collapsedRegularRect.top - (collapsedHeaderRect?.bottom ?? 0);
 
-    expect((collapsedHeaderRect?.top ?? 0) - (listRect?.top ?? 0)).toBeCloseTo(0, 0);
-    expect(collapsedSectionGap).toBeGreaterThanOrEqual(4);
-    expect(collapsedSectionGap).toBeLessThan(8);
-    expect(host?.querySelector('[data-gallery-starred-separator]')).toBeNull();
+    expect(collapsedPinned.getBoundingClientRect().bottom - (collapsedHeaderRect?.bottom ?? 0)).toBeCloseTo(1, 0);
+    expect(listingTop() - collapsedPinned.getBoundingClientRect().bottom).toBeCloseTo(GALLERY_PINNED_FOOTER_PX - 1, 0);
   });
 
   it('collapses only the strip cells, keeps the count, and omits the disclosure when the strip is empty', async () => {
@@ -688,6 +711,22 @@ describe('GalleryImageGrid mixed item cells', () => {
 
     expect(host?.querySelector('button[aria-label="Collapse starred items"]')).toBeNull();
     expect(sectionOrder()).toEqual(['regular']);
+  });
+
+  it('reads a ranking that matched nothing as a search result, not an empty board', async () => {
+    setStrip([]);
+    await renderGallery(
+      createGallery({
+        items: [],
+        searchTerm: '',
+        semanticImageQuery: { kind: 'text', query: 'sunset' },
+        semanticSearchText: 'sunset',
+        settings: DENSE_SETTINGS,
+      })
+    );
+
+    expect(host?.textContent).toContain('No items');
+    expect(host?.textContent).not.toContain('Drop media');
   });
 
   it('keeps showing the strip when every item on the board is starred', async () => {
@@ -991,6 +1030,89 @@ describe('GalleryImageGrid mixed item cells', () => {
   });
 });
 
+describe('GalleryImageGrid image-map labels', () => {
+  const getTile = (name: string): HTMLElement => {
+    const tile = getButton(`Select ${name} for preview`).parentElement;
+
+    if (!tile) {
+      throw new Error(`Expected tile for ${name}`);
+    }
+
+    return tile;
+  };
+  const findBadge = (tile: HTMLElement, text: string) =>
+    Array.from(tile.querySelectorAll<HTMLElement>('.gallery-thumb-overlay')).find(
+      (element) => element.textContent === text
+    );
+  const opacityOf = (element: HTMLElement | undefined) => (element ? getComputedStyle(element).opacity : null);
+
+  // Seeded so a reveal right after mount does not race the availability fetch.
+  const setIndexAvailability = (availability: ImageIndexAvailability) => {
+    mocks.indexAvailability = availability;
+    queryClient?.setQueryData(['test-image-index-availability'], availability);
+  };
+
+  beforeEach(() => setIndexAvailability({ modelName: null, state: 'ready' }));
+
+  it('reveals the hovered item label in step with its dimensions and star', async () => {
+    mocks.getItemLabel.mockImplementation((item) => Promise.resolve(item.name === 'a.png' ? 'sunset' : 'forest'));
+    await renderGallery(createGallery({ items: [createItem('image', 'a.png'), createItem('image', 'b.png')] }));
+
+    // Nothing is requested for tiles that were only rendered.
+    expect(mocks.getItemLabel).not.toHaveBeenCalled();
+
+    const tile = getTile('a.png');
+    await userEvent.hover(tile);
+
+    expect(mocks.getItemLabel).toHaveBeenCalledWith({ kind: 'image', name: 'a.png' });
+    const dimensions = findBadge(tile, '128x96');
+    const star = tile.querySelector<HTMLElement>('button[aria-label="Star a.png"]') ?? undefined;
+    await vi.waitFor(() =>
+      expect([findBadge(tile, 'sunset'), dimensions, star].map(opacityOf)).toEqual(['1', '1', '1'])
+    );
+
+    await userEvent.hover(getTile('b.png'));
+
+    await vi.waitFor(() =>
+      expect([findBadge(tile, 'sunset'), dimensions, star].map(opacityOf)).toEqual(['0', '0', '0'])
+    );
+    await vi.waitFor(() => expect(opacityOf(findBadge(getTile('b.png'), 'forest'))).toBe('1'));
+  });
+
+  it('reveals the label for keyboard focus as well as hover', async () => {
+    mocks.getItemLabel.mockResolvedValue('sunset');
+    await renderGallery(createGallery({ items: [createItem('image', 'a.png')] }));
+
+    await interact(() => getButton('Select a.png for preview').focus());
+
+    await vi.waitFor(() => expect(opacityOf(findBadge(getTile('a.png'), 'sunset'))).toBe('1'));
+  });
+
+  it('adds nothing for an unlabeled item', async () => {
+    mocks.getItemLabel.mockResolvedValue(null);
+    await renderGallery(createGallery({ items: [createItem('image', 'a.png')] }));
+
+    await userEvent.hover(getTile('a.png'));
+    await vi.waitFor(() => expect(mocks.getItemLabel).toHaveBeenCalled());
+    await interact(noop);
+
+    // Dimensions and star only.
+    expect(getTile('a.png').querySelectorAll('.gallery-thumb-overlay')).toHaveLength(2);
+  });
+
+  it('never asks for labels while the image index is not ready', async () => {
+    setIndexAvailability({ modelName: 'clip', state: 'model_missing' });
+    mocks.getItemLabel.mockResolvedValue('sunset');
+    await renderGallery(createGallery({ items: [createItem('image', 'a.png')] }));
+
+    await userEvent.hover(getTile('a.png'));
+    await interact(noop);
+
+    expect(mocks.getItemLabel).not.toHaveBeenCalled();
+    expect(findBadge(getTile('a.png'), 'sunset')).toBeUndefined();
+  });
+});
+
 describe('GalleryImageGrid range selection', () => {
   const orderedRefs: GalleryItemRef[] = [
     { kind: 'image', name: 'first.png' },
@@ -1113,6 +1235,29 @@ describe('GalleryImageGrid upload drop zone', () => {
     expect(clickSpy).toHaveBeenCalledOnce();
   });
 
+  it('offers every container and audio format the upload route ingests', async () => {
+    await renderGallery(createGallery({ items: [] }));
+
+    const accept = host?.querySelector<HTMLInputElement>('input[type="file"]')?.accept.split(',');
+
+    // Picker acceptance must include the video and audio formats supported by reference uploads.
+    expect(accept).toEqual(expect.arrayContaining(['image/png', 'video/*', 'audio/*', '.mov', '.mkv', '.mp3', '.wav']));
+  });
+
+  // Drops bypass the accept list; downstream classification alone decides media kind.
+  it('hands a dropped audio file to the upload action', async () => {
+    await renderGallery(createGallery({ items: [] }));
+
+    const dropTarget = host?.querySelector('[role="button"]');
+    const dataTransfer = new DataTransfer();
+    const song = new File(['audio'], 'song.mp3', { type: 'audio/mpeg' });
+
+    dataTransfer.items.add(song);
+    await interact(() => dropTarget?.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer })));
+
+    expect(actionMocks.uploadFiles).toHaveBeenCalledWith([song]);
+  });
+
   it('keeps the no-match message for a search with no results instead of the upload target', async () => {
     await renderGallery(createGallery({ items: [], searchTerm: 'nope' }));
 
@@ -1150,9 +1295,8 @@ describe('GalleryImageGrid reveal requests', () => {
   });
 
   it('never scrolls on selection changes alone', async () => {
-    // The selection also changes when a finished generation auto-selects its
-    // image; scrolling on that would yank the grid out from under a browsing
-    // user. Only the explicit reveal channel may scroll.
+    // Only explicit reveal intent may scroll; generation-driven selection must preserve the user's browsing
+    // position.
     const gallery = createGallery();
 
     await renderGallery(gallery);
@@ -1193,10 +1337,7 @@ describe('GalleryImageGrid reveal requests', () => {
   });
 
   it('honors a reveal requested before this grid mounted, while its item is still selected', async () => {
-    // The gallery is frequently opened (or swapped between its stacked and
-    // wide layouts, which remounts the grid) in response to the very reveal
-    // that is outstanding, so a grid must not ignore a request just because
-    // it arrived before the mount.
+    // A grid mounted by a reveal must honor the request that preceded its mount.
     await interact(() => requestGalleryItemReveal('image:last.png'));
     expect(mocks.scrollToIndex).not.toHaveBeenCalled();
 
@@ -1229,10 +1370,14 @@ describe('GalleryImageGrid reveal requests', () => {
     // reveal here would silently drop it.
     expect(mocks.scrollToIndex).not.toHaveBeenCalled();
 
+    const viewport = host!.querySelector<HTMLElement>('[data-part="viewport"]')!;
+    const scrollTo = vi.spyOn(viewport, 'scrollTo');
+
     await renderGallery({ ...gallery, settings: DENSE_SETTINGS });
-    expect(mocks.scrollToIndex).toHaveBeenCalledTimes(1);
-    // Row 0 is the header; the strip row is next.
-    expect(mocks.scrollToIndex).toHaveBeenCalledWith(1);
+    // The strip is pinned above the listing, so the reveal scrolls to the top
+    // of the viewport rather than to a listing row.
+    expect(mocks.scrollToIndex).not.toHaveBeenCalled();
+    expect(scrollTo).toHaveBeenCalledExactlyOnceWith({ top: 0 });
   });
 
   /** A persisted off-page selection of deep.png with page-zero content loaded. */
@@ -1351,15 +1496,12 @@ describe('GalleryImageGrid virtualization', () => {
 
     await renderGallery(gallery);
 
-    // Collapsing starred keeps the visible range identical, so without an
-    // explicit measure() the virtualizer would keep serving the expanded
-    // offsets — the new rows would paint below a stale starred-sized hole.
+    // Collapsing starred requires measurement even if visible indices stay unchanged, or stale offsets leave a
+    // gap.
     mocks.measure.mockClear();
     await renderGallery({ ...gallery, settings: { ...DENSE_SETTINGS, starredSectionCollapsed: true } });
     expect(mocks.measure).toHaveBeenCalled();
 
-    // Swapping the item list (e.g. the media/assets view switch) is the same
-    // structural change arriving through props.
     mocks.measure.mockClear();
     await renderGallery(createGallery({ items: [createItem('image', 'other.png')] }));
     expect(mocks.measure).toHaveBeenCalled();
@@ -1381,9 +1523,7 @@ describe('GalleryImageGrid virtualization', () => {
     );
     await vi.waitFor(() => expect(actionMocks.loadMore).toHaveBeenCalled());
 
-    // Columns follow the measured viewport width now, so pinning a row count
-    // would just re-encode the harness width. The invariant that matters is
-    // that the rows the virtualizer is asked for cover every cell exactly once.
+    // Assert every cell is covered once; measured viewport width determines row count.
     const renderedRows = host?.querySelectorAll('[role="list"] [role="presentation"]').length ?? 0;
     const renderedCells = host?.querySelectorAll('[role="listitem"]').length ?? 0;
 
@@ -1422,8 +1562,101 @@ describe('shared gallery progress section', () => {
       expect(host?.querySelector('button[title^="Workflow A ·"]')).not.toBeNull();
     }
     await click(host!.querySelector<HTMLButtonElement>('button[title^="Workflow A ·"]')!);
-    expect(followProgressSession).toHaveBeenCalledWith('run:1');
+    expect(followProgressSession).toHaveBeenCalledWith('run:1', { revealPreview: true });
     expect(host?.querySelectorAll('[role="listitem"]')).toHaveLength(currentGallery.items.length);
+  });
+  it('steps the arrow keys between the followed tile, the strip and the listing as one sequence', async () => {
+    const starred = createItem('image', 'starred.png', { starred: true });
+    const regular = createItem('image', 'regular.png');
+    currentProgressSessions = [session, { ...session, id: 'run:2', itemIndex: 2, backendItemId: 11 }];
+    currentLiveFollowEnabled = true;
+    currentPinnedSessionId = 'run:2';
+    setStrip([starred]);
+    // A saved selection is still there while following live; the followed tile is the cursor, not it.
+    await renderGallery(
+      createGallery({ items: [regular], selectedItemKey: 'image:regular.png', selectedItemKeys: ['image:regular.png'] })
+    );
+
+    // Down from the second tile lands on the strip's only cell; right steps off the tiles into it too.
+    registeredCommands.get('gallery.galleryNavDown')?.();
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(starred);
+    registeredCommands.get('gallery.galleryNavRight')?.();
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(starred);
+    registeredCommands.get('gallery.galleryNavLeft')?.();
+    expect(followProgressSession).toHaveBeenLastCalledWith('run:1', { revealPreview: false });
+
+    // From the strip, up and left follow a tile again; down and right reach the listing.
+    currentLiveFollowEnabled = false;
+    currentPinnedSessionId = null;
+    await renderGallery(
+      createGallery({ items: [regular], selectedItemKey: 'image:starred.png', selectedItemKeys: ['image:starred.png'] })
+    );
+    registeredCommands.get('gallery.galleryNavUp')?.();
+    expect(followProgressSession).toHaveBeenLastCalledWith('run:1', { revealPreview: false });
+    registeredCommands.get('gallery.galleryNavLeft')?.();
+    expect(followProgressSession).toHaveBeenLastCalledWith('run:2', { revealPreview: false });
+    registeredCommands.get('gallery.galleryNavDown')?.();
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(regular);
+    registeredCommands.get('gallery.galleryNavRight')?.();
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(regular);
+    expect(followProgressSession).toHaveBeenCalledTimes(3);
+  });
+  it('skips waiting tiles, which cannot be followed, and steps past a collapsed section', async () => {
+    const starred = createItem('image', 'starred.png', { starred: true });
+    currentProgressSessions = [
+      session,
+      { ...session, id: 'run:2', itemIndex: 2, backendItemId: null, state: 'queued' },
+    ];
+    currentLiveFollowEnabled = true;
+    setStrip([starred]);
+    await renderGallery(createGallery({ selectedItemKey: null, selectedItemKeys: [] }));
+
+    registeredCommands.get('gallery.galleryNavRight')?.();
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(starred);
+    expect(followProgressSession).not.toHaveBeenCalled();
+
+    // A collapsed in-progress section shows no tiles, so the strip is the top of the sequence.
+    currentLiveFollowEnabled = false;
+    await renderGallery(
+      createGallery({
+        selectedItemKey: 'image:starred.png',
+        selectedItemKeys: ['image:starred.png'],
+        settings: { ...getGallerySettings({}), progressSectionCollapsed: true },
+      })
+    );
+    registeredCommands.get('gallery.galleryNavLeft')?.();
+    expect(followProgressSession).not.toHaveBeenCalled();
+    expect(actionMocks.selectItem).toHaveBeenCalledTimes(1);
+  });
+  it('steps out of a starred selection the strip does not show instead of resetting', async () => {
+    const shown = Array.from({ length: 12 }, (_, index) =>
+      createItem('image', `starred-${index}.png`, { starred: true })
+    );
+    const hidden = createItem('image', 'starred-hidden.png', { starred: true });
+    const regular = createItem('image', 'regular.png');
+    setStrip([...shown, hidden], 13);
+    await renderGallery(
+      createGallery({
+        items: [regular],
+        selectedItemKey: 'image:starred-hidden.png',
+        selectedItemKeys: ['image:starred-hidden.png'],
+        settings: DENSE_SETTINGS,
+      })
+    );
+    const shownCount = host!.querySelectorAll('[data-gallery-section="starred"] [role="listitem"]').length;
+    expect(shownCount).toBeLessThan(13);
+
+    registeredCommands.get('gallery.galleryNavRight')?.();
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(regular);
+    registeredCommands.get('gallery.galleryNavLeft')?.();
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(shown[shownCount - 1]);
+
+    // Under a collapsed disclosure the whole strip is hidden; the selection still steps into the listing.
+    await renderGallery({ ...currentGallery, settings: { ...DENSE_SETTINGS, starredSectionCollapsed: true } });
+    registeredCommands.get('gallery.galleryNavRight')?.();
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(regular);
+    registeredCommands.get('gallery.galleryNavLeft')?.();
+    expect(actionMocks.selectItem).toHaveBeenCalledTimes(3);
   });
   it('keeps the saved image selected while the queue only contains waiting slots', async () => {
     currentLiveFollowEnabled = true;

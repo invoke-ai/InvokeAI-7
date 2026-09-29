@@ -267,16 +267,7 @@ export const getWildcardNameError = (
   return null;
 };
 
-/**
- * Whether a prompt is worth sending to the expansion route at all. A prompt with
- * no dynamic syntax in it is its own single expansion, so the round trip is
- * skipped entirely.
- *
- * `#` counts, because upstream treats it as a comment to end of line and strips
- * it — with no way to escape it. Leaving it out would make whether a `#` reaches
- * the model depend on whether the prompt happened to contain a `{…}` elsewhere,
- * which is a worse surprise than the round trip.
- */
+/** # is expansion syntax because the backend strips comments without an escape, even without other dynamic syntax. */
 export const hasDynamicPromptSyntax = (prompt: string): boolean =>
   /\{[\s\S]*\}/.test(prompt) || prompt.includes('#') || scanWildcardReferences(prompt).length > 0;
 

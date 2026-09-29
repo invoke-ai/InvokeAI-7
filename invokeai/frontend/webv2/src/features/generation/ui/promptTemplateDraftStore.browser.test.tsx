@@ -102,8 +102,7 @@ describe('useOnPendingPromptTemplateDraft', () => {
 
     expect(onDraft).not.toHaveBeenCalled();
 
-    // Drain the still-pending one-shot so the module store cannot leak into a
-    // later test if the runner changes declaration order.
+    // Drain pending module-store work to avoid cross-test leakage.
     await act(() => root.render(<Probe onDraft={vi.fn()} />));
   });
 });

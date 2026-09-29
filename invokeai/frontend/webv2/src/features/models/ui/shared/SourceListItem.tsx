@@ -9,11 +9,6 @@ import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { DownloadIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * The shared row used by every installable-source list (starter models,
- * HuggingFace files, folder-scan results, related models): title + badges on
- * top, optional description below, action on the right.
- */
 export const SourceListItem = ({
   badges,
   description,
@@ -45,11 +40,6 @@ export const SourceListItem = ({
   </Panel>
 );
 
-/**
- * Install action with live state: idle → Install button; queuing/active →
- * disabled "Installing…" with a jump to the install queue; done → badge with a
- * jump to the installed model's page when the library knows which one it is.
- */
 export const InstallSourceButton = ({
   installedModelKey = null,
   isInstalled = false,

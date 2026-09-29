@@ -1,11 +1,3 @@
-/**
- * The one place prompt highlight kinds become colours.
- *
- * Shared by the prompt textarea's underlay and the dynamic prompts preview, so a
- * weight or an embedding reads the same whether you are writing the prompt or
- * looking at what it expanded into.
- */
-
 import type { PromptHighlightKind, PromptHighlightOptions } from '@features/generation/core/prompt/highlight';
 
 import { Box } from '@chakra-ui/react';
@@ -30,15 +22,12 @@ export const HIGHLIGHT_STYLE_BY_KIND: Record<
   promptFunctionArg: { bg: 'accent.subtle/20', color: 'fg' },
   promptFunctionMethod: { color: 'accent.fg' },
   promptVariable: { color: 'accent.fg' },
-  // Muted like a variant's `|`: structure, not content. Its presence is what
-  // separates `${lens=85mm}` defining a variable from `${lens}` using one.
+  // Assignment markers distinguish variable definitions from uses.
   promptVariableOperator: { color: 'fg.muted' },
   punctuation: { color: 'fg.subtle' },
   text: { color: 'fg' },
   variantBrace: { color: 'accent.fg' },
   variantRange: { color: 'fg.success' },
-  // A sampler override changes how many/which alternatives come out, so it sits
-  // with the other count modifiers rather than earning a colour of its own.
   variantSampler: { color: 'fg.success' },
   variantSeparator: { color: 'fg.muted' },
   variantWeight: { color: 'fg.success' },
@@ -71,10 +60,7 @@ export const PromptHighlightSpan = ({ kind, text }: { kind: PromptHighlightKind;
   );
 };
 
-/**
- * Renders a prompt as coloured spans, falling back to plain text when
- * highlighting is off or the prompt is too long to be worth colouring.
- */
+/** Fall back to plain text when highlighting is disabled or oversized. */
 export const HighlightedPrompt = ({
   enabled = true,
   options = EMPTY_OPTIONS,

@@ -7,13 +7,7 @@ import { Scrollable } from '@platform/ui';
 import { useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { WorkflowLibraryCard } from './WorkflowLibraryCard';
-
-/**
- * The scrolling card grid. Paging is server side and append-only: reaching the
- * bottom of the accumulated pages asks the browse store for the next one,
- * which no-ops once the last page has landed.
- */
+import { WorkflowLibraryCard, type WorkflowCardMenuAnchor, type WorkflowLibraryCardProps } from './WorkflowLibraryCard';
 
 /** How close to the bottom (in viewports) counts as "fetch the next page". */
 const NEAR_BOTTOM_VIEWPORTS = 1.5;
@@ -21,12 +15,17 @@ const GRID_TEMPLATE_COLUMNS = 'repeat(3, minmax(0, 1fr))';
 const NO_MISSING_COUNTS: ReadonlyMap<string, number> = new Map();
 
 export interface WorkflowLibraryGridProps {
+  /** The project's active workflow, marked on its card in the This-project view. */
+  activeWorkflowId?: string | null;
   entries: readonly WorkflowLibraryEntry[];
   error: string | null;
+  /** What has the actions menu open, so that tile's control can name it. */
+  openMenuAnchor?: WorkflowCardMenuAnchor | null;
   /** Missing-model counts by workflow id; absent ids render no badge. */
   missingCounts?: ReadonlyMap<string, number>;
   selectedWorkflowId: string | null;
   status: WorkflowLibraryBrowseSnapshot['status'];
+  onContextMenu: WorkflowLibraryCardProps['onContextMenu'];
   onOpen: (workflowId: string) => void;
   onSelect: (workflowId: string) => void;
 }
@@ -51,9 +50,12 @@ const dedupeByWorkflowId = (entries: readonly WorkflowLibraryEntry[]): WorkflowL
 };
 
 export const WorkflowLibraryGrid = ({
+  activeWorkflowId = null,
   entries,
   error,
   missingCounts = NO_MISSING_COUNTS,
+  openMenuAnchor = null,
+  onContextMenu,
   onOpen,
   onSelect,
   selectedWorkflowId,
@@ -93,9 +95,7 @@ export const WorkflowLibraryGrid = ({
 
   const visibleEntries = useMemo(() => dedupeByWorkflowId(entries), [entries]);
   const hasEntries = visibleEntries.length > 0;
-  // 'idle' is the store before anything has been asked of it. The dialog's
-  // open-time load flips it to 'loading', but only after this first paint —
-  // so an idle store is a load about to start, never "nothing matched".
+  // Idle precedes the first open-time load; render loading rather than an empty result.
   const isPending = status === 'idle' || status === 'loading';
 
   return (
@@ -107,8 +107,17 @@ export const WorkflowLibraryGrid = ({
               <WorkflowLibraryCard
                 key={entry.item.workflow_id}
                 entry={entry}
+                isActive={entry.item.workflow_id === activeWorkflowId}
                 isSelected={entry.item.workflow_id === selectedWorkflowId}
+                menuOpenedBy={
+                  openMenuAnchor?.workflowId === entry.item.workflow_id
+                    ? openMenuAnchor.kind === 'trigger'
+                      ? 'button'
+                      : 'card'
+                    : null
+                }
                 missingCount={missingCounts.get(entry.item.workflow_id) ?? 0}
+                onContextMenu={onContextMenu}
                 onOpen={onOpen}
                 onSelect={onSelect}
               />

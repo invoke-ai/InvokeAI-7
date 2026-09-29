@@ -23,11 +23,7 @@ interface FixedPixelBackend extends RasterBackend {
   __surfaces: FakeSurface[];
 }
 
-/**
- * A minimal `RasterBackend` whose scratch surfaces report a single fixed pixel
- * for every `getImageData` call — enough to test `sampleDocumentColor`'s
- * bounds/alpha/traversal logic without modeling real canvas compositing.
- */
+/** Fixed-pixel scratch surfaces isolate sampling bounds, alpha and traversal without simulating compositing. */
 const createFixedPixelBackend = (pixel: readonly [number, number, number, number]): FixedPixelBackend => {
   const createdSurfaces: FakeSurface[] = [];
 
@@ -175,9 +171,8 @@ describe('sampleDocumentColor', () => {
     sampleDocumentColor(doc, layers, backend, { x: 12.7, y: 34.2 });
 
     const scratch = backend.__surfaces.at(-1)!;
-    // Identity layer transform composed with the sample-point translation: e/f
-    // carry the floored, negated point (no per-layer offset/scale/rotation).
-    // The last `setTransform` is the per-layer draw (the first is the initial reset).
+    // Identity-layer sampling translates by the negated floored point; inspect the final per-layer transform after
+    // reset.
     expect(scratch.transforms.at(-1)).toEqual([1, 0, 0, 1, -12, -34]);
   });
 });

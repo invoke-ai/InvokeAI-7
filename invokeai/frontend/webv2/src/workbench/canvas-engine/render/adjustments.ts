@@ -26,11 +26,8 @@ const isIdentityCurve = (points: CurvePoints | undefined): boolean => {
 };
 
 /**
- * Builds a 256-entry LUT that maps input → output through the channel's curve
- * control points using monotone-cubic (Fritsch–Carlson) interpolation, so the
- * result never overshoots between points. Fewer than two points → identity.
- * Values before the first / after the last point are clamped to that point's
- * output (flat extension).
+ * Builds a 256-entry monotone-cubic Fritsch–Carlson LUT without overshoot. Fewer than two points gives identity;
+ * outside endpoints uses flat extension.
  */
 export const buildCurveLut = (points: CurvePoints | undefined): Uint8ClampedArray => {
   const lut = new Uint8ClampedArray(LUT_SIZE);
@@ -271,9 +268,8 @@ const entryLuts = (
 };
 
 /**
- * Compiles the stack into the fewest segments that reproduce it in order:
- * enabled non-identity entries only, adjacent per-channel entries folded into
- * one LUT trio. The empty result means identity.
+ * Compiles enabled nonidentity entries in order, folding adjacent per-channel operations into LUT trios. Empty
+ * means identity.
  */
 export const compileAdjustments = (adjustments: CanvasAdjustmentsContract | undefined): CompiledAdjustmentSegment[] => {
   const segments: CompiledAdjustmentSegment[] = [];
@@ -336,11 +332,7 @@ export const adjustmentsKey = (adjustments: CanvasAdjustmentsContract | undefine
     .join('||');
 };
 
-/**
- * Applies the stack to `imageData` IN PLACE in one pixel pass: the compiled
- * segments run in order per pixel — LUT remaps, saturation luma lerps. Alpha
- * is never modified. A no-op for an identity stack.
- */
+/** Applies compiled LUT/saturation segments in one in-place pixel pass, preserving alpha. Identity is a no-op. */
 export const applyAdjustments = (imageData: ImageData, adjustments: CanvasAdjustmentsContract | undefined): void => {
   const segments = compileAdjustments(adjustments);
   if (segments.length === 0) {

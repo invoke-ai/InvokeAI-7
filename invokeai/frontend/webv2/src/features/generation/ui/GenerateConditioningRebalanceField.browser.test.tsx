@@ -65,10 +65,6 @@ const removePreset = vi.fn();
 
 let customPresets: RebalancePreset[] = [];
 
-/**
- * The field reads exactly one sub-port and three settings keys. Building the whole
- * adapter would only couple this test to parts of the port it never touches.
- */
 const buildAdapter = (): GenerationUiAdapter =>
   ({
     rebalancePresets: {

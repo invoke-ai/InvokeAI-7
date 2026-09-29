@@ -14,9 +14,7 @@ export interface SliderProps extends Omit<ChakraSlider.RootProps, 'children'> {
   withThumbTooltip?: boolean;
 }
 
-// Marks stay mounted so the slider keeps a stable height, but only fade in
-// while the slider is hovered or dragged. This is driven by the primitives' own
-// DOM state: the root carries `data-dragging` for the whole gesture.
+// Keep marks mounted to preserve height; show them on hover or data-dragging.
 const INTERACTION_REVEAL_CSS = {
   '& [data-part="marker-group"]': {
     opacity: 0,
@@ -59,14 +57,7 @@ const SliderThumb = ({ index, isTooltipOpen, label }: { index: number; isTooltip
   </ChakraTooltip.Root>
 );
 
-/**
- * Workbench slider. Wraps the Chakra slider primitives with the conveniences
- * the legacy (Chakra v2) slider had: a formatted value tooltip on each thumb
- * that shows while the slider is hovered and stays up through drags, and track
- * marks that reveal on hover so dense forms stay quiet until the slider is
- * being used. Renders one thumb per entry in `value`/`defaultValue`, so it
- * covers single and range sliders.
- */
+/** One thumb per value, with hover/drag tooltips and hover-revealed marks; supports single and range values. */
 export const Slider = ({
   formatValue = formatValueDefault,
   marks,

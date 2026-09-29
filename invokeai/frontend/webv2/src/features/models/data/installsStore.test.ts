@@ -32,7 +32,7 @@ describe('model install event interpretation', () => {
     const store = await import('./installsStore');
 
     store.handleModelInstallSocketEvent('model_install_download_progress', { bytes: 25, id: 7, total_bytes: 100 });
-    expect(store.getInstallProgress(7)).toEqual({ bytes: 25, totalBytes: 100 });
+    expect(store.getInstallProgress(7)).toEqual({ bytes: 25, bytesPerSecond: null, totalBytes: 100 });
 
     store.handleModelInstallSocketEvent('model_install_complete', { config: {}, id: 7, source: 'org/model' });
 
@@ -50,7 +50,7 @@ describe('model install event interpretation', () => {
     });
 
     expect(store.getInstallsSnapshot().jobs[0]?.status).toBe('downloading');
-    expect(store.getInstallProgress(7)).toEqual({ bytes: 25, totalBytes: 100 });
+    expect(store.getInstallProgress(7)).toEqual({ bytes: 25, bytesPerSecond: null, totalBytes: 100 });
 
     store.handleModelInstallSocketEvent('model_install_started', { id: 7 });
     store.handleModelInstallSocketEvent('model_install_download_started', { id: 7 });
@@ -114,14 +114,19 @@ describe('model install event interpretation', () => {
 
     accountLifecycle.invalidate();
 
-    expect(store.getInstallsSnapshot()).toEqual({ error: null, jobs: [], status: 'idle' });
+    expect(store.getInstallsSnapshot()).toEqual({ dismissedJobIds: new Set(), error: null, jobs: [], status: 'idle' });
 
     const currentRefresh = store.refreshInstalls();
 
     first.resolve([{ id: 1, source: 'old/account', status: 'waiting' }]);
     await staleRefresh;
 
-    expect(store.getInstallsSnapshot()).toEqual({ error: null, jobs: [], status: 'loading' });
+    expect(store.getInstallsSnapshot()).toEqual({
+      dismissedJobIds: new Set(),
+      error: null,
+      jobs: [],
+      status: 'loading',
+    });
     expect(store.refreshInstalls()).toBe(currentRefresh);
     expect(dependencies.listModelInstalls).toHaveBeenCalledTimes(2);
 
@@ -131,6 +136,7 @@ describe('model install event interpretation', () => {
 
     expect(dependencies.listModelInstalls).toHaveBeenCalledTimes(3);
     expect(store.getInstallsSnapshot()).toEqual({
+      dismissedJobIds: new Set(),
       error: null,
       jobs: [{ id: 2, source: 'new/account', status: 'waiting' }],
       status: 'loaded',
@@ -179,6 +185,7 @@ describe('model install event interpretation', () => {
     store.ensureInstallsLoaded();
     await vi.advanceTimersByTimeAsync(0);
     expect(store.getInstallsSnapshot()).toEqual({
+      dismissedJobIds: new Set(),
       error: null,
       jobs: [{ id: 1, source: 'org/model', status: 'waiting' }],
       status: 'loaded',
@@ -199,7 +206,7 @@ describe('model install event interpretation', () => {
     );
 
     expect(store.getInstallProgress(7)).toBeNull();
-    expect(store.getInstallsSnapshot()).toEqual({ error: null, jobs: [], status: 'idle' });
+    expect(store.getInstallsSnapshot()).toEqual({ dismissedJobIds: new Set(), error: null, jobs: [], status: 'idle' });
   });
 });
 
@@ -221,5 +228,42 @@ describe('getInstallSourceLabel', () => {
     expect(store.getInstallSourceLabel({ something: 'else' })).toBe('model');
     expect(store.getInstallSourceLabel(undefined)).toBe('model');
     expect(store.getInstallSourceLabel(42)).toBe('model');
+  });
+});
+
+describe('install queue presentation state', () => {
+  it('smooths a transfer rate from spaced progress samples', async () => {
+    const store = await import('./installsStore');
+
+    store.handleModelInstallSocketEvent('model_install_download_progress', { bytes: 0, id: 7, total_bytes: 1000 });
+    vi.advanceTimersByTime(100);
+    store.handleModelInstallSocketEvent('model_install_download_progress', { bytes: 50, id: 7, total_bytes: 1000 });
+    // Too soon for a second sample: the rate stays unknown rather than spiking.
+    expect(store.getInstallProgress(7)?.bytesPerSecond).toBeNull();
+
+    vi.advanceTimersByTime(900);
+    store.handleModelInstallSocketEvent('model_install_download_progress', { bytes: 500, id: 7, total_bytes: 1000 });
+    expect(store.getInstallProgress(7)?.bytesPerSecond).toBe(500);
+
+    vi.advanceTimersByTime(1000);
+    store.handleModelInstallSocketEvent('model_install_download_progress', { bytes: 600, id: 7, total_bytes: 1000 });
+    expect(store.getInstallProgress(7)?.bytesPerSecond).toBe(500 * 0.7 + 100 * 0.3);
+  });
+
+  it('keeps dismissed jobs hidden only while the backend still lists them', async () => {
+    const store = await import('./installsStore');
+
+    dependencies.listModelInstalls.mockResolvedValue([
+      { id: 1, source: 'a', status: 'completed' },
+      { id: 2, source: 'b', status: 'error' },
+    ]);
+    await store.refreshInstalls();
+    store.dismissInstallJob(1);
+    store.dismissInstallJob(2);
+    expect([...store.getInstallsSnapshot().dismissedJobIds]).toEqual([1, 2]);
+
+    dependencies.listModelInstalls.mockResolvedValue([{ id: 2, source: 'b', status: 'error' }]);
+    await store.refreshInstalls();
+    expect([...store.getInstallsSnapshot().dismissedJobIds]).toEqual([2]);
   });
 });

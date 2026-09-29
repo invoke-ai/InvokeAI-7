@@ -40,4 +40,35 @@ describe('buildWorkflowFast', () => {
     }
     expect(serializedWorkflowIdInput.value).toBe('workflow-123');
   });
+
+  it('preserves loop_linkage edges when saving a loaded workflow', async () => {
+    Object.assign(globalThis, {
+      window: {
+        location: {
+          origin: 'http://localhost',
+        },
+      },
+    });
+
+    const { buildWorkflowFast } = await import('features/nodes/util/workflow/buildWorkflow');
+    const node = buildNode(call_saved_workflow);
+    const loopEdge = {
+      id: 'loop-edge',
+      source: node.id,
+      sourceHandle: 'loop_linkage',
+      target: node.id,
+      targetHandle: 'loop_linkage',
+      type: 'loop_linkage',
+    } as unknown as ReturnType<typeof getInitialWorkflow>['edges'][number];
+
+    const workflow = buildWorkflowFast({
+      _version: 1,
+      formFieldInitialValues: {},
+      ...getInitialWorkflow(),
+      nodes: [node],
+      edges: [loopEdge],
+    });
+
+    expect(workflow.edges).toContainEqual(loopEdge);
+  });
 });

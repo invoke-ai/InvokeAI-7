@@ -30,11 +30,7 @@ export interface AspectRatioSelectProps {
   onChange: (id: AspectRatioId) => void;
 }
 
-/**
- * The aspect-ratio preset dropdown, with a proportion thumbnail beside each
- * option. Presentational: callers own what a preset change does to their
- * dimensions, which differs between a free-floating size and a placed frame.
- */
+/** Callers own dimension changes. */
 export const AspectRatioSelect = ({
   fallbackRatio,
   size = 'xs',

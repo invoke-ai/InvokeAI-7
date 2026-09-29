@@ -1,31 +1,7 @@
 /**
- * Splits a pressure-sampled stroke into contiguous constant-alpha bands.
- *
- * ## Why bands, and why they must not overlap-blend
- *
- * `strokeSession` fills the whole stroke into a scratch surface at full alpha and composites
- * it into the layer exactly once at the stroke opacity. That single composite is what stops
- * overlapping segments *within one stroke* from darkening each other — a slow drag revisits
- * the same pixels dozens of times, and `source-over` at partial alpha would compound every
- * one of them into a dark blob.
- *
- * Pressure-dependent opacity breaks that model, because alpha now varies along the stroke and
- * cannot be one `globalAlpha` on one composite. The fix is to fill the stroke as a sequence of
- * bands, each a contiguous run of samples at one quantized alpha, and to paint each band into
- * the scratch as *replace* (`destination-out` the band's own path, then `source-over` it at the
- * band's alpha) rather than as a blend. Replace keeps the no-compounding guarantee: where two
- * bands overlap, the later one wins outright, which is also the behaviour a stroke wants — the
- * newer sample's pressure is the current one.
- *
- * Bands are quantized rather than per-sample because each band is a separate outline
- * computation and two extra canvas fills. Quantizing to {@link PRESSURE_ALPHA_STEPS} levels
- * keeps a normal drag to a handful of bands while staying below the ~2% alpha difference an
- * eye can pick out of a soft edge.
- *
- * Consecutive bands share a sample ({@link BAND_OVERLAP_SAMPLES}) so their outlines abut
- * instead of leaving a hairline gap where the pressure level changes.
- *
- * Zero React, zero import-time side effects.
+ * Pressure-opacity bands replace overlapping scratch pixels (destination-out then source-over), so newer pressure
+ * wins without alpha compounding. Quantization to {@link PRESSURE_ALPHA_STEPS} limits outline/fill work; shared
+ * {@link BAND_OVERLAP_SAMPLES} avoid seams. The completed scratch composites once at stroke opacity.
  */
 
 import type { StrokeSamplePoint } from '@workbench/canvas-engine/freehand';
@@ -55,11 +31,8 @@ export interface PressureBand {
 }
 
 /**
- * Quantizes pressure to a band alpha in (0, 1].
- *
- * Non-finite pressure floors to {@link MIN_PRESSURE_ALPHA} rather than propagating: clamping
- * alone would let NaN through to `globalAlpha`, where a non-finite value is ignored and the
- * band would silently paint at full alpha — the opposite of the lightest possible touch.
+ * Quantizes pressure to (0,1]; nonfinite values use {@link MIN_PRESSURE_ALPHA}, avoiding canvas ignoring NaN and
+ * painting fully opaque.
  */
 export const toPressureAlpha = (pressure: number): number => {
   if (!Number.isFinite(pressure)) {
@@ -72,12 +45,7 @@ export const toPressureAlpha = (pressure: number): number => {
   return Math.max(MIN_PRESSURE_ALPHA, quantized);
 };
 
-/**
- * Groups samples into constant-alpha bands, in stroke order.
- *
- * A single sample yields a single band — `perfect-freehand` renders a lone point as a dot, and
- * dropping it would make a tap invisible. An empty input yields no bands.
- */
+/** Groups samples by alpha in stroke order. Preserve a lone sample as a dot; empty input has no bands. */
 export const getPressureBands = (points: readonly StrokeSamplePoint[]): PressureBand[] => {
   if (points.length === 0) {
     return [];
@@ -95,8 +63,7 @@ export const getPressureBands = (points: readonly StrokeSamplePoint[]): Pressure
       continue;
     }
 
-    // The level changed. Close the current band, then open the next one seeded with the
-    // shared sample so the two outlines abut rather than leaving a seam.
+    // Share the boundary sample when opening a band to avoid an outline seam.
     bands.push(current);
     const overlap = current.points.slice(-BAND_OVERLAP_SAMPLES);
     current = { alpha, points: [...overlap, point] };

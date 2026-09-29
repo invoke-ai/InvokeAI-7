@@ -4,15 +4,8 @@ import { Box } from '@chakra-ui/react';
 import { Panel } from '@platform/ui';
 
 /**
- * Shared floating-panel chrome for the canvas: the raised, rounded, shadowed
- * surface that the tool options bar, the staging bar, and (later) the text-tool
- * / layer-selection quick bars all sit on. It supplies only the *look* and
- * re-enables pointer events (its parent group is click-through); positioning
- * over the surface is the parent's job.
- *
- * Composition-friendly: consumers lay out their own sections inside — an
- * `HStack` of controls, `{@link CanvasFloatingBarDivider}` between groups — so
- * no per-consumer boolean props accrete here.
+ * Share floating canvas chrome and re-enable pointer events; parents own positioning and consumers compose their
+ * own sections with {@link CanvasFloatingBarDivider}.
  */
 export const CanvasFloatingBar = ({ children, ...rest }: PanelProps) => (
   <Panel density="sm" pointerEvents="auto" rounded="lg" shadow="lg" p="1" tone="surface" {...rest}>

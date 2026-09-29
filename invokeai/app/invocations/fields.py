@@ -193,6 +193,14 @@ class FieldDescriptions:
     minimax_h3_audio_vae = "Audio VAE (stereo, 32 kHz) for MiniMax H3"
     minimax_h3_reference_media = "One ordered Ref2VA reference (image or video) for MiniMax H3"
     minimax_h3_reference_conditioning = "Ordered, VAE-encoded Ref2VA reference conditioning for MiniMax H3"
+    ltx2_model = "LTX-2 model (Transformer) to load"
+    ltx2_text_encoder = "Gemma-4 tokenizer and text encoder, and the LTX-2 text connectors"
+    ltx2_audio_vae = "Audio VAE (mel spectrogram) for LTX-2"
+    ltx2_vocoder = "Vocoder (48 kHz stereo) for LTX-2"
+    ltx2_latent_upsampler = "x2 spatial latent upscaler for LTX-2's refine pass"
+    ltx2_audio_conditioning = "A soundtrack to generate a picture for (audio-to-video)"
+    ltx2_full_video_conditioning = "A clip to generate a soundtrack for (video-to-audio)"
+    ltx2_video_conditioning = "First-frame (VAE-latent) conditioning for LTX-2"
     sdxl_main_model = "SDXL Main model (UNet, VAE, CLIP1, CLIP2) to load"
     sdxl_refiner_model = "SDXL Refiner Main Modde (UNet, VAE, CLIP2) to load"
     onnx_main_model = "ONNX Main model (UNet, VAE, CLIP) to load"
@@ -404,6 +412,42 @@ class Krea2ConditioningField(BaseModel):
     )
 
 
+class Krea2StyleReferenceField(BaseModel):
+    """Style-reference conditioning for Krea-2 shared-KV reference attention.
+
+    Carries the VAE-encoded reference latents plus the tuning parameters that shape how strongly, and in
+    which frequency bands, the reference influences the target. The reference must be encoded at exactly
+    the denoise node's resolution, so the dims travel with it for an early, legible mismatch error.
+
+    Only ``style_strength`` is meant for everyday use; it modulates several of the others. The remainder
+    are exposed for tuning and should be left at their defaults.
+    """
+
+    reference_latents_name: str = Field(description="Name of the saved [1, 16, 1, H/8, W/8] reference latents.")
+    width: int = Field(description="Image width the reference was encoded at (must match denoise width).")
+    height: int = Field(description="Image height the reference was encoded at (must match denoise height).")
+    style_strength: float = Field(
+        default=1.0,
+        description="Overall style strength. 0 makes the denoise node skip the reference entirely.",
+    )
+    blocks: str = Field(default="7-27", description="Transformer blocks the reference is injected into.")
+    ref_k_strength: float = Field(default=1.06, description="Multiplier on the reference key path.")
+    adain_strength: float = Field(default=0.85, description="Reference statistics applied to the target Q/K.")
+    value_mode: Literal["target", "raw_reference", "ref_mean", "target_adain", "target_adain_plus_ref"] = Field(
+        default="target_adain_plus_ref", description="How the reference value vectors are constructed."
+    )
+    value_adain_strength: float = Field(
+        default=0.65,
+        description="Reference statistics applied to the target value path. Has no effect while ref_value_mix is 1.0.",
+    )
+    ref_value_mix: float = Field(default=1.0, description="How much raw reference value signal is kept.")
+    high_scale_start: float = Field(default=1.04, description="High-frequency reference key scale at step 0.")
+    high_scale_end: float = Field(default=0.0, description="High-frequency reference key scale at the last step.")
+    low_scale_start: float = Field(default=1.0, description="Low-frequency reference key scale at step 0.")
+    low_scale_end: float = Field(default=1.10, description="Low-frequency reference key scale at the last step.")
+    beta: float = Field(default=2.5, description="Exponent of the high-to-low frequency falloff curve.")
+
+
 class AnimaConditioningField(BaseModel):
     """An Anima conditioning tensor primitive value.
 
@@ -460,6 +504,71 @@ class MiniMaxH3ConditioningField(BaseModel):
     """
 
     conditioning_name: str = Field(description="The name of conditioning tensor")
+
+
+class LTX2ConditioningField(BaseModel):
+    """An LTX-2 conditioning primitive value.
+
+    LTX-2 conditioning is a pair of prompt streams, one per modality, already projected by the
+    text connectors, plus the token mask the connectors emit alongside them.
+    """
+
+    conditioning_name: str = Field(description="The name of conditioning tensor")
+
+
+class LTX2VideoConditioningField(BaseModel):
+    """A frame (VAE-latent) held at one point in an LTX-2 generation.
+
+    The canvas the frame was encoded at rides along so the denoise node can reject a mismatch
+    with a named error rather than a shape failure inside the transformer.
+    """
+
+    latents_name: str = Field(description="Name of the saved [1, 128, 1, H/32, W/32] latent tensor.")
+    width: int = Field(description="Pixel width the frame was encoded at (matches denoise width).")
+    height: int = Field(description="Pixel height the frame was encoded at (matches denoise height).")
+    strength: float = Field(default=1.0, description="How strongly the frame is held, 0 (ignored) to 1 (kept exactly).")
+    frame_index: int = Field(
+        default=0,
+        description="Latent frame the image is held at. 0 is the first frame; negative counts from the end, "
+        "so -1 is the last. Resolved against the clip's own length by the denoise node, which is why an "
+        "encode stays valid when the frame count changes.",
+    )
+
+
+class LTX2AudioConditioningField(BaseModel):
+    """A soundtrack held frozen while the picture is generated (audio-to-video).
+
+    LTX-2 conditions both streams through one mask, so this is the audio-side mirror of
+    :class:`LTX2VideoConditioningField`: the rows it names are held clean and the video is free.
+    The clip's own length decides the generation's, so the frame count it implies rides along and
+    the denoise node refuses a mismatch by name.
+    """
+
+    latents_name: str = Field(description="Name of the saved packed [1, L, 128] audio latent tensor.")
+    num_audio_latents: int = Field(description="Rows in the saved tensor; 25 per second of source audio.")
+    num_frames: int = Field(description="Pixel frames the soundtrack covers, snapped down to 8n + 1.")
+    fps: float = Field(description="Frame rate the frame count was derived at.")
+    source_video_name: str = Field(description="The clip the soundtrack was taken from, for muxing it back.")
+
+
+class LTX2FullVideoConditioningField(BaseModel):
+    """A whole clip held frozen while its soundtrack is generated (video-to-audio).
+
+    Distinct from :class:`LTX2VideoConditioningField`, which anchors a single frame: this one holds
+    *every* video token, so the transformer's video stream is a given and only the audio is
+    sampled. The canvas and length ride along for the same reason the first-frame field carries a
+    canvas -- a mismatch should be named, not discovered inside the transformer.
+    """
+
+    latents_name: str = Field(description="Name of the saved [1, 128, T, H/32, W/32] latent tensor.")
+    width: int = Field(description="Pixel width the clip was encoded at.")
+    height: int = Field(description="Pixel height the clip was encoded at.")
+    num_frames: int = Field(description="Pixel frames the clip covers.")
+    fps: float = Field(description="The clip's own frame rate, which the generation adopts.")
+    source_video_name: str = Field(
+        description="The clip these latents were encoded from. The decode muxes its own frames back in rather "
+        "than rendering the held latents, which would hand the user a VAE round trip of footage they already have."
+    )
 
 
 class MiniMaxH3FrameConditioningField(BaseModel):

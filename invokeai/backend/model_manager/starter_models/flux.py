@@ -76,6 +76,23 @@ flux_schnell = StarterModel(
     dependencies=[t5_base_encoder, flux_vae, clip_l_encoder],
 )
 
+# A community repack -- neither BFL nor Comfy-Org publishes an int8 build of FLUX.1. Pinned to a
+# commit rather than `main`, which here is a correctness matter and not just reproducibility: the
+# decode follows the file's own `comfy_quant` marker, which says `convrot: true` at group size 256.
+# A reupload at the same path that changed or dropped that flag would be derotated wrongly, and the
+# result loads cleanly, logs its layer count and generates noise.
+flux_dev_int8 = StarterModel(
+    name="FLUX.1 dev (int8)",
+    base=BaseModelType.Flux,
+    source="https://huggingface.co/AX1Y2JP/FLUX.1-dev-INT8-ConvRot/resolve/01a17db182d52088b222d615ce54729fa090b378/flux1-dev-int8-convrot.safetensors",
+    description="FLUX dev transformer in ComfyUI int8_tensorwise, from a community repack (no "
+    "first-party int8 build of FLUX.1 exists). Half the memory of the bfloat16 transformer at 8 bits "
+    "per weight, on every supported GPU - FLUX.1 dev (quantized) is smaller still, at 4. Total size "
+    "with dependencies: ~18GB",
+    type=ModelType.Main,
+    dependencies=[t5_8b_quantized_encoder, flux_vae, clip_l_encoder],
+)
+
 flux_dev = StarterModel(
     name="FLUX.1 dev",
     base=BaseModelType.Flux,

@@ -1,36 +1,10 @@
 /**
- * Engine-transient pixel selection.
+ * Engine-owned, unpersisted selection state uses snapshots for undo. The bounded document-space alpha mask is
+ * authoritative for clipping and boolean operations; paths serve only ants rendering.
  *
- * Per the plan's state-tier table, a selection is *interaction* state: it lives
- * on the engine, never in the reducer contract. It is undoable only through the
- * engine's own history, which {@link SelectionState.snapshot} / `restore` serve
- * (see `selectionHistory.ts`); persistence never sees it. The source
- * of truth is the set of closed `Path2D` polygons the lasso tool commits; the
- * derived artifact is a bounded **mask surface** (alpha 255 inside the
- * selection), sized to the selection extent and placed in document space (a
- * {@link PlacedSurface}), built through the {@link RasterBackend} seam. Boolean ops
- * (`replace`/`add`/`subtract`/`intersect`) are applied to the MASK — that is the
- * single source of truth for painting/fill clipping. The committed path list is
- * kept only for {@link marchingAnts} rendering (stroking the outlines), not for
- * re-deriving the mask.
- *
- * ## Marching ants
- *
- * A `replace` strokes its own path. Every boolean op (`add` / `subtract` /
- * `intersect`) re-traces the mask's true edge via {@link traceMaskOutlinePath},
- * the same way {@link SelectionState.replaceMask} does, so the ants show the
- * boolean result rather than the union of the source outlines. `selectAll` /
- * `invert` keep their document-border path. When a trace yields nothing after
- * an `add` (a raster stub with no readable pixels), the source paths are
- * stroked instead; after `subtract` / `intersect` an empty trace means the mask
- * is empty, and the selection is dropped.
- *
- * ## Emptiness
- *
- * `hasSelection` is structural for `replace` / `add` (they cannot empty the
- * mask) and pixel-derived for `subtract` / `intersect` through the same trace.
- *
- * Zero React, zero import-time side effects.
+ * Replace uses its path; boolean operations retrace actual mask edges. Add may fall back to source paths when stub
+ * pixels cannot be read; empty subtract/intersect results clear selection. Replace/add emptiness is structural,
+ * while subtract/intersect inspect alpha.
  */
 
 import type { CreatePath2D } from '@workbench/canvas-engine/freehand';
@@ -68,11 +42,7 @@ export interface SelectionState {
   hasSelection(): boolean;
   /** The selection's document-space bounds, or `null` when empty. */
   bounds(): Rect | null;
-  /**
-   * The selection mask as a placed surface (alpha 255 inside) in document space,
-   * bounded to the selection extent (the `rect` records its origin/size), or
-   * `null` when empty.
-   */
+  /** Document-space mask surface and extent, or null when empty. */
   mask(): PlacedSurface | null;
   /** The committed path outlines, for marching-ants rendering. */
   antsPaths(): readonly Path2D[];
@@ -84,12 +54,7 @@ export interface SelectionState {
   replaceMask(mask: PlacedSurface): void;
   /** Selects the whole `domain` rectangle (the engine passes `content ∪ bbox`). */
   selectAll(domain: Rect): void;
-  /**
-   * Inverts the selection within `domain` (empty → select `domain`). The domain
-   * is the bounded region the complement is taken over — the engine passes
-   * `content ∪ bbox`, the coherent analogue of legacy's bounded canvas now that
-   * the document rect is retired.
-   */
+  /** Complements within a bounded domain; empty selection selects it. Engine domain is content union bbox. */
   invert(domain: Rect): void;
   /** Clears the selection (deselect). */
   clear(): void;
@@ -173,10 +138,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
     onChange();
   };
 
-  /**
-   * Ensures the mask surface exists and covers `rect` (integer bounds),
-   * preserving any existing mask pixels at their new offset when it must grow.
-   */
+  /** Ensure integer mask bounds, preserving old pixels at their shifted offset when growing. */
   const ensureMask = (rect: Rect): RasterSurface => {
     const want: Rect = roundOut(rect);
     if (!mask || !maskRect) {
@@ -219,11 +181,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
     return mask;
   };
 
-  /**
-   * Fills a path into the mask under `op`'s composite mode. The mask surface is
-   * offset by `maskRect.origin`, so the (document-space) path is drawn through a
-   * translate that maps document → surface coordinates.
-   */
+  /** Draw document paths with document-to-mask translation under the boolean operation's composite mode. */
   const fillPath = (surface: RasterSurface, origin: Vec2, path: Path2D, op: GlobalCompositeOperation): void => {
     const ctx = surface.ctx;
     ctx.save();
@@ -257,10 +215,8 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
   const replaceMask = (next: PlacedSurface): void => {
     const rect = roundOut(next.rect);
     const publishEmptyReplacement = (): void => {
-      // Replacing from a valid empty alpha result should not clear the old
-      // surface in place: clearSurface() is fallible and would run after the
-      // logical selection flags had already changed. Detach the old surface and
-      // atomically publish an empty selection instead; it is reclaimed by GC.
+      // Publish empty selection by detaching the old surface; a fallible in-place clear after changing logical
+      // flags would break atomicity.
       mask = null;
       maskRect = null;
       commits = [];
@@ -350,8 +306,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
         selected = selected || bounds !== null;
         break;
       case 'subtract':
-        // Bounds only shrink; they stay the prior over-approximation, and the
-        // trace below decides whether anything is left.
+        // Retain conservative prior bounds; tracing determines whether coverage remains.
         break;
       case 'intersect':
         selectionBounds = selectionBounds && bounds ? intersect(selectionBounds, bounds) : null;
@@ -377,8 +332,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
       return null;
     }
     const pixels = mask.ctx.getImageData(0, 0, maskRect.width, maskRect.height);
-    // A subtract that emptied the mask is the common way to get here: one alpha
-    // scan settles it without paying for two full traces.
+    // One alpha scan detects emptied subtraction without two full traces.
     let hasAlpha = false;
     for (let index = 3; index < pixels.data.length; index += 4) {
       if (pixels.data[index] !== 0) {
@@ -417,8 +371,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
       return;
     }
     const rect = roundOut(domain);
-    // The current mask, captured over the domain: draw the (offset) mask onto a
-    // domain-sized temp so the complement is taken in domain-local coordinates.
+    // Copy the placed mask into a domain-local temporary before complementing.
     const temp = backend.createSurface(Math.max(0, rect.width), Math.max(0, rect.height));
     const tctx = temp.ctx;
     tctx.setTransform(1, 0, 0, 1, 0, 0);

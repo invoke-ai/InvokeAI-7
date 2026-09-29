@@ -23,12 +23,13 @@ from invokeai.app.invocations.fields import (
 from invokeai.app.invocations.model import TransformerField
 from invokeai.app.invocations.primitives import LatentsOutput
 from invokeai.app.services.shared.invocation_context import InvocationContext
-from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat
+from invokeai.backend.model_manager.taxonomy import BaseModelType
 from invokeai.backend.patches.layer_patcher import LayerPatcher, PatchSpec
 from invokeai.backend.patches.lora_conversions.qwen_image_lora_constants import (
     QWEN_IMAGE_EDIT_LORA_TRANSFORMER_PREFIX,
 )
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
+from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes, requires_sidecar_patching
 from invokeai.backend.rectified_flow.rectified_flow_inpaint_extension import RectifiedFlowInpaintExtension
 from invokeai.backend.stable_diffusion.diffusers_pipeline import PipelineIntermediateState
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import QwenImageConditioningInfo
@@ -456,13 +457,20 @@ class QwenImageDenoiseInvocation(BaseInvocation, WithMetadata, WithBoard):
 
         noisy_seq_len = latents.shape[1]
 
-        # Determine if the model is quantized — GGUF models need sidecar patching for LoRAs
         transformer_config = context.models.get_config(self.transformer.transformer)
-        model_is_quantized = transformer_config.format in (ModelFormat.GGUFQuantized,)
+        # An nvfp4 build dequantizes each packed Linear per forward, a transient its resident size does not cover. The
+        # cache holds back the larger of this and its default working memory, not their sum: this node has no
+        # activation estimate to add it to. Read from the unlocked model, before the lock; zero for every other build.
+        dequant_bytes = peak_dequant_transient_bytes(transformer_info.model, inference_dtype)
 
         with ExitStack() as exit_stack:
-            (cached_weights, transformer) = exit_stack.enter_context(transformer_info.model_on_device())
+            (cached_weights, transformer) = exit_stack.enter_context(
+                transformer_info.model_on_device(working_mem_bytes=dequant_bytes)
+            )
             assert isinstance(transformer, QwenImageTransformer2DModel)
+            # Quantized weights (packed nvfp4 Linears, GGUF, SDNQ) cannot take a direct patch, so their LoRAs ride as
+            # sidecars. Asked of the loaded module tree: a `checkpoint` build may hold packed Linears.
+            model_is_quantized = requires_sidecar_patching(transformer, transformer_config.format)
 
             # Apply LoRA patches to the transformer
             exit_stack.enter_context(

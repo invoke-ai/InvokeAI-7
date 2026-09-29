@@ -1,12 +1,9 @@
-/**
- * Video generation's React-free values/policy surface: settings normalization,
- * the per-base/per-variant capabilities matrix, canvas math, and model-selection
- * transitions. Curated, caller-driven export list — add a symbol only when a
- * consumer needs it. UI and graph compilation arrive in later modules.
- */
+/** React-free video settings, capabilities, canvas math, and model-selection policy. */
 export type {
   MiniMaxH3TargetResolution,
   VideoAspectRatioId,
+  VideoConditioningClip,
+  VideoConditioningRole,
   VideoGenerationMode,
   VideoReferenceConditioning,
   VideoReferenceImageDetail,
@@ -20,8 +17,13 @@ export type {
 export {
   clearDeletedVideoMedia,
   cloneVideoWidgetValues,
+  createVideoConditioningClip,
+  createVideoReferenceEntry,
   createVideoSourceClip,
+  getDefaultConditioningRole,
   getDefaultReferenceConditioning,
+  getInitialVideoPatch,
+  getReferencesPatch,
   isImageWithDims,
   isVideoAspectRatioId,
   isVideoReferenceConditioning,
@@ -30,6 +32,7 @@ export {
   isVideoSourceClip,
   isVideoTargetResolution,
   isVideoWidgetValues,
+  MINIMAX_H3_HYBRID_BLOCK_RANGE,
   MINIMAX_H3_TARGET_RESOLUTIONS,
   normalizeVideoSettings,
   normalizeVideoWidgetValues,
@@ -47,7 +50,9 @@ export {
   MINIMAX_H3_FPS,
   MINIMAX_H3_NUM_FRAMES_CHOICES,
   resolveMiniMaxH3Canvas,
+  LTX2_NUM_FRAMES_STEP,
   scaleAndSnapWanDimensions,
+  snapLtx2FramesDown,
   WAN_NUM_FRAMES_DEFAULT,
   WAN_NUM_FRAMES_MAX,
   WAN_NUM_FRAMES_MIN,

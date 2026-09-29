@@ -8,21 +8,17 @@ import {
   EraserIcon,
   HandIcon,
   LassoIcon,
+  CircleArrowUpIcon,
   MaximizeIcon,
   ZoomInIcon,
   ZoomOutIcon,
 } from 'lucide-react';
-import { useCallback, useId, useMemo } from 'react';
+import { useCallback, useId, useMemo, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 
 /**
- * The editor's single tool strip, docked to the left edge and topped out
- * directly beneath the region's floating chrome islands: interaction tools on
- * top (legacy-toolbar style), viewport actions and the node-opacity slider
- * below.
- * - pan: dragging the pane moves the viewport (Shift-drag still box-selects)
- * - box-select: dragging the pane draws a selection rectangle (middle-mouse pans)
- * - lasso: dragging the pane draws a freeform selection
- * - eraser: clicking nodes or edges deletes them
+ * Pane drag follows the selected pan/box/lasso tool; eraser clicks delete. Shift selects while panning, and middle
+ * mouse pans during box selection.
  */
 export type EditorTool = 'pan' | 'box-select' | 'lasso' | 'eraser';
 
@@ -46,14 +42,20 @@ const EDITOR_TOOLBAR_TOP = 'var(--wb-center-chrome-inset, var(--chakra-spacing-2
 export const EditorToolbar = ({
   nodeOpacity,
   tool,
+  updatableNodeCount = 0,
   onNodeOpacityChange,
   onToolChange,
+  onUpdateNodes,
 }: {
   nodeOpacity: number;
   tool: EditorTool;
+  /** Nodes with a newer same-major template; the update button shows only while there are some. */
+  updatableNodeCount?: number;
   onNodeOpacityChange: (opacity: number) => void;
   onToolChange: (tool: EditorTool) => void;
+  onUpdateNodes?: () => void;
 }) => {
+  const { t } = useTranslation();
   const { fitView, zoomIn, zoomOut } = useReactFlow();
   const reduceMotion = useWorkflowPreferencesSelector((preferences) => preferences.reduceMotion);
   const opacityTriggerId = useId();
@@ -63,6 +65,12 @@ export const EditorToolbar = ({
   const onZoomInClick = useCallback(() => void zoomIn(), [zoomIn]);
   const onZoomOutClick = useCallback(() => void zoomOut(), [zoomOut]);
   const onFitViewClick = useCallback(() => void fitView({ duration: fitViewDuration }), [fitView, fitViewDuration]);
+  const fitViewRef = useRef<HTMLButtonElement>(null);
+  // The update button leaves with the last outdated node; keyboard focus steps to its stable neighbour first.
+  const onUpdateNodesClick = useCallback(() => {
+    fitViewRef.current?.focus();
+    onUpdateNodes?.();
+  }, [onUpdateNodes]);
   const onSliderValueChange = useCallback(
     (event: { value: number[] }) => onNodeOpacityChange((event.value[0] ?? 100) / 100),
     [onNodeOpacityChange]
@@ -84,17 +92,26 @@ export const EditorToolbar = ({
         <ToolbarSeparator />
         <ToolbarButton icon={ZoomInIcon} label="Zoom in" onClick={onZoomInClick} />
         <ToolbarButton icon={ZoomOutIcon} label="Zoom out" onClick={onZoomOutClick} />
-        <ToolbarButton icon={MaximizeIcon} label="Fit view" onClick={onFitViewClick} />
+        <ToolbarButton ref={fitViewRef} icon={MaximizeIcon} label="Fit view" onClick={onFitViewClick} />
+        {updatableNodeCount > 0 ? (
+          <>
+            <ToolbarSeparator />
+            <ToolbarButton
+              color="fg.warning"
+              icon={CircleArrowUpIcon}
+              label={t('nodes.updateAllNodes', { count: updatableNodeCount })}
+              onClick={onUpdateNodesClick}
+            />
+          </>
+        ) : null}
         <ToolbarSeparator />
         <Popover.Root ids={opacityIds} positioning={POPOVER_POSITIONING}>
           <Tooltip content="Node opacity" ids={opacityIds} positioning={TOOLTIP_POSITIONING}>
             <Popover.Trigger asChild>
-              {/* Matches what `ToolbarButton` renders rather than being one:
-                  `Popover.Trigger asChild` would clone that component's Tooltip
-                  wrapper instead of the button. Size is load bearing — `Toolbar`
-                  is a column Stack, so it stretches every sibling to the widest
-                  child, and one `sm` button here once widened the whole strip
-                  past the `xs` squares. */}
+              {/*
+               * Render a plain button because asChild would clone ToolbarButton's Tooltip wrapper. Match xs sizing
+               * so one child cannot stretch the column.
+               */}
               <IconButton
                 aria-label="Node opacity"
                 aria-pressed={nodeOpacity < 1}

@@ -201,15 +201,8 @@ interface LayerMenuProps {
 }
 
 /**
- * The shared layer context menu: one source of truth for the per-layer items,
- * used by both the layers panel (⋯ trigger) and the canvas surface (right-click).
- * All actions operate on `layer.id`, so they behave identically from either.
- *
- * Arrange actions are group-aware (within the layer's type group) and map to a
- * splice inside the global array, while merge-down uses global z-adjacency.
- *
- * Sibling dialogs live beside `Menu.Root` rather than inside its portal, so they
- * survive the menu closing after their action is chosen.
+ * Share per-layer actions across panel and canvas menus. Arrange within type groups; merge uses global adjacency.
+ * Keep dialogs outside the closing menu portal.
  */
 const LayerMenu = ({
   dispatch,
@@ -252,8 +245,6 @@ const LayerMenu = ({
     ? engine.exports.hasExportableLayerContent(layer.id)
     : hasPureExportableLayerContent(layer, document);
   const [internalDialogKind, setInternalDialogKind] = useState<LayerMenuDialogKind | null>(null);
-  // Controlled (canvas) vs. uncontrolled (panel): the canvas parent owns the
-  // dialog kind so its sibling survives menu close; panel rows keep it locally.
   const dialogKind = controlledDialogKind !== undefined ? controlledDialogKind : internalDialogKind;
   const setDialogKind = useCallback(
     (next: LayerMenuDialogKind | null) => {
@@ -368,8 +359,7 @@ const LayerMenu = ({
           return;
         }
       } catch {
-        // A rejected engine transaction leaves the document unchanged; report
-        // the failure through the menu instead of leaking an event exception.
+        // Report rejected transactions in the menu; the document remains unchanged.
       }
       notify.error(t('widgets.layers.actions.actionFailed'), t('widgets.layers.actions.copyFailed'));
       return;
@@ -411,8 +401,7 @@ const LayerMenu = ({
   }, [engine, layer.id]);
 
   const handleRasterize = useCallback(() => {
-    // Bakes the parametric source to pixels; the engine records ONE undoable
-    // entry (inverse re-converts to the parametric source).
+    // Rasterization records one undoable entry restoring the original parametric source.
     engine?.layers.rasterizeLayer(layer.id);
   }, [engine, layer.id]);
 
@@ -990,17 +979,8 @@ export interface CanvasLayerContextMenuTarget {
 }
 
 /**
- * The canvas-surface right-click menu: the SAME {@link LayerMenu}, anchored at the
- * cursor via a 1×1 virtual rect (no trigger DOM), controlled by `target`. The
- * canvas widget sets `target` to the hit layer + pointer position after selecting
- * it; `null` closes the menu. The layer is resolved from `target.layerId`
- * against the live document, so the shared items get the exact same inputs the
- * panel passes. Keyed by layer id so switching target resets the
- * menu's sibling-dialog state.
- *
- * Choosing a sibling-dialog action closes the menu, which nulls `target`. The
- * wrapper therefore owns the dialog-in-flight state and keeps rendering against
- * the last-known (sticky) target until the dialog closes (F1).
+ * Anchor {@link LayerMenu} at the cursor for the supplied layer id, resolved against the live document. Keep a
+ * sticky dialog target after menu closure so sibling dialogs survive; changing layer resets their state.
  */
 export const CanvasLayerContextMenu = ({
   beforeDangerItems,
@@ -1064,8 +1044,7 @@ export const CanvasLayerContextMenu = ({
       engine={engine}
       layer={layer}
       lazyMount
-      // The menu itself is visible only while the live target is set; once a
-      // sibling dialog closes it (target → null), the subtree stays mounted.
+      // Hide the menu when target clears while preserving the sibling-dialog subtree.
       open={!!target}
       positioning={positioning}
       showGroupLabels={showGroupLabels}

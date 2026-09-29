@@ -52,9 +52,7 @@ afterEach(async () => {
 
 describe('MapHoverCard', () => {
   it('marks a video with the gallery’s play badge and its duration', async () => {
-    // A video's thumbnail is a still frame, so without this the card is
-    // indistinguishable from an image's — and the badge matches the gallery
-    // tile the click will land on.
+    // Identify videos because their still thumbnails otherwise look like images.
     const text = await render({
       clientX: 10,
       clientY: 10,
@@ -91,6 +89,7 @@ describe('MapHoverCard', () => {
     });
 
     expect(mocks.getImageLabels).toHaveBeenCalledWith({ kind: 'video', name: 'clip.mp4' });
-    expect(text).toContain('clip');
+    // Named apart from the cluster's tags.
+    expect(text).toContain('Image tags: clip, surf');
   });
 });

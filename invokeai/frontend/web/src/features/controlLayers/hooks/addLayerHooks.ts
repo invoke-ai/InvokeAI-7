@@ -29,6 +29,7 @@ import type {
   Flux2ReferenceImageConfig,
   FluxKontextReferenceImageConfig,
   IPAdapterConfig,
+  Krea2ReferenceImageConfig,
   MiniMaxH3ReferenceImageConfig,
   QwenImageReferenceImageConfig,
   RegionalGuidanceIPAdapterConfig,
@@ -40,6 +41,7 @@ import {
   initialFlux2ReferenceImage,
   initialFluxKontextReferenceImage,
   initialIPAdapter,
+  initialKrea2ReferenceImage,
   initialMiniMaxH3ReferenceImage,
   initialQwenImageReferenceImage,
   initialRegionalGuidanceIPAdapter,
@@ -90,6 +92,7 @@ export const getDefaultRefImageConfig = (
   | Flux2ReferenceImageConfig
   | QwenImageReferenceImageConfig
   | WanReferenceImageConfig
+  | Krea2ReferenceImageConfig
   | MiniMaxH3ReferenceImageConfig => {
   const state = getState();
 
@@ -116,6 +119,11 @@ export const getDefaultRefImageConfig = (
   // MiniMax H3 first-frame conditioning uses the main model's own VAE + vision context
   if (base === 'minimax-h3') {
     return deepClone(initialMiniMaxH3ReferenceImage);
+  }
+
+  // Krea-2 transfers style training-free via shared-KV reference attention - no adapter model needed
+  if (base === 'krea-2') {
+    return deepClone(initialKrea2ReferenceImage);
   }
 
   if (base === 'flux' && mainModelConfig?.name?.toLowerCase().includes('kontext')) {

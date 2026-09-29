@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-/**
- * Guards against translation keys that render as raw dotted paths. Every static
- * `t('…')` literal in production source must resolve in the English catalog —
- * webv2 ships English-only today (the other locales are empty stubs behind
- * `fallbackLng: 'en'`), so en.json is the whole contract.
- */
+/** Require every static production translation key in en.json, the fallback catalog. */
 
 const enModules = import.meta.glob('../../../public/locales/en.json', { eager: true, import: 'default' });
 const sourceModules = import.meta.glob('../../**/*.{ts,tsx}', {
@@ -19,12 +14,7 @@ const en = Object.values(enModules)[0] as Record<string, unknown>;
 /** Top-level namespaces in en.json. Anchoring on these keeps the scan from matching arbitrary dotted strings. */
 const NAMESPACES = Object.keys(en);
 
-/**
- * Key prefixes built by interpolation and always called with a `defaultValue`,
- * so a miss degrades to readable English rather than a dotted path.
- * `commandPalette.commands.*`: see `entries.ts` — titles fall back to the
- * command definition's own title.
- */
+/** Dynamic prefixes are exempt only with readable defaultValue; command titles use their definition title. */
 export const DYNAMIC_KEY_PREFIXES = ['commandPalette.commands.'];
 
 const isTestModule = (path: string): boolean => /\.test\.|\.type-test\.|\.testing\./.test(path);

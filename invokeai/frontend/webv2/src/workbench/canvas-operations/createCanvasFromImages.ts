@@ -1,9 +1,6 @@
 /**
- * "New Canvas from Image": a fresh project whose canvas is sized to the
- * images, with each image imported as a raster layer at the origin.
- *
- * Runs before any canvas widget mounts for the new project, so the import
- * always lands through the reducer path of {@link importGalleryImagesToCanvas}.
+ * Create an image-sized canvas with raster layers at the origin. Before widgets mount, {@link
+ * importGalleryImagesToCanvas} uses its reducer path.
  */
 
 import type { GalleryImage } from '@features/gallery';
@@ -26,8 +23,6 @@ export const createCanvasFromImages = async (options: {
     return { projectId: null, status: 'empty' };
   }
   const created = createProject();
-  // The document and generation frame both cover the largest image; the
-  // bbox/generate-size sync then picks the matching generate dimensions.
   const width = Math.max(...images.map((image) => image.width));
   const height = Math.max(...images.map((image) => image.height));
   applyCanvasMutation(created.id, { height, type: 'resizeCanvasDocument', width });

@@ -11,7 +11,7 @@ FP8 Storage cuts a model's VRAM footprint roughly in half by keeping weights on 
 It pairs well with [Low-VRAM mode](/configuration/low-vram-mode/): low-VRAM mode streams layers between RAM and VRAM, while FP8 Storage shrinks the layers themselves.
 
 :::caution[For full precision models only]
-FP8 Storage only applies to **full precision** checkpoints (FP16 / BF16 / FP32). It is **silently a no-op** for already-quantized formats — **GGUF**, **NF4**, **int8**, and [**SDNQ**](/configuration/sdnq-quantization/) checkpoints carry their own storage precision and the loader returns a different module type that the FP8 layer cast does not touch. If your model is already quantized, the toggle has no effect; use the full-precision variant of the model if you want to enable FP8 Storage.
+FP8 Storage is meant for **full precision** checkpoints (FP16 / BF16 / FP32). It is **silently a no-op** for **GGUF**, **NF4** and [**SDNQ**](/configuration/sdnq-quantization/) checkpoints, which carry their own storage precision. **int8** and **nvfp4** single-file checkpoints keep their quantized layers as they are — the loader returns a module type the FP8 layer cast does not touch — so there the toggle reaches only the layers the build ships in full precision, and on an **Ideogram 4** int8 file nothing at all. On single-file checkpoints that ship *scaled* fp8 layers, the toggle keeps those layers in FP8 with their own scale instead of unpacking them; that is what FLUX.1, FLUX.2, Z-Image, Anima, Krea-2, Qwen-Image and Ideogram 4 all do. **MXFP8 is the exception, and there the toggle costs quality:** those files carry one exponent per 32-element block, which no GPU before Blackwell can apply, so the layers are unpacked at load and the toggle then re-encodes them as fp8 *without* any scale. Blocks whose scale sits far below 1 lose their weights to underflow. Leave it off for an MXFP8 checkpoint. If your model is already quantized, use its full-precision variant to get the full effect of FP8 Storage. Checkpoints that store FP8 weights are the exception: InvokeAI loads them at BF16 unless FP8 Storage is on, so they get it automatically when installed (see [When installing](#when-installing)).
 :::
 
 ## Requirements
@@ -31,7 +31,7 @@ The toggle works as advertised: the UNet / transformer drops by roughly 50% on t
 
 ### RTX 40-series, RTX 50-series, and Hopper — VRAM win, plus a compute win via a separate setting
 
-These GPUs have native FP8 tensor cores. FP8 *Storage* on its own still only buys the ~50% VRAM reduction, because the forward pass runs in BF16 — the hook casts weights back up to compute precision before each layer. To actually use the tensor cores you need the separate [FP8 Compute](#fp8-compute) setting, which applies to checkpoints that ship pre-quantized ("scaled fp8") rather than to full-precision ones.
+These GPUs have native FP8 tensor cores. FP8 *Storage* on its own still only buys the ~50% VRAM reduction, because the forward pass runs in BF16 — the hook casts weights back up to compute precision before each layer. To actually use the tensor cores you need the separate [FP8 Compute](#fp8-compute) setting. Note that on a checkpoint which already ships FP8 weights, FP8 Storage does something different from what this section describes — see [Checkpoints that are already FP8](#checkpoints-that-are-already-fp8).
 
 ### Older CUDA cards — still a VRAM win
 
@@ -54,6 +54,14 @@ FP8 Storage is a **per-model setting**, configured from the Model Manager:
 
 The setting takes effect on the next load. If the model is already in the cache, InvokeAI evicts the cached copy automatically so the new setting applies — even if a generation is currently using the model (the eviction is deferred until the generation finishes).
 
+### When installing
+
+- **Checkpoints that already store FP8 weights get FP8 Storage automatically.** InvokeAI reads the weight types from the file while identifying the model, not its name, so a full-precision file with "fp8" in its name is not affected. Only the denoiser counts: an all-in-one checkpoint with an FP8 text encoder beside a full-precision UNet or transformer is left alone. Without this, an FP8 checkpoint would be loaded at BF16 and take twice the VRAM.
+- **"Scaled" FP8 checkpoints are included.** Their weights only mean something together with the per-tensor scale stored beside them, and the loader keeps them in exactly that form, so the setting costs no precision at all — it simply stops InvokeAI from unpacking the file to twice its size.
+- **For any other model, tick FP8 storage next to the install source** (a file path, URL or HuggingFace repo, and in folder scan results). It applies to the models you install from there.
+
+Either way the setting stays editable under **Default Settings** afterwards. Re-identifying a model resets its default settings, including this one, to what identification chooses.
+
 :::tip[When to enable]
   Enable FP8 Storage on large models that don't fit comfortably in VRAM — FLUX dev/Klein, large SDXL checkpoints, ControlNet-XL adapters. For smaller SD1 / SD2 models, the savings are negligible and not worth the small precision trade-off.
 :::
@@ -67,6 +75,7 @@ FP8 Storage is **only** applied to layers where the precision trade-off is accep
 | Main models (SD1, SD2, SDXL)       | Yes                                             |
 | FLUX.1 / FLUX.2 Klein              | Yes                                             |
 | Z-Image, Anima, Krea-2, Qwen-Image | Yes                                             |
+| Ideogram 4 (single file)           | Yes — both transformer branches                 |
 | ControlNet, T2I-Adapter            | Yes                                             |
 | Wan                                | Not yet — the switch is shown but has no effect |
 | VAE                                | No — visible decode-quality regression          |
@@ -95,6 +104,7 @@ FP8 Storage is **near-lossless** for most workloads because:
 
 - Norms and embeddings (the precision-sensitive layers) are skipped.
 - The actual matmul still happens in FP16/BF16 — FP8 is only the on-GPU storage format.
+- On a checkpoint that is already FP8, the weights are not re-encoded at all: they stay exactly as published and are unpacked with their own scale before each layer, so there is no added rounding, and no re-quantization to undo.
 
 That said, some artifacts have been reported on:
 
@@ -109,13 +119,19 @@ If you see unexpected quality regressions, disable FP8 Storage on the affected m
 
 **FP8 Compute + partial loading** is a different story — it still works, but it costs both speed and reproducibility. See [FP8 Compute](#fp8-compute) below.
 
-(For why FP8 Storage doesn't stack on top of GGUF / NF4 / int8 checkpoints, see the callout at the top of this page.)
+(For how FP8 Storage interacts with GGUF / NF4 / SDNQ / int8 / nvfp4 checkpoints, see the callout at the top of this page.)
 
 ## FP8 Compute
 
 Everything above describes FP8 *Storage*, which changes how weights are **stored** while the math still runs in BF16. `fp8_compute` is a separate, global setting in `invokeai.yaml` that also does the **math** in FP8, on GPUs that have hardware for it. That makes generation faster, not just smaller.
 
-It is for models that were **already saved in FP8** by whoever published them — you'll often see these labelled "fp8" or "fp8_scaled" in the filename. Normally InvokeAI unpacks them back to BF16 while loading; with `fp8_compute` on, they stay as they are and run directly on the GPU's FP8 hardware. FP8 Storage is the toggle for the other case: a full-precision model you want to shrink yourself.
+It is for models that were **already saved in FP8** by whoever published them — you'll often see these labelled "fp8" or "fp8_scaled" in the filename. Without either setting InvokeAI unpacks them back to BF16 while loading, which is why such a checkpoint has FP8 Storage switched on for it when it is installed. With `fp8_compute` on they stay as they are and run directly on the GPU's FP8 hardware; with FP8 Storage on they also stay as they are, but are unpacked layer by layer during the forward pass instead.
+
+### Checkpoints that are already FP8
+
+For these, FP8 Storage does not re-encode anything — it simply stops InvokeAI from unpacking them. That matters because the file stores a per-tensor scale alongside each weight, and re-encoding the unpacked result would throw that scale away: on FLUX.2 Klein 4B roughly 3% of the weights would round to zero, for a file that was already one byte per weight. What it costs instead is a little speed, since each layer is unpacked on use. Measured on a 4090 with `fp8_compute` off, the Ideogram 4 fp8 pair generates 1024px in 40.6 s against 35.6 s on the FP8 tensor cores, and holds 8.7 GB per branch instead of the 17.3 GB the unpacked weights need — which is the difference between fitting on a 24 GB card and running out of memory during the first step.
+
+The loader reports what it kept, naming the setting that kept it — for example `Ideogram 4: kept 208 layer(s) in fp8 (scaled fp8 checkpoint, kept for FP8 Storage, dequantized per forward)`. Some loaders then hand the model to the layer cast anyway, which declines it and logs `FP8 storage skipped ... already fp8`; on FLUX.1, FLUX.2, Z-Image and Anima you therefore see both lines for the same model. Both are the intended outcome, not a failure.
 
 Not every part of a model stays in FP8 — the small, precision-sensitive pieces are always unpacked. Those are a tiny share of the weights, so you still get nearly the full VRAM saving.
 
@@ -147,7 +163,7 @@ The cache eviction is immediate for idle models, but **deferred until the next u
 
 If VRAM still hasn't dropped:
 
-- Check the InvokeAI log for `FP8 layerwise casting enabled for <model name>`. If the line isn't there, the model is on the exclusion list, or its loader does not apply FP8 yet (VAE, text encoder, LoRA, Wan — see table above).
+- Check the InvokeAI log for `FP8 layerwise casting enabled for <model name>`. If the line isn't there, the model is on the exclusion list, or its loader does not apply FP8 yet (VAE, text encoder, LoRA, Wan — see table above). For a checkpoint that is already FP8 the expected line is `FP8 storage skipped ... already fp8` instead: nothing needed re-encoding.
 - Confirm you are on CUDA. FP8 Storage is silently disabled on CPU and MPS.
 
 ### Quality regression on a specific model
@@ -163,7 +179,7 @@ You're on a PyTorch version that predates FP8 support. Reinstall InvokeAI using 
 If FP8 Storage misbehaves — crash, quality regression, OOM that shouldn't happen — please [open a GitHub issue](https://github.com/invoke-ai/InvokeAI/issues/new/choose) and include:
 
 - **What you did**: the workflow / generation step that triggered the problem, and whether it reproduces every time.
-- **Model**: exact name and variant (e.g. "FLUX.2 Klein 9B Diffusers", "SDXL Base 1.0 single-file"), and whether the file is a full-precision checkpoint or already quantized (GGUF / NF4 / int8).
+- **Model**: exact name and variant (e.g. "FLUX.2 Klein 9B Diffusers", "SDXL Base 1.0 single-file"), and whether the file is a full-precision checkpoint or already quantized (GGUF / NF4 / SDNQ / int8 / nvfp4).
 - **LoRAs**: whether any LoRAs (or ControlLoRAs) are stacked on the model, and how many.
 - **Other toggles**: Low-VRAM mode on/off, any `cpu_only` text encoder setting, configured VRAM limit.
 - **GPU**: model and VRAM size (e.g. "RTX 3090 24 GB", "RTX 4070 Ti 12 GB").

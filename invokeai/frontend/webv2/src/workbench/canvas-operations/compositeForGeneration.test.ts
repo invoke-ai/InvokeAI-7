@@ -430,8 +430,6 @@ describe('executeCompositePlan — raster adjustments baked into generation pixe
     await executeCompositePlan(planComposites(plainDoc, BBOX), harness.deps);
     expect(writeImageData).not.toHaveBeenCalled();
 
-    // Adjusted layer: brightness bake → the executor reads the temp, applies the
-    // LUT, and writes the adjusted pixels back before compositing.
     const adjustedDoc = makeDoc([
       rasterLayer('b', {
         adjustments: [

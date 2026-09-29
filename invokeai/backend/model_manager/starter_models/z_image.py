@@ -1,6 +1,9 @@
 """Z-Image starter models."""
 
-from invokeai.backend.model_manager.starter_models.common import z_image_qwen3_encoder_quantized
+from invokeai.backend.model_manager.starter_models.common import (
+    z_image_qwen3_encoder_fp4,
+    z_image_qwen3_encoder_quantized,
+)
 from invokeai.backend.model_manager.starter_models.flux import flux_vae
 from invokeai.backend.model_manager.starter_models.types import StarterModel
 from invokeai.backend.model_manager.taxonomy import (
@@ -35,6 +38,15 @@ z_image_turbo_q8 = StarterModel(
     type=ModelType.Main,
     format=ModelFormat.GGUFQuantized,
     dependencies=[z_image_qwen3_encoder_quantized, flux_vae],
+)
+
+z_image_turbo_nvfp4 = StarterModel(
+    name="Z-Image Turbo (NVFP4)",
+    base=BaseModelType.ZImage,
+    source="https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/diffusion_models/z_image_turbo_nvfp4.safetensors",
+    description="Z-Image Turbo in Comfy-Org's nvfp4 build. Its quantized layers stay packed, so it needs about a third of the full-precision transformer's memory. Requires standalone Qwen3 text encoder and Flux VAE. ~4.5GB",
+    type=ModelType.Main,
+    dependencies=[z_image_qwen3_encoder_fp4, flux_vae],
 )
 
 z_image_turbo_sdnq = StarterModel(

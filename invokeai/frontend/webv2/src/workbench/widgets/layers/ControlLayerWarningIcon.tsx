@@ -15,11 +15,6 @@ import { useSelectedMainModel } from './useSelectedMainModel';
 
 const selectCapabilitiesStatus = (snapshot: ArchitectureCapabilitiesSnapshot) => snapshot.status;
 
-/**
- * Quiet per-row indicator for a control layer that would be rejected at
- * generation time (no model, incompatible adapter, …). Renders nothing for
- * other layer types and healthy control layers.
- */
 /** `contributing` is the effective enablement; a layer gated by a group is not validated. */
 export const ControlLayerWarningIcon = ({
   layer,
@@ -50,8 +45,7 @@ export const ControlLayerWarningIcon = ({
     )
   );
 
-  // Without the table nothing can be said about the adapter. While it loads there is nothing to flag;
-  // once the load has failed, say that and where to retry, instead of calling a valid adapter unsupported.
+  // Distinguish loading/failed capabilities from unsupported adapters; failures should point to retry.
   if (!reason || (reason === 'capabilities_unavailable' && capabilitiesStatus !== 'error')) {
     return null;
   }

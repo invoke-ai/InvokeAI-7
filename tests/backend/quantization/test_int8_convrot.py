@@ -12,6 +12,7 @@ import pytest
 import torch
 
 from invokeai.backend.model_manager.taxonomy import ModelFormat
+from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes, requires_sidecar_patching
 from invokeai.backend.quantization.int8_convrot import (
     CONVROT_GROUP_SIZE,
     Int8ConvrotLinear,
@@ -19,8 +20,6 @@ from invokeai.backend.quantization.int8_convrot import (
     dequantize_convrot_weight,
     extract_int8_convrot_markers,
     parse_comfy_quant_marker,
-    peak_int8_dequant_transient_bytes,
-    requires_sidecar_patching,
     shared_regular_hadamard,
 )
 
@@ -337,10 +336,10 @@ class TestThePerForwardDequantTransient:
         multiplied into, and that product is alive alongside the derotation matmul's output."""
         model = self._model((4, CONVROT_GROUP_SIZE), (16, CONVROT_GROUP_SIZE))
 
-        assert peak_int8_dequant_transient_bytes(model, torch.bfloat16) == 2 * 16 * CONVROT_GROUP_SIZE * 2
+        assert peak_dequant_transient_bytes(model, torch.bfloat16) == 2 * 16 * CONVROT_GROUP_SIZE * 2
 
     def test_a_model_with_no_quantized_layers_needs_nothing(self) -> None:
         model = torch.nn.Module()
         model.dense = torch.nn.Linear(8, 8)
 
-        assert peak_int8_dequant_transient_bytes(model, torch.bfloat16) == 0
+        assert peak_dequant_transient_bytes(model, torch.bfloat16) == 0

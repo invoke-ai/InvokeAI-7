@@ -24,11 +24,6 @@ interface GenerateGuidanceSectionProps {
   onCommitImmediate: (patch: Partial<GenerateSettings>) => void;
 }
 
-/**
- * Creative conditioning in one place: reference images and concepts (LoRAs) are
- * the same kind of decision — a visual influence with a weight and a toggle —
- * so they share a section instead of two sibling accordions.
- */
 export const GenerateGuidanceSection = ({
   loraModels,
   models,

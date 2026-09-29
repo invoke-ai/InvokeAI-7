@@ -23,11 +23,6 @@ import { useGalleryWidget } from './GalleryWidgetContext';
 const SCROLL_CONTENT_PROPS = { py: '1' } as const;
 const CREATE_ROW_COVER = <BoardCoverIcon icon={PlusIcon} />;
 
-/**
- * The board browser: search and list controls above a grouped, collapsible
- * list of boards. Identical in both layouts — the shells only decide whether it
- * sits above the items area or beside it.
- */
 export const GalleryBoardsPanel = () => {
   const { t } = useTranslation();
   const { actions, gallery, projectName } = useGalleryWidget();
@@ -82,16 +77,13 @@ export const GalleryBoardsPanel = () => {
     void actions.createBoard(trimmedSearchTerm);
   }, [actions, groups.canCreateFromSearch, trimmedSearchTerm]);
 
-  // Enter only creates when nothing matched; with matches on screen it would
-  // be far too easy to make a near-duplicate board by reflex.
+  // Enter creates only with no matches, avoiding accidental near-duplicate boards.
   const handleSubmitSearch = useCallback(() => {
     if (!groups.hasAnyMatch) {
       createBoardFromSearch();
     }
   }, [createBoardFromSearch, groups.hasAnyMatch]);
 
-  // "+" creates straight away when the field already names the board; with an
-  // empty field there is nothing to name it, so it hands over the caret.
   const handleAddBoard = useCallback(() => {
     if (groups.canCreateFromSearch) {
       createBoardFromSearch();

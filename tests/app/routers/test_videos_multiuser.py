@@ -1208,3 +1208,161 @@ def test_single_video_mutations_are_offloaded_by_fastapi(handler: Any) -> None:
     every other request and socket event until the delete/update finished.
     """
     assert not inspect.iscoroutinefunction(handler)
+
+
+# --- Embedded metadata on upload -----------------------------------------------------------------
+
+
+def _tagged_upload(tmp_path: Path, tags: dict[str, str]) -> bytes:
+    """A real H.264 MP4 carrying ``tags`` as keyed metadata, as an InvokeAI download would."""
+    import numpy as np
+
+    from invokeai.app.util.mp4_metadata import write_mp4_tags
+    from invokeai.app.util.video_encoding import make_mp4_writer
+
+    plain = tmp_path / "plain.mp4"
+    writer = make_mp4_writer(plain, fps=8.0)
+    try:
+        for _ in range(2):
+            writer.append_data(np.zeros((16, 16, 3), dtype=np.uint8))
+    finally:
+        writer.close()
+    tagged = tmp_path / "tagged.mp4"
+    write_mp4_tags(plain, tagged, tags)
+    return tagged.read_bytes()
+
+
+def _upload(client: TestClient, token: str, body: bytes, metadata: str | None = None):
+    with (
+        patch(
+            "invokeai.app.api.routers.videos.probe_media_streams",
+            return_value=MediaProbe(video_codec="h264", audio_codec=None),
+        ),
+        patch("invokeai.app.api.routers.videos._probe_decodable_video", return_value=((16, 16, 0.25, 8.0), None)),
+    ):
+        return client.post(
+            "/api/v1/videos/upload",
+            params={"video_category": "general", "is_intermediate": False},
+            files={"file": ("video.mp4", body, "video/mp4")},
+            data={} if metadata is None else {"metadata": metadata},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+
+def test_upload_video_recovers_metadata_workflow_and_graph_embedded_in_the_file(
+    client: TestClient, mock_invoker: Invoker, user1_token: str, tmp_path: Path
+):
+    mock_invoker.services.videos.create.return_value = _uploaded_video_dto()
+    tags = {
+        "invokeai_metadata": json.dumps({"seed": 42, "generation_mode": "wan_t2v", "metadata_version": "1.0.0"}),
+        "invokeai_workflow": json.dumps(
+            {
+                "name": "wf",
+                "author": "",
+                "description": "",
+                "version": "",
+                "contact": "",
+                "tags": "",
+                "notes": "",
+                "exposedFields": [],
+                "meta": {"version": "3.0.0", "category": "user"},
+                "nodes": [],
+                "edges": [],
+                "form": {"elements": {}, "rootElementId": "root"},
+            }
+        ),
+        "invokeai_graph": json.dumps({"nodes": {}, "edges": []}),
+    }
+
+    response = _upload(client, user1_token, _tagged_upload(tmp_path, tags))
+
+    assert response.status_code == status.HTTP_201_CREATED
+    kwargs = mock_invoker.services.videos.create.call_args.kwargs
+    assert kwargs["metadata"] == tags["invokeai_metadata"]
+    assert kwargs["workflow"] == tags["invokeai_workflow"]
+    assert kwargs["graph"] == tags["invokeai_graph"]
+
+
+def test_upload_video_client_metadata_wins_over_the_embedded_copy(
+    client: TestClient, mock_invoker: Invoker, user1_token: str, tmp_path: Path
+):
+    mock_invoker.services.videos.create.return_value = _uploaded_video_dto()
+    tags = {"invokeai_metadata": '{"seed": 42}', "invokeai_graph": '{"nodes": {}, "edges": []}'}
+
+    response = _upload(client, user1_token, _tagged_upload(tmp_path, tags), metadata='{"seed": 7}')
+
+    assert response.status_code == status.HTTP_201_CREATED
+    kwargs = mock_invoker.services.videos.create.call_args.kwargs
+    assert kwargs["metadata"] == '{"seed": 7}'
+    assert kwargs["workflow"] is None
+    assert kwargs["graph"] == tags["invokeai_graph"]
+
+
+def test_upload_video_without_embedded_tags_stores_no_metadata(
+    client: TestClient, mock_invoker: Invoker, user1_token: str
+):
+    mock_invoker.services.videos.create.return_value = _uploaded_video_dto()
+    mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 12
+
+    response = _upload(client, user1_token, mp4)
+
+    assert response.status_code == status.HTTP_201_CREATED
+    kwargs = mock_invoker.services.videos.create.call_args.kwargs
+    assert (kwargs["metadata"], kwargs["workflow"], kwargs["graph"]) == (None, None, None)
+
+
+def test_upload_recovers_embedded_tags_from_a_file_the_ingest_path_rewrites(
+    client: TestClient, mock_invoker: Invoker, user1_token: str, tmp_path: Path
+):
+    """The ingest remux does not carry keyed metadata, so extraction must happen on the file as
+    uploaded. An h264 MP4 with mp3 audio takes the real ingest path (no probes patched)."""
+    from invokeai.app.util.mp4_metadata import read_mp4_tags, write_mp4_tags
+
+    plain = _make_fixture_media(
+        tmp_path / "plain.mp4",
+        *("-f", "lavfi", "-i", "testsrc2=s=64x48:r=8:d=1"),
+        *("-f", "lavfi", "-i", "sine=frequency=440:d=1"),
+        *("-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "libmp3lame", "-shortest"),
+    )
+    tags = {
+        "invokeai_metadata": '{"seed": 5, "generation_mode": "wan_t2v"}',
+        "invokeai_graph": '{"nodes": {}, "edges": []}',
+    }
+    tagged = tmp_path / "tagged.mp4"
+    write_mp4_tags(plain, tagged, tags)
+    stored_tags: list[dict[str, str]] = []
+
+    def create(**kwargs: Any) -> VideoDTO:
+        stored_tags.append(read_mp4_tags(Path(kwargs["source_path"]), keys=tags))
+        return _uploaded_video_dto()
+
+    mock_invoker.services.videos.create.side_effect = create
+
+    response = client.post(
+        "/api/v1/videos/upload",
+        params={"video_category": "user", "is_intermediate": False},
+        files={"file": ("clip.mp4", tagged.read_bytes(), "video/mp4")},
+        headers={"Authorization": f"Bearer {user1_token}"},
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+    kwargs = mock_invoker.services.videos.create.call_args.kwargs
+    assert kwargs["metadata"] == tags["invokeai_metadata"]
+    assert kwargs["graph"] == tags["invokeai_graph"]
+    # The converted file reaching create() has lost the tags — which is why extraction ran first.
+    assert stored_tags == [{}]
+
+
+def test_upload_ignores_an_embedded_metadata_record_over_the_form_field_cap(
+    client: TestClient, mock_invoker: Invoker, user1_token: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    mock_invoker.services.videos.create.return_value = _uploaded_video_dto()
+    monkeypatch.setattr(videos_router_module, "MAX_UPLOAD_METADATA_SIZE", 64)
+    tags = {"invokeai_metadata": json.dumps({"pad": "x" * 100}), "invokeai_graph": '{"nodes": {}, "edges": []}'}
+
+    response = _upload(client, user1_token, _tagged_upload(tmp_path, tags))
+
+    assert response.status_code == status.HTTP_201_CREATED
+    kwargs = mock_invoker.services.videos.create.call_args.kwargs
+    assert kwargs["metadata"] is None
+    assert kwargs["graph"] == tags["invokeai_graph"]

@@ -9,7 +9,6 @@ import torch
 
 from invokeai.backend.model_manager.load.model_loaders.flux2_state_dict_utils import (
     convert_flux2_bfl_to_diffusers,
-    remap_flux2_layer_paths,
 )
 from invokeai.backend.quantization.fp8_scaled import FP8_DTYPE, extract_fp8_scaled_layers
 from tests.backend.model_manager.load.state_dicts.flux2_klein_4b_scaled_fp8_keys import (
@@ -91,9 +90,19 @@ def test_every_quantized_linear_is_recognized_after_the_rename() -> None:
 def test_layer_hints_are_renamed_one_to_many_for_the_fused_qkv() -> None:
     """Hints name layers in the BFL scheme; the scales are read after the rename.
 
-    Without remapping, `full_precision_matrix_mult` matches nothing and is silently ignored.
+    Without remapping, `full_precision_matrix_mult` matches nothing and is silently ignored. The
+    mapping comes from the conversion itself, so it describes what happened to *these* tensors --
+    a probe answering by name reported three destinations even for a fused qkv the converter had
+    declined to split.
     """
-    mapping = remap_flux2_layer_paths(["double_blocks.0.img_attn.qkv", "double_blocks.0.img_attn.proj"])
+    mapping: dict[str, list[str]] = {}
+    convert_flux2_bfl_to_diffusers(
+        {
+            "double_blocks.0.img_attn.qkv.weight": torch.zeros(6, 2),
+            "double_blocks.0.img_attn.proj.weight": torch.zeros(2, 2),
+        },
+        module_map=mapping,
+    )
 
     assert mapping["double_blocks.0.img_attn.qkv"] == [
         "transformer_blocks.0.attn.to_q",

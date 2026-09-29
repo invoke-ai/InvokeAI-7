@@ -43,11 +43,7 @@ const drawDiagonalLines = (
   }
 };
 
-/**
- * Builds a colour-specific repeat tile for a non-solid fill `style`, or returns
- * `null` for `'solid'` (no pattern — the colour is filled directly). The tile is
- * drawn in `color` through the backend seam.
- */
+/** Builds a color-specific repeating tile; solid fills return null for direct color drawing. */
 export const createMaskPatternTile = (
   backend: RasterBackend,
   style: CanvasMaskFillContract['style'],
@@ -75,8 +71,7 @@ export const createMaskPatternTile = (
     case 'grid':
     case 'horizontal':
     case 'vertical': {
-      // Pixel-centred lines (0.5 offset) so 1px strokes stay crisp, matching
-      // the legacy SVG tiles (lines at 0.5 / 3.5 / 6.5, etc.).
+      // Half-pixel alignment keeps 1px strokes crisp, matching legacy SVG tiles.
       for (let p = 0.5; p < spec.size; p += spec.spacing) {
         if (style !== 'horizontal') {
           ctx.beginPath();
@@ -97,12 +92,7 @@ export const createMaskPatternTile = (
   return tile;
 };
 
-/**
- * Produces a colorized RGBA surface the size of the mask cache: the mask's alpha
- * is the stencil, the `fill` supplies the colour (solid) or a repeat `tile`
- * (pattern), composited `source-in`. The caller blits the result through the
- * layer transform.
- */
+/** Colorizes cache alpha with solid fill or repeat tile via source-in; the caller applies the layer transform. */
 export const colorizeMask = (
   backend: RasterBackend,
   mask: RasterSurface,

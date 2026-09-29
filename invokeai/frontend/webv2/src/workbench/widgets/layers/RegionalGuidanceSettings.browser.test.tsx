@@ -112,9 +112,8 @@ describe('RegionalGuidanceSettings per model base', () => {
 
 describe('RegionalGuidanceSettings before the capability table arrives', () => {
   it('does not accuse a supported model of lacking a regional path', async () => {
-    // `getRegionalGuidanceSupport` answers `null` for every base while the table is missing. The
-    // panel used to read that as "unsupported model" and say so in a role="alert" -- for SD-1,
-    // permanently if the load failed -- while rendering the very controls it called unavailable.
+    // Missing capabilities must not announce supported regional models as unsupported while rendering their
+    // controls.
     await render('sd-1', createLayer());
 
     expect(alerts()).toEqual([]);

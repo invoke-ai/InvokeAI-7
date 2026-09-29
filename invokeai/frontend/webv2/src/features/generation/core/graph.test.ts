@@ -127,6 +127,13 @@ const mistralEncoder: ComponentModelConfig = {
   name: 'Mistral Encoder',
   type: 'mistral_encoder',
 };
+const ministralEncoder: ComponentModelConfig = {
+  base: 'any',
+  key: 'ministral',
+  name: 'Ministral 3B Encoder',
+  type: 'mistral_encoder',
+  variant: 'ministral3_3b',
+};
 const qwen3Encoder: ComponentModelConfig = {
   base: 'any',
   key: 'qwen3',
@@ -323,9 +330,7 @@ describe('compileGenerateGraph', () => {
   });
 
   it('keeps an SD3 VAE override its picker would hide out of the graph', () => {
-    // The slot is optional, so validation never looks at it and the picker only hides a stale
-    // selection. The builder used to send whatever was stored -- a FLUX VAE left over from a model
-    // switch reached `sd3_model_loader`.
+    // Builders must filter stale optional overrides that required-slot validation never sees.
     const graph = compile(sd3Model, { vae: fluxVae });
 
     expect(graph.nodes.model_loader?.vae_model).toBeUndefined();
@@ -335,9 +340,7 @@ describe('compileGenerateGraph', () => {
   });
 
   it('sends the Qwen Image loader every VAE its picker offers', () => {
-    // Regression: the picker read the served row, which lists Qwen-Image VAEs installed under
-    // `anima`, while the builder filtered to base `qwen-image`. A checkpoint model then failed to
-    // compile, and a Diffusers model silently dropped the override the user had selected.
+    // Picker and compiler must agree for a Qwen VAE registered under anima.
     const animaRegisteredVae: VaeModelConfig = {
       base: 'anima',
       key: 'anima-qwen-vae',
@@ -772,6 +775,30 @@ describe('Krea-2, Ideogram 4 and Wan graphs', () => {
     name: 'Ideogram 4',
     type: 'main',
   };
+  const ideogram4Conditional: MainModelConfig = {
+    base: 'ideogram-4',
+    branch: 'conditional',
+    format: 'checkpoint',
+    key: 'ideogram4-cond',
+    name: 'Ideogram 4 (single file, fp8)',
+    type: 'main',
+  };
+  const ideogram4Unconditional: MainModelConfig = {
+    base: 'ideogram-4',
+    branch: 'unconditional',
+    format: 'checkpoint',
+    key: 'ideogram4-uncond',
+    name: 'Ideogram 4 Unconditional (single file, fp8)',
+    type: 'main',
+  };
+  const ideogram4Vae: VaeModelConfig = { base: 'flux2', key: 'flux2-vae', name: 'FLUX.2 VAE', type: 'vae' };
+  const qwen3Vl8bEncoder: ComponentModelConfig = {
+    base: 'any',
+    key: 'qwen3-vl-8b',
+    name: 'Qwen3-VL 8B',
+    type: 'qwen3_vl_encoder',
+    variant: 'qwen3_vl_8b',
+  };
   const wanDiffusers: MainModelConfig = {
     base: 'wan',
     format: 'diffusers',
@@ -786,6 +813,7 @@ describe('Krea-2, Ideogram 4 and Wan graphs', () => {
     key: 'qwen3-vl',
     name: 'Qwen3-VL',
     type: 'qwen3_vl_encoder',
+    variant: 'qwen3_vl_4b',
   };
   const wanLowNoise: MainModelConfig = {
     base: 'wan',
@@ -824,8 +852,7 @@ describe('Krea-2, Ideogram 4 and Wan graphs', () => {
   });
 
   it('sends an anima-registered Qwen-Image VAE to the Krea-2 loader', () => {
-    // Regression: the builder filtered VAEs to base `qwen-image`, so a Qwen-Image VAE
-    // installed under the `anima` base was dropped and the loader got no VAE at all.
+    // Graph compilation accepts compatible cross-registration VAEs.
     const animaRegisteredVae: VaeModelConfig = {
       base: 'anima',
       key: 'anima-qwen-vae',
@@ -841,8 +868,7 @@ describe('Krea-2, Ideogram 4 and Wan graphs', () => {
   });
 
   it('refuses to compile a non-diffusers Krea-2 with a missing submodel', () => {
-    // Validation runs ahead of the builder, so the user-facing reason surfaces rather than the
-    // builder's internal guard. Both layers exist; this pins which one the user actually sees.
+    // User validation errors must precede internal builder errors.
     expect(() => compile(krea2Checkpoint, { qwen3VLEncoderModel: qwen3VlEncoder })).toThrow(
       'Generate needs a VAE for non-Diffusers Krea-2 models.'
     );
@@ -916,6 +942,45 @@ describe('Krea-2, Ideogram 4 and Wan graphs', () => {
     });
   });
 
+  it('wires both Ideogram 4 branches and its standalone components for a single-file transformer', () => {
+    // Wire both Ideogram branches for every denoise step.
+    const graph = compile(ideogram4Conditional, {
+      ideogram4UnconditionalModel: ideogram4Unconditional,
+      qwen3VLEncoderModel: qwen3Vl8bEncoder,
+      vae: ideogram4Vae,
+    });
+
+    expect(graph.nodes.model_loader).toMatchObject({
+      qwen3_vl_encoder_model: qwen3Vl8bEncoder,
+      unconditional_model: ideogram4Unconditional,
+      vae_model: ideogram4Vae,
+    });
+    expect(getEdge(graph, 'denoise_latents', 'unconditional_transformer')?.source).toMatchObject({
+      field: 'unconditional_transformer',
+      node_id: 'model_loader',
+    });
+    // Two files made the image; recording one of them would not identify what ran.
+    expect(getNodeByType(graph, 'core_metadata')).toMatchObject({
+      ideogram4_unconditional_model: ideogram4Unconditional,
+      qwen3_vl_encoder: qwen3Vl8bEncoder,
+    });
+  });
+
+  it('drops a component selection that does not suit the Ideogram 4 model about to run', () => {
+    // Filter stale optional encoder overrides for bundled models.
+    const graph = compile(ideogram4Model, { qwen3VLEncoderModel: qwen3VlEncoder });
+
+    expect(graph.nodes.model_loader?.qwen3_vl_encoder_model).toBeUndefined();
+  });
+
+  it('leaves the Ideogram 4 unconditional input unconnected for a diffusers pipeline', () => {
+    // The bundled transformer already contains both branches; another branch is invalid.
+    const graph = compile(ideogram4Model);
+
+    expect(getEdge(graph, 'denoise_latents', 'unconditional_transformer')).toBeUndefined();
+    expect(graph.nodes.model_loader?.unconditional_model).toBeUndefined();
+  });
+
   it('forwards the Ideogram 4 color palette to the caption builder', () => {
     const graph = compile(ideogram4Model, { ideogram4ColorPalette: ['teal', 'ochre'] });
 
@@ -938,8 +1003,7 @@ describe('Krea-2, Ideogram 4 and Wan graphs', () => {
   });
 
   it('passes the optional Wan low-noise expert through and leaves it unset otherwise', () => {
-    // Unset optional model fields stay `undefined` here, matching every other builder; they
-    // drop out when the graph is serialized rather than reaching the backend as null.
+    // Omit undefined optional fields instead of serializing null.
     expect(compile(wanDiffusers).nodes.model_loader?.transformer_low_noise_model).toBeUndefined();
     expect(compile(wanDiffusers, { wanLowNoiseModel: wanLowNoise }).nodes.model_loader).toMatchObject({
       transformer_low_noise_model: wanLowNoise,
@@ -981,9 +1045,7 @@ describe('ERNIE-Image graphs', () => {
   };
 
   it('encodes the negative prompt only while CFG is on', () => {
-    // `negative_conditioning` is required when guidance_scale != 1 and unused otherwise, and the
-    // coverage suite only ever compiles at the base default of 4 — so the CFG-off branch is
-    // compiled nowhere else. ERNIE-Image-Turbo ships `guidance=1.0`, which is how a user gets there.
+    // Exercise explicit CFG-off wiring: negative conditioning is required only above 1.
     const withCfg = compile(ernieModel, { cfgScale: 4 });
 
     expect(withCfg.nodes.neg_cond?.type).toBe('ernie_image_text_encoder');
@@ -999,17 +1061,34 @@ describe('ERNIE-Image graphs', () => {
     expect(withoutCfg.nodes.denoise_latents?.guidance_scale).toBe(1);
   });
 
+  it('wires a single-file transformer to the encoder and VAE it was given', () => {
+    // Assert encoder/VAE edges because their identifier types permit accidental swapping.
+    const singleFile: MainModelConfig = { ...ernieModel, format: 'checkpoint', key: 'ernie-image-single' };
+
+    const graph = compile(singleFile, { mistralEncoderModel: ministralEncoder, vae: flux2Vae });
+
+    expect(graph.nodes.model_loader).toMatchObject({
+      text_encoder_model: { key: 'ministral' },
+      vae_model: { key: 'flux2-vae' },
+    });
+  });
+
+  it('keeps a FLUX.2 Mistral encoder its picker would hide out of the graph', () => {
+    // Filter optional encoder variants even when required-slot validation skips them.
+    const graph = compile(ernieModel, { mistralEncoderModel: mistralEncoder });
+
+    expect(graph.nodes.model_loader?.text_encoder_model).toBeUndefined();
+  });
+
   it('builds the rest of the graph out of the one bundled pipeline', () => {
     const graph = compile(ernieModel, { scheduler: 'dpmpp_2m' });
 
     expect(graph.nodes.canvas_output?.type).toBe('ernie_image_vae_decode');
     expect(getEdge(graph, 'canvas_output', 'vae')?.source.node_id).toBe('model_loader');
     expect(getEdge(graph, 'denoise_latents', 'transformer')?.source.node_id).toBe('model_loader');
-    // The loader can hold a prompt enhancer resident, which cannot be idle-offloaded; Generate
-    // never surfaces it, so the graph has to keep asking for it to stay unloaded.
+    // Unload the unused prompt enhancer because it cannot idle-offload.
     expect(graph.nodes.model_loader?.use_prompt_enhancer).toBe(false);
-    // The node's scheduler is a euler/heun/lcm Literal, so a standard-set value left over from
-    // another model has to be coerced before it reaches the graph.
+    // Coerce to ERNIE's supported scheduler set.
     expect(graph.nodes.denoise_latents?.scheduler).toBe('euler');
   });
 });
@@ -1164,8 +1243,7 @@ describe('PiD decode', () => {
   });
 
   it('refuses to compile PiD on an unsupported base rather than silently ignoring it', () => {
-    // CogView4 has no PiD decode node. Falling back to an ordinary decode would leave the
-    // user wondering why the output is not 4x.
+    // Reject unsupported PiD rather than silently use ordinary decode.
     expect(() => compile(cogView4Model, { pidMode: 'fit' })).toThrow(/PiD is not supported/);
   });
 

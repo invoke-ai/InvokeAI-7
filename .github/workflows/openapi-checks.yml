@@ -90,13 +90,13 @@ jobs:
         with:
           version: '0.11.28'  # When updating this, make sure the version in launcher's package.json gets updated too.
           enable-cache: true
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: setup python
         if: ${{ steps.changed-files.outputs.src_any_changed == 'true' || inputs.always_run == true }}
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: install dependencies
         if: ${{ steps.changed-files.outputs.src_any_changed == 'true' || inputs.always_run == true }}

@@ -70,19 +70,7 @@ const lastPreview = (): number[] => (onPreview.mock.calls.at(-1)?.[0] as number[
 
 const lastCommit = (): number[] => (onCommit.mock.calls.at(-1)?.[0] as number[] | undefined) ?? [];
 
-/**
- * Puts the pointer somewhere harmless and undoes any scroll a previous test
- * left behind.
- *
- * Every tap here is a synthetic PointerEvent at a computed coordinate, but the
- * *real* cursor keeps whatever position the last test gave it. Left over the
- * track, it emits its own pointer events at its own location, and the component
- * dutifully reports that index — an instrumented failure showed the intended
- * `7` arriving and then a spurious `6` after it, which is what breaks
- * `toHaveBeenLastCalledWith`. The same run showed the track's `left` at -393
- * rather than 0, i.e. the document had been scrolled sideways by another test,
- * which moves which bar the stationary cursor is over.
- */
+/** Reset real pointer and scroll state to prevent interference from synthetic events. */
 const resetPointerAndScroll = async (): Promise<void> => {
   const parking = document.createElement('div');
 
@@ -149,9 +137,7 @@ describe('ConditioningRebalanceBars', () => {
       track.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, ...target }));
     });
 
-    // Deliberately loose about the value: pointing high up the track must raise that
-    // column well clear of its neighbours, but the exact pixel-to-weight mapping shifts
-    // with the track's padding and border and is not what this is guarding.
+    // Assert value ranges independently of incidental padding/border pixel mapping.
     const previewed = lastPreview()[3] ?? 0;
 
     expect(previewed).toBeGreaterThan(REBALANCE_NEUTRAL_WEIGHT);
@@ -173,14 +159,11 @@ describe('ConditioningRebalanceBars', () => {
     await interact(() => {
       track.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, ...pointAt(track, 0, 0) }));
     });
-    // One large move from the first column to the last: the columns in between get
-    // no pointer sample of their own and must still be filled in.
+    // One large pointer move must interpolate unsampled columns.
     await interact(() => window.dispatchEvent(new PointerEvent('pointermove', pointAt(track, 11, 8))));
 
     const painted = lastPreview();
 
-    // The sweep ran bottom-left to top-right, so the ends should sit near the extremes
-    // and every column between them should rise. Ranges, not exact values.
     expect(painted[0] ?? 0).toBeLessThan(REBALANCE_NEUTRAL_WEIGHT);
     expect(painted[11] ?? 0).toBeGreaterThan(SCALE / 2);
 

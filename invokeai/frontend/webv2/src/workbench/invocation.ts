@@ -17,6 +17,7 @@ import {
   getGenerationValidationReasons,
   isSupportedGenerateModel,
   normalizeGenerateWidgetValues,
+  sanitizeBatchCount,
 } from '@features/generation/settings';
 import { getUpscaleValidationReasons, normalizeUpscaleWidgetValues } from '@features/upscale';
 import { getVideoWidgetValidationReasons, normalizeVideoWidgetValues } from '@features/video';
@@ -26,16 +27,9 @@ import { areArraysEqual, createStableSelector } from '@platform/state/selectors'
 import { compileContributingLayers } from '@workbench/canvas-engine/api';
 
 import { getBlockingControlLayerIssues } from './controlLayerChecks';
+import { getActiveProjectGraph } from './projectWorkflows';
 import { getProjectWidgetValues } from './widgetState';
 
-/**
- * Static metadata for the Invocation Controller surfaces.
- *
- * MVP destinations are limited to Canvas and Gallery per the spec. Sources are
- * the first-party graph-bearing surfaces; only `generate` is wired in Phase 1,
- * the rest are declared so the source menu reads as a real (if partly inert)
- * placeholder for later phases.
- */
 export interface InvocationSourceMeta {
   id: InvocationSourceId;
   label: string;
@@ -143,7 +137,7 @@ export const getInvocationRouteInput = (project: Project): InvocationRouteInput 
   workflowValues: getProjectWidgetValues(project, 'workflow'),
   invocation: project.invocation,
   mountedWidgetIds: getMountedWidgetIds(project),
-  projectGraph: project.projectGraph,
+  projectGraph: getActiveProjectGraph(project),
   projectId: project.id,
 });
 
@@ -189,8 +183,18 @@ export const resolveInvocationRoute = (
   project: Project,
   mode: InvocationMode = 'global',
   route: InvocationRoute = project.invocation,
-  models?: readonly ModelConfig[]
-): ResolvedInvocationRoute => resolveInvocationRouteInput(getInvocationRouteInput(project), mode, route, models);
+  models?: readonly ModelConfig[],
+  /** Validate a specific project workflow (a captured submission target) instead of the active one. */
+  workflowDocument?: ProjectGraphState
+): ResolvedInvocationRoute =>
+  resolveInvocationRouteInput(
+    workflowDocument
+      ? { ...getInvocationRouteInput(project), projectGraph: workflowDocument }
+      : getInvocationRouteInput(project),
+    mode,
+    route,
+    models
+  );
 
 export const resolveInvocationRouteInput = (
   input: InvocationRouteInput,
@@ -201,11 +205,13 @@ export const resolveInvocationRouteInput = (
   const sourceId = route.sourceId;
   const destination = route.destination;
   const sourceWidgetId = sourceWidgetIds[sourceId];
-  // The project graph validates against its compiled readiness; templates are
-  // read imperatively, and surfaces that render the route subscribe to the
-  // templates store so the result stays live.
+  // Route-rendering surfaces subscribe to templates because readiness reads them imperatively.
   const projectGraphReadiness =
-    sourceId === 'workflow' ? getProjectGraphReadiness(input.projectGraph, getInvocationTemplatesSnapshot()) : null;
+    sourceId === 'workflow'
+      ? getProjectGraphReadiness(input.projectGraph, getInvocationTemplatesSnapshot(), {
+          batchCount: sanitizeBatchCount(input.workflowValues.batchCount),
+        })
+      : null;
   const validationReasons: Array<string | ForLoopValidationReason> = [];
 
   if (!isInvocationSourceAvailable(sourceId)) {
@@ -235,18 +241,14 @@ export const resolveInvocationRouteInput = (
   }
 
   if (sourceId === 'canvas') {
-    // Canvas shares the generate model/prompt/steps, so reuse those reasons, then
-    // require a non-degenerate generation frame (a zero-area bbox has nothing to
-    // generate into and the graph compiler would reject it anyway).
+    // Canvas shares Generate readiness and additionally requires a nonzero generation frame.
     validationReasons.push(...getGenerateSnapshotValidationReasons(input.generateValues, models));
 
     if (input.canvasBbox.width <= 0 || input.canvasBbox.height <= 0) {
       validationReasons.push('Canvas generation frame must have a positive area.');
     }
 
-    // Control layers that would make the invoke pipeline reject the document.
-    // Gated on a loaded models list so a not-yet-loaded snapshot can't produce
-    // false "missing model" blocks.
+    // Wait for models before validating control layers to avoid false missing-model errors.
     if (models) {
       const values = normalizeGenerateWidgetValues(input.generateValues);
       if (values && isSupportedGenerateModel(values.model)) {
@@ -266,10 +268,7 @@ export const resolveInvocationRouteInput = (
   }
 
   const sourceValid = validationReasons.length === 0;
-  // A video result is structurally undeliverable to the Canvas: staging is
-  // image-based and the queue runtime only boards gallery-destined videos, so
-  // a canvas-routed video run would complete with the output appearing
-  // nowhere. Block it instead of letting the result vanish.
+  // Canvas staging accepts images only; video routes must target Gallery or their outputs would be unreachable.
   const destinationCompatible = !(sourceId === 'video' && destination === 'canvas');
   const destinationAvailable = isResultDestinationAvailable(destination);
   const destinationValid = destinationAvailable && destinationCompatible;
@@ -289,6 +288,7 @@ export const resolveInvocationRouteInput = (
     sourceValid,
     validationMessage: validationReasons[0],
     validationReasons,
+    ...(projectGraphReadiness?.batch ? { workflowBatch: projectGraphReadiness.batch } : {}),
   };
 };
 

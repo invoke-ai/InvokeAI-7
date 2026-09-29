@@ -83,11 +83,7 @@ describe('readInvkArchive', () => {
     expect(contents.cover).toBeNull();
   });
 
-  /**
-   * "This file names no board" and "this project's board was empty" are different answers, and the
-   * restore treats them differently — only the first may have an empty board invented for it. An
-   * archive with no `board.json` is one a build from before project boards wrote, not a broken one.
-   */
+  /** Missing board entries retain legacy semantics; explicit empty entries describe an empty board. */
   it('reads an archive with no board enumeration as naming no board', async () => {
     const contents = await readInvkArchive(await validArchive());
 
@@ -264,10 +260,7 @@ describe('restoreArchiveMedia', () => {
     ...overrides,
   });
 
-  /**
-   * The overlap case: `a.png` is both on the board and drawn by the canvas. It travels once, as
-   * board media, and the layer follows it to the copy.
-   */
+  /** Transfer media shared by board and document once, remapping the document to the copy. */
   it('restores an overlapping item once and points the document at the copy', async () => {
     const archive = await readInvkArchive(await boardArchive());
     const ledger = createRestoredMediaLedger('staging');
@@ -357,8 +350,7 @@ describe('restoreArchiveMedia', () => {
       restoreDeps({ uploadBoardVideo })
     );
 
-    // `image/png` here would be announced to the video endpoint as an image and refused before the
-    // bytes were read.
+    // Video MIME fallbacks must pass upload type validation.
     expect(uploadBoardVideo).toHaveBeenCalledWith(new Uint8Array([7]), 'clip.unknown', {
       boardId: 'staging',
       category: 'general',

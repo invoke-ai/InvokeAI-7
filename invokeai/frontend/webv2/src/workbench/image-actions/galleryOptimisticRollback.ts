@@ -18,11 +18,8 @@ import { isSlotUnclaimed, selectUnclaimedEntries } from '@platform/state/compare
 import { getProjectWidgetValues } from '@workbench/widgetState';
 
 /**
- * Fields `removeGalleryItemsFromAllProjects` (workbenchState.ts) can mutate,
- * across every project: it strips a removed item from any project's
- * recent-generation overlay and selection, and clears the upscale widget's
- * locked input if it pointed at a removed image. None of that is visible to
- * `patchGalleryItemCaches`, which only ever touches the query cache.
+ * Track project selections, recent generations, and locked upscale inputs cleared by removal; query-cache rollback
+ * cannot restore widget state.
  */
 const TRACKED_GALLERY_REMOVAL_FIELDS: ReadonlyArray<{ key: string; widgetId: WidgetTypeId }> = [
   { key: 'compareImage', widgetId: 'gallery' },
@@ -38,13 +35,8 @@ const TRACKED_GALLERY_REMOVAL_FIELDS: ReadonlyArray<{ key: string; widgetId: Wid
 ];
 
 /**
- * Widget slots that are mutually exclusive by design (the video widget's
- * first-frame XOR initial-video rule, enforced by its setters). A rollback
- * restore is the one write path that bypasses those setters: after our
- * optimistic clear, the user may have claimed the RIVAL slot, and restoring
- * this one would recreate a pair no setter can produce — normalization then
- * masks one of the two, which reads as a silently wrong generation mode.
- * When the rival slot is occupied, the restore loses.
+ * Skip restoration when a mutually exclusive rival slot was filled after optimistic removal; bypassing setters
+ * must not recreate an invalid pair.
  */
 const EXCLUSIVE_RIVAL_FIELDS: ReadonlyArray<{ key: string; rivalKey: string; widgetId: WidgetTypeId }> = [
   { key: 'firstFrameImage', rivalKey: 'sourceVideo', widgetId: 'video' },
@@ -53,10 +45,8 @@ const EXCLUSIVE_RIVAL_FIELDS: ReadonlyArray<{ key: string; rivalKey: string; wid
   { key: 'sourceVideo', rivalKey: 'firstFrameImage', widgetId: 'video' },
   { key: 'references', rivalKey: 'firstFrameImage', widgetId: 'video' },
   { key: 'references', rivalKey: 'lastFrameImage', widgetId: 'video' },
-  // sourceVideo <-> references is deliberately NOT a rival pair: the two
-  // coexist on a Ref2VA reference-extend panel, and normalization keeps both
-  // (validation owns rejecting the pair per model). Treating them as rivals
-  // made a FAILED gallery deletion permanently drop the other slot's value.
+  // sourceVideo and references coexist for Ref2VA reference-extend; treating them as rivals would lose valid data
+  // on rollback.
 ];
 
 const trackedFieldKey = (projectId: string, widgetId: WidgetTypeId, key: string): string =>
@@ -90,13 +80,8 @@ export interface GalleryWidgetKeySnapshotEntry {
 }
 
 /**
- * Diffs the tracked fields' current value against a `before` snapshot and
- * returns only the entries the optimistic mutation actually changed, each
- * carrying both the pre-mutation and post-mutation ("after") value — the same
- * shape `patchGalleryItemCaches`'s rollback closure captures
- * (`queryCache.ts` `ItemCacheRollbackEntry`), so the restore can apply the
- * same conflict rule: only put a key back if nothing else wrote to it since.
- * Call immediately after the optimistic mutation.
+ * Immediately after optimistic mutation, capture only changed fields with before/after values so rollback can
+ * detect subsequent writes.
  */
 export const diffGalleryWidgetKeyValues = (
   before: GalleryWidgetKeyValueMap,
@@ -139,16 +124,8 @@ export interface GalleryWidgetRestorePatch {
 }
 
 /**
- * Selects which snapshot entries are still safe to restore, under the shared
- * compare-and-swap rule (`@platform/state/compareAndSwapRollback`): a key
- * restores only if its current value is still what our own mutation left it
- * at. A key something else wrote to since (a generation completing, a user
- * re-selecting) is left alone rather than clobbered. Entries for the same
- * project+widget are merged into a single patch.
- *
- * A project that has since disappeared has no slot to restore, so its entries
- * drop out before the compare rather than resolving to a bare `undefined` that
- * the check could mistake for a match.
+ * Restore only values still equal to the optimistic mutation's output, merging patches per project/widget. Drop
+ * disappeared projects before comparison so undefined cannot falsely match.
  */
 export const selectRestorableGalleryWidgetPatches = (
   entries: readonly GalleryWidgetKeySnapshotEntry[],
@@ -196,11 +173,8 @@ export interface GalleryStoreKnownItemFields {
 }
 
 /**
- * Reads the board and starred state of each requested item from whichever
- * project widget state holds it locally: the recent-generation overlay, the
- * current selection, or the compare slot. `getGalleryItemBoardIdsFromCaches`
- * /`getGalleryItemStarredFromCaches` only see items a list query has already
- * fetched; a just-generated image can be known *only* here.
+ * Read board/star state from project selection, comparison, or recent generations; newly generated items may not
+ * exist in list caches yet.
  */
 export const collectGalleryStoreKnownItemFields = (
   projects: readonly Project[],

@@ -42,6 +42,7 @@ from invokeai.backend.model_manager.load.model_cache.utils import get_effective_
 from invokeai.backend.patches.layer_patcher import LayerPatcher
 from invokeai.backend.patches.lora_conversions.flux_lora_constants import FLUX_LORA_T5_PREFIX
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
+from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes, requires_sidecar_patching
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import ConditioningFieldData, FLUXConditioningInfo
 from invokeai.backend.util.devices import TorchDevice
 
@@ -129,7 +130,15 @@ class Flux2DevTextEncoderInvocation(BaseInvocation):
 
     def _encode_prompt(self, context: InvocationContext, exit_stack: ExitStack) -> torch.Tensor:
         text_encoder_info = context.models.load(self.mistral_encoder.text_encoder)
-        (cached_weights, text_encoder) = exit_stack.enter_context(text_encoder_info.model_on_device())
+        text_encoder_format = context.models.get_config(self.mistral_encoder.text_encoder).format
+        # An nvfp4 build dequantizes each packed Linear per forward, a transient its resident size does not
+        # cover. Read from the unlocked model, before the lock the reservation applies to; zero for other builds.
+        dequant_bytes = peak_dequant_transient_bytes(
+            text_encoder_info.model, TorchDevice.choose_bfloat16_safe_dtype(text_encoder_info.compute_device)
+        )
+        (cached_weights, text_encoder) = exit_stack.enter_context(
+            text_encoder_info.model_on_device(working_mem_bytes=dequant_bytes)
+        )
 
         processor_info = context.models.load(self.mistral_encoder.tokenizer)
         (_, processor) = exit_stack.enter_context(processor_info.model_on_device())
@@ -150,6 +159,9 @@ class Flux2DevTextEncoderInvocation(BaseInvocation):
                 prefix=FLUX_LORA_T5_PREFIX,
                 dtype=lora_dtype,
                 cached_weights=cached_weights,
+                # Quantized weights (packed nvfp4 Linears, GGUF, SDNQ) cannot take a direct patch, so
+                # their LoRAs ride as sidecars.
+                force_sidecar_patching=requires_sidecar_patching(text_encoder, text_encoder_format),
             )
         )
 

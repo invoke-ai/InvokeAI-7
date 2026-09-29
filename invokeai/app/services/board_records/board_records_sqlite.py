@@ -149,6 +149,19 @@ class SqliteBoardRecordStorage(BoardRecordStorageBase):
 
             return cursor.fetchone() is not None
 
+    def get_shared_user_ids(self, board_id: str) -> list[str]:
+        with self._db.transaction() as cursor:
+            cursor.execute(
+                """--sql
+                SELECT user_id
+                FROM shared_boards
+                WHERE board_id = ?;
+                """,
+                (board_id,),
+            )
+
+            return [row["user_id"] for row in cursor.fetchall()]
+
     def update(
         self,
         board_id: str,

@@ -17,8 +17,7 @@ const ALLOWED_HOSTS = process.env.INVOKEAI_DEV_HOSTS?.split(',')
   .filter(Boolean);
 const PROJECT_ROOT = fileURLToPath(new URL('.', import.meta.url));
 
-// Modules both routes fetch eagerly. Grouping keeps a module with two
-// consumers from being split into its own request on each route.
+// Group eager dependencies shared by both routes to avoid extra chunk requests.
 const ROUTE_SHARED_MODULES = [
   '/features/fonts/data/keys.ts',
   '/features/fonts/launchpad.tsx',
@@ -51,6 +50,7 @@ const ROUTE_SHARED_MODULES = [
   '/workbench/launchpad/formatRelativeTime.ts',
   // Without this the editor pulls the whole Launchpad chunk for one lookup table.
   '/workbench/launchpad/intents.ts',
+  '/workbench/mediaReferences.ts',
   '/workbench/palette/settingsEntryDeps.ts',
   '/workbench/projects/covers.ts',
   '/workbench/projects/components/ProjectFileOptionsProvider.tsx',
@@ -65,11 +65,7 @@ const ROUTE_SHARED_MODULES = [
   '/workbench/settings/SettingsDialogHost.tsx',
 ] as const;
 
-// Modules every editor boot fetches (topbar UI plus the realtime runtime the
-// widget hosts share), folded into one chunk so they cost bytes, not requests.
-// The generation runtime, capability store and prompt-attention modules are
-// imported by the app shell and by several lazy widget chunks; left to the
-// bundler, each set becomes its own request on every editor route.
+// Group dependencies shared by the editor shell and lazy widgets to reduce boot requests.
 const EDITOR_BOOT_SHARED_MODULES = [
   '/app/GalleryUiAdapter.tsx',
   '/features/gallery/picker.ts',
@@ -92,19 +88,42 @@ const EDITOR_BOOT_SHARED_MODULES = [
   '/features/generation/core/prompt/attention.ts',
   '/features/generation/data/architectureCapabilitiesApi.ts',
   '/features/generation/data/architectureCapabilitiesStore.ts',
+  '/features/generation/data/dynamicPromptsQueries.ts',
+  '/features/generation/data/promptTemplates.ts',
+  '/features/generation/data/promptUtilities.ts',
+  '/features/generation/data/systemPrompts.ts',
+  '/features/generation/prompts.ts',
   '/features/generation/queries.ts',
   '/features/generation/runtime.ts',
   '/features/generation/ui/promptFields/promptAttentionHotkeys.ts',
-  // Shared by the Generate/Upscale/Video seed row and workflow seed inputs; left to rolldown it
-  // splits into a chunk every editor route would fetch separately.
   '/platform/ui/SeedInput.tsx',
   '/workbench/shell/topbar/LayoutPresetAdminDialogs.tsx',
   '/workbench/shell/topbar/LayoutPresetStrip.tsx',
   '/workbench/shell/topbar/ProjectSwitcher.tsx',
 ] as const;
 
-// Widget metadata shared by the registry, settings and palette; kept apart
-// from editor boot UI so Launchpad settings cannot pull in the editor.
+// The workflow core, its UI barrel and the project workflow collection are one chunk: the editor boots with all of
+// them and the Launchpad palette reaches the barrel lazily, so splitting them by importer only adds requests.
+const WORKFLOW_CORE_MODULES = [
+  '/features/workflow/core/batch.ts',
+  '/features/workflow/core/callSavedWorkflow.ts',
+  '/features/workflow/core/connectors.ts',
+  '/features/workflow/core/document.ts',
+  '/features/workflow/core/fields.ts',
+  '/features/workflow/core/forLoops.ts',
+  '/features/workflow/core/graphIndex.ts',
+  '/features/workflow/core/types.ts',
+  '/features/workflow/core/validation.ts',
+  '/features/workflow/core/workflowJson.ts',
+  '/features/workflow/data/templates.ts',
+  '/features/workflow/react.ts',
+  '/features/workflow/ui/WorkflowUiContext.tsx',
+  '/features/workflow/ui/workflowUiStore.ts',
+  '/features/workflow/utility.ts',
+  '/workbench/projectWorkflows.ts',
+] as const;
+
+// Keep widget metadata separate so Launchpad settings cannot import editor boot UI.
 const WIDGET_METADATA_MODULES = [
   '/features/gallery/settingsContribution.ts',
   '/features/queue/widget.ts',
@@ -138,9 +157,7 @@ const GALLERY_STATE_MODULES = [
   '/features/queue/data/events.ts',
 ] as const;
 
-// The widget hosts the editor mounts once at boot, in one chunk instead of
-// one request per host. Small helpers shared by lazy widget chunks ride along:
-// every editor route loads this chunk, Launchpad never does.
+// Group boot-mounted widget hosts and their shared helpers; Launchpad must not load this chunk.
 const WIDGET_HOST_MODULES = [
   '/platform/react/focusIfUnclaimed.ts',
   '/features/queue/ui/QueueDataRuntime.tsx',
@@ -148,8 +165,15 @@ const WIDGET_HOST_MODULES = [
   '/workbench/widgets/image-map/ImageMapDataRuntime.tsx',
 ] as const;
 
-// Canvas and Layers already load these interaction/form modules together.
-// Keep their shared text-tool consumers from creating extra activation requests.
+// Keep the Image Map data modules in one chunk. Its API is also reached through the Gallery's lazily loaded label
+// cache, and without this group Rolldown splits the API out, costing every editor boot a request.
+const IMAGE_MAP_DATA_MODULES = [
+  '/workbench/image-map/api.ts',
+  '/workbench/image-map/imageMapStore.ts',
+  '/workbench/image-map/indexProgress.ts',
+] as const;
+
+// Group Canvas/Layer interaction dependencies to avoid extra text-tool activation requests.
 const CANVAS_LAYER_SHARED_MODULES = [
   '/features/workflow/core/layerWorkflow.ts',
   '/workbench/canvas-operations/react.ts',
@@ -200,6 +224,7 @@ const getLegacyChunkName = (id: string): string | null => {
   if (
     matchesAnySuffix(id, [
       '/platform/i18n/client.ts',
+      '/platform/i18n/languages.ts',
       '/platform/react/useMountEffect.ts',
       '/platform/ui/theme/system.ts',
       '/workbench/hotkeys/resolve.ts',
@@ -246,8 +271,7 @@ const getLegacyChunkName = (id: string): string | null => {
 
 export default defineConfig({
   define: {
-    // A boolean, not a code string: Vitest 5 browser mode injects string
-    // values as string literals, and "false" is truthy.
+    // Use a boolean: Vitest browser mode treats string defines as truthy string literals.
     __CANVAS_GOLDEN_UPDATE__: false,
   },
   base: './',
@@ -283,6 +307,12 @@ export default defineConfig({
             },
             {
               includeDependenciesRecursively: false,
+              name: 'workflow-core',
+              priority: 30,
+              test: (id) => matchesAnySuffix(id, WORKFLOW_CORE_MODULES),
+            },
+            {
+              includeDependenciesRecursively: false,
               name: 'widget-metadata',
               priority: 30,
               test: (id) =>
@@ -293,6 +323,12 @@ export default defineConfig({
               name: 'widget-hosts',
               priority: 30,
               test: (id) => matchesAnySuffix(id, WIDGET_HOST_MODULES),
+            },
+            {
+              includeDependenciesRecursively: false,
+              name: 'imageMapStore',
+              priority: 30,
+              test: (id) => matchesAnySuffix(id, IMAGE_MAP_DATA_MODULES),
             },
             {
               // ~1 MB, only the lazy Image Map plot needs it.

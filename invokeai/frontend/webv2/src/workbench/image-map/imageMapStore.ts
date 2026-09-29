@@ -12,11 +12,7 @@ import type { ImageIndexCounts } from './indexProgress';
 import { fetchImageMapClusterLabels, fetchImageMapPoints, fetchImageMapStatus } from './api';
 import { hasProgressed } from './indexProgress';
 
-/**
- * Read model for the semantic image map, shared by the widget body and any
- * future header/footer chrome. One store, one in-flight fetch; refreshes are
- * driven by user action now and by socket events in a later runtime.
- */
+/** Shared image-map read model with one in-flight fetch and refreshes from user actions and socket events. */
 
 export interface ImageMapSnapshot {
   data: ImageMapPoints | null;
@@ -24,40 +20,33 @@ export interface ImageMapSnapshot {
   error: string | null;
   /** Embedding-index progress; only ever pushed to admins by the backend. */
   indexCounts: ImageIndexCounts | null;
-  /**
-   * When the index last actually moved, so the UI can say how long it has
-   * stood still. Not when the counts were last written: `total` shifts
-   * whenever anyone saves or deletes an image, and a generation running while
-   * the indexer waits for it must not read as the index progressing. Null
-   * whenever there are no counts.
-   */
+  /** Time of actual indexing progress, not count writes or gallery-total changes. Null without counts. */
   indexUpdatedAt: number | null;
   /** Cluster id -> automatic label info; null when unavailable (e.g. no text encoder). */
   clusterLabels: Record<string, ImageMapClusterLabelInfo> | null;
   /**
-   * The visible-set fingerprint `clusterLabels` were computed over, so a
-   * consumer can tell whether they still describe the drawn clustering.
-   *
-   * Labels lag their points by a request: a refresh replaces `data` while the
-   * previous clustering's labels are still in the store, and DBSCAN can
-   * renumber every cluster between the two. Annotations have always accepted
-   * that lag (clearing them on each refresh would blink every label off and
-   * back on), but a consumer making a stronger promise — the hover card names
-   * one specific cluster — compares this against `data.visibleHash` and shows
-   * nothing rather than another cluster's tags.
+   * Fingerprint of the visible set used for cluster labels. Labels may lag refreshed points whose cluster ids
+   * changed; precise consumers such as hover cards require equality with `data.visibleHash`.
    */
   clusterLabelsHash: string | null;
   /**
-   * The plot canvas itself failed (WebGL unavailable). Distinct from `error`,
-   * which means a fetch failed: with `error` the cached points are still worth
-   * showing, whereas here there is nothing that can draw them, so the view must
-   * stop mounting the plot and say so.
+   * The eps `clusterLabels` were clustered at. The visible-set hash alone
+   * stopped being enough once the strength became adjustable: changing it
+   * renumbers every cluster while the projection and the visible set — and
+   * so `visibleHash` — stay exactly the same, which would let the previous
+   * strength's tags be shown against the new clustering for a round trip.
+   */
+  clusterLabelsEps: number | null;
+  /**
+   * Plot/WebGL failure differs from fetch failure: cached points remain useful after fetch errors, but render
+   * errors require unmounting the plot and reporting inability to draw.
    */
   renderError: string | null;
 }
 
 const EMPTY_IMAGE_MAP_SNAPSHOT: ImageMapSnapshot = {
   clusterLabels: null,
+  clusterLabelsEps: null,
   clusterLabelsHash: null,
   data: null,
   error: null,
@@ -82,8 +71,11 @@ registerAccountOwnedResource({
   clear: () => {
     inflight = null;
     rerunRequested = false;
-    // Orphan any in-flight labels request so its completion (or failure)
-    // cannot touch the next account's labels.
+    // Per-project widget state, so it must not survive into the next
+    // account: the widget pushes the new one down when it mounts, but a
+    // socket-driven refresh could beat it there.
+    clusterEps = null;
+    // Retire label requests so old-account completion/failure cannot update the new account.
     labelsSequence += 1;
     statusInflight = null;
     indexEventSequence += 1;
@@ -92,11 +84,39 @@ registerAccountOwnedResource({
   name: 'image-map',
 });
 
+/**
+ * The eps the clustering-strength control has been set to, or null for the
+ * server's adaptive value. Pushed down from the widget rather than passed by
+ * callers: every refresh — socket-driven, manual, or the first load — has to
+ * cluster at the strength the user chose, and only this module sees them all.
+ */
+let clusterEps: number | null = null;
+
+export const setClusterEps = (eps: number | null): void => {
+  if (eps === clusterEps) {
+    return;
+  }
+
+  clusterEps = eps;
+
+  // The labels in the store describe the previous strength's cluster ids, and
+  // the refresh below will not move `visibleHash`, so nothing else retires
+  // them.
+  imageMapStore.patchSnapshot({ clusterLabels: null, clusterLabelsEps: null, clusterLabelsHash: null });
+
+  // Nothing has been fetched yet, so the first fetch will carry the new value
+  // on its own; refreshing here would race it for no gain.
+  if (imageMapStore.getSnapshot().loadState === 'idle') {
+    return;
+  }
+
+  void refreshImageMapPoints();
+};
+
 export const refreshImageMapPoints = (): Promise<void> => {
   if (inflight) {
-    // A refresh requested mid-flight (e.g. projection_ready arriving while
-    // the fetch that triggered the recompute is still running) must not be
-    // swallowed by the dedup: run once more when the current fetch settles.
+    // Coalesce mid-flight refresh requests into one rerun after settling instead of swallowing them through
+    // dedupe.
     rerunRequested = true;
 
     return inflight;
@@ -105,15 +125,13 @@ export const refreshImageMapPoints = (): Promise<void> => {
   const owner = captureAccountScope();
   imageMapStore.patchSnapshot({ loadState: 'loading' });
 
-  const refresh = fetchImageMapPoints()
+  const refresh = fetchImageMapPoints(clusterEps !== null ? { eps: clusterEps } : undefined)
     .then((data) => {
       if (!isAccountScopeCurrent(owner)) {
         return;
       }
 
-      // renderError is cleared too: a retry is the user's way out of a
-      // transient WebGL failure, so a fresh point set must get a fresh attempt
-      // at drawing rather than staying stuck on the previous canvas failure.
+      // Clear renderError on retry so fresh points receive a new WebGL draw attempt.
       imageMapStore.patchSnapshot({ data, error: null, loadState: 'loaded', renderError: null });
       refreshClusterLabels(data);
     })
@@ -173,19 +191,8 @@ const areLabelMapsEqual = (
   );
 };
 
-/**
- * Labels are decoration: fetched best-effort after the points land. Cluster
- * ids are only meaningful against the projection the points came from, so a
- * label response for a different projection — or one overtaken by a newer
- * request — is discarded rather than mislabeling clusters.
- */
-/**
- * Whether the map is currently showing labels. Pushed down from the widget's
- * toggle so the request can be skipped outright: labelling costs the server a
- * DBSCAN pass over the visible set, an embedding gather and a 1675-way matmul
- * per cluster, and it is precisely the people with galleries large enough to
- * feel that who turn the labels off.
- */
+/** Best-effort labels must match point projection and current request sequence before publication. */
+/** Skip labels entirely when hidden, avoiding server clustering, embedding gathers and vocabulary scoring. */
 let clusterLabelsEnabled = true;
 
 export const setClusterLabelsEnabled = (enabled: boolean): void => {
@@ -198,7 +205,7 @@ export const setClusterLabelsEnabled = (enabled: boolean): void => {
   if (!enabled) {
     // Bump the sequence so a request already in flight cannot land after this.
     labelsSequence += 1;
-    imageMapStore.patchSnapshot({ clusterLabels: null, clusterLabelsHash: null });
+    imageMapStore.patchSnapshot({ clusterLabels: null, clusterLabelsEps: null, clusterLabelsHash: null });
 
     return;
   }
@@ -211,22 +218,14 @@ export const setClusterLabelsEnabled = (enabled: boolean): void => {
 };
 
 /**
- * Backoff for a labels request the server could not answer yet. The 409 the
- * vocabulary build window answers with literally says "try again shortly":
- * the build is already queued server-side the moment that response is sent,
- * and the index worker lands it within seconds (a 1s poll, plus a disk-cached
- * phrase matrix). The schedule's tail covers a cold build — minutes on a
- * fresh install — while staying bounded; after it exhausts, the state is the
- * old one: no labels until the next points refresh or the label toggle.
+ * Bounded label backoff covers pending vocabulary builds, including cold starts. After exhaustion, the next points
+ * refresh or label toggle retries.
  */
 const LABELS_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, 30_000, 60_000, 60_000, 60_000];
 
 /**
- * Failures worth retrying: the 409s (`TextSearchUnavailableError` — the
- * vocabulary still building, or the text tower absent), 5xx, and the network
- * refusal of a restarting backend (`fetch` rejects with TypeError). Auth and
- * contract failures (401, 403, 422) are permanent from this client's side and
- * settle on the first response.
+ * Retry 409 vocabulary/text-tower unavailability, 5xx and fetch TypeErrors. Auth/contract failures 401, 403 and
+ * 422 settle immediately.
  */
 const isRetryableLabelsFailure = (error: unknown): boolean => {
   if (error instanceof ApiError) {
@@ -236,17 +235,10 @@ const isRetryableLabelsFailure = (error: unknown): boolean => {
   return error instanceof TypeError;
 };
 
-/**
- * One attempt of the labels fetch, retrying retryable failures on the
- * schedule above. The `sequence` is the guard every deferred step re-checks:
- * a newer labels request, the label toggle, or an account switch bumps it and
- * retires this attempt's callbacks outright.
- */
+/** Every deferred retry checks sequence; newer requests, toggles and account switches retire prior callbacks. */
 const attemptClusterLabels = (sequence: number, data: ImageMapPoints, attempt: number): void => {
-  // Pass the points' effective eps so both requests cluster with the same
-  // value — the adaptive default is derived from the visible set, which can
-  // drift between the two requests. Same eps alone does not pin cluster ids
-  // under drift; the visibleHash comparison below discards those responses.
+  // Reuse the points' effective eps, but still require visibleHash equality because cluster ids can drift with the
+  // visible set.
   void fetchImageMapClusterLabels(data.clusterEps !== null ? { eps: data.clusterEps } : undefined)
     .then((response) => {
       const current = imageMapStore.getSnapshot();
@@ -260,7 +252,11 @@ const attemptClusterLabels = (sequence: number, data: ImageMapPoints, attempt: n
       }
 
       if (!areLabelMapsEqual(current.clusterLabels, response.labels)) {
-        imageMapStore.patchSnapshot({ clusterLabels: response.labels, clusterLabelsHash: response.visibleHash });
+        imageMapStore.patchSnapshot({
+          clusterLabels: response.labels,
+          clusterLabelsEps: data.clusterEps,
+          clusterLabelsHash: response.visibleHash,
+        });
       }
     })
     .catch((error: unknown) => {
@@ -271,17 +267,14 @@ const attemptClusterLabels = (sequence: number, data: ImageMapPoints, attempt: n
         return;
       }
 
-      imageMapStore.patchSnapshot({ clusterLabels: null, clusterLabelsHash: null });
+      imageMapStore.patchSnapshot({ clusterLabels: null, clusterLabelsEps: null, clusterLabelsHash: null });
 
       if (attempt >= LABELS_RETRY_DELAYS_MS.length || !isRetryableLabelsFailure(error)) {
         return;
       }
 
-      // Nothing else re-requests labels on its own: a plain widget activation
-      // fetches no points (the store is already loaded), and the next socket
-      // event can be minutes away. Without this retry, one 409 in the
-      // vocabulary-build window after a backend restart leaves the map
-      // label-less until the user toggles labels off and back on.
+      // Retry pending vocabulary responses because loaded-widget activation may fetch nothing and the next socket
+      // event may be far away.
       const delay = LABELS_RETRY_DELAYS_MS[attempt];
       setTimeout(() => {
         if (sequence === labelsSequence) {
@@ -301,7 +294,7 @@ const refreshClusterLabels = (data: ImageMapPoints): void => {
     // sequence so an in-flight labels response cannot repopulate the labels
     // this clears.
     labelsSequence += 1;
-    imageMapStore.patchSnapshot({ clusterLabels: null, clusterLabelsHash: null });
+    imageMapStore.patchSnapshot({ clusterLabels: null, clusterLabelsEps: null, clusterLabelsHash: null });
 
     return;
   }
@@ -311,13 +304,7 @@ const refreshClusterLabels = (data: ImageMapPoints): void => {
   attemptClusterLabels(sequence, data, 0);
 };
 
-/**
- * Re-fetch labels for the currently loaded points. For callers outside the
- * points-refresh flow whose action changes what the labels *say* without
- * moving a single point — today that is a supplementary-vocabulary edit, once
- * the server reports its embedding rebuild finished. A no-op while labels are
- * toggled off or no points are loaded.
- */
+/** Refresh labels without moving points after vocabulary rebuild; no-op when labels are hidden or points absent. */
 export const refetchClusterLabels = (): void => {
   const { data } = imageMapStore.getSnapshot();
 
@@ -327,11 +314,8 @@ export const refetchClusterLabels = (): void => {
 };
 
 /**
- * Fold one status report into the snapshot.
- *
- * `measure` marks a socket-delivered report. Only those bump the sequence a
- * status fetch checks itself against, so a fetch cannot rewind counts an event
- * delivered while it was in flight.
+ * Socket reports alone bump the fetch-fencing sequence, preventing older status fetches from rewinding event
+ * counts.
  */
 export const recordImageIndexStatus = (
   counts: ImageIndexCounts,
@@ -343,32 +327,19 @@ export const recordImageIndexStatus = (
   }
 
   const { indexCounts: previous, indexUpdatedAt: previousAt } = imageMapStore.getSnapshot();
-  // Only real progress restarts the clock. A re-read that returns the same
-  // work done — which is every re-read while the indexer waits out a
-  // generation, since `total` moves as that generation saves images — would
-  // otherwise hide exactly the stall the note exists to report.
+  // Restart the stall clock only for actual completed work, not repeated counts or generation-driven total
+  // changes.
   const updatedAt = hasProgressed(previous, counts) ? at : (previousAt ?? at);
 
   imageMapStore.patchSnapshot({ indexCounts: counts, indexUpdatedAt: updatedAt });
 };
 
 /**
- * Pull the counts from the status endpoint.
- *
- * Status events only fire as batches complete, so without this a panel opened
- * while the worker is parked (it waits out every generation) shows no progress
- * at all until the queue moves again — and a client that was disconnected when
- * the run's final `pending === 0` event went out would otherwise show a
- * finished backfill as still running until the page is reloaded. Called on the
- * first load, on every socket reconnect, and from the panel's own retry.
- *
- * Best-effort: a failure just leaves the socket to fill the counts in.
+ * Best-effort status fetch recovers paused-worker counts and missed completion events on load/reconnect/retry.
+ * Failure leaves socket reports authoritative.
  */
 export const refreshImageIndexStatus = (): void => {
-  // One at a time, like the point set above. Every widget mount, every retry
-  // click and every reconnect calls this, and concurrent requests resolve in
-  // no particular order: without the dedup the *oldest* response can land last
-  // and rewind the counts to what the server said before the newer one asked.
+  // Deduplicate status requests so an older response cannot land last and rewind counts.
   if (statusInflight) {
     return;
   }
@@ -389,8 +360,7 @@ export const refreshImageIndexStatus = (): void => {
       recordImageIndexStatus(status.index, Date.now(), { measure: false });
     })
     .catch(() => {
-      // Progress detail is optional chrome; the map itself reports its own
-      // load failures.
+      // Progress failure is optional detail; point loading reports its own errors.
     })
     .finally(() => {
       // Release only this request's claim: an account switch already cleared
@@ -408,9 +378,7 @@ export const ensureImageMapLoaded = (): void => {
     void refreshImageMapPoints();
   }
 
-  // Unguarded, unlike the point set: the counts are one cheap request, and the
-  // widget may well be reopened long after the first load — mid-backfill, with
-  // the worker parked and no event due — which is exactly the case the panel
-  // exists for. The store's own guards stop it rewinding anything newer.
+  // Always refresh cheap status counts on reopen; a paused worker may emit no event. Store guards prevent stale
+  // rewinds.
   refreshImageIndexStatus();
 };

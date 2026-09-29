@@ -15,11 +15,6 @@ export interface ModelContextMenuTarget {
   y: number;
 }
 
-/**
- * Right-click menu for library rows, anchored to the cursor via a virtual
- * rect. Mirrors the detail page's action menu (re-identify, convert, delete)
- * through the shared `ModelActionMenuItems`.
- */
 export const ModelRowContextMenu = ({
   onClose,
   target,

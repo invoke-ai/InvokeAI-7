@@ -12,9 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 type ActivatePreset = (presetId: LayoutPresetId) => Promise<LayoutPresetId | null>;
 
-// The store is read for real but never written: `activatePreset` is a stub the
-// test can freeze outright, which is the point of the suite. If the tab only
-// acknowledges the press once the store has caught up, nothing here passes.
+// Freeze activation writes while reading the real store to verify acknowledgement precedes store completion.
 let store: WorkbenchInternalStore;
 
 // Rebuilt per render rather than read from a module slot at call time. The
@@ -115,11 +113,8 @@ afterEach(async () => {
 });
 
 describe('LayoutPresetStrip acknowledgment', () => {
-  // The selected paint, `aria-selected` for assistive technology, and the mark
-  // the performance gate observes are all the same attribute pair, written by
-  // the tabs machine from the controlled `value`. Pinning it here means a
-  // future release that defers those writes fails a test rather than silently
-  // regressing the budget.
+  // Assert the controlled selected/ARIA attributes also observed by performance checks so deferred writes cannot
+  // silently regress feedback.
   it('selects the pressed tab on pointerdown, before any store update', async () => {
     // activatePreset never resolves: the store is deliberately frozen.
     const activate = vi.fn<ActivatePreset>(() => new Promise<LayoutPresetId | null>(() => {}));
@@ -168,11 +163,7 @@ describe('LayoutPresetStrip acknowledgment', () => {
     expect(activate).not.toHaveBeenCalled();
   });
 
-  // The strip is horizontally scrollable and its tabs carry `touchAction:
-  // 'pan-x'`, so a finger landing on an inactive tab to begin a pan is a
-  // supported gesture, not a click. Activating on touch `pointerdown` would
-  // switch the layout before the pan even starts. Touch keeps activating on
-  // `click`, same as before this component acknowledged presses at all.
+  // Touch activates on click, preserving horizontal pan gestures that begin on inactive tabs.
   it('ignores a touch-pointer press', async () => {
     const activate = vi.fn<ActivatePreset>(() => Promise.resolve('edit'));
 
@@ -186,9 +177,7 @@ describe('LayoutPresetStrip acknowledgment', () => {
     expect(presetTab('compose').getAttribute('aria-selected')).toBe('true');
   });
 
-  // `pointerdown` fires for the secondary button too, ahead of `contextmenu`.
-  // Switching on right-click would strip the menu of the "switch to this
-  // preset" item that is the whole reason to open it on an inactive tab.
+  // Right-click must not activate an inactive preset before its context menu opens.
   it('ignores a secondary-button press', async () => {
     const activate = vi.fn<ActivatePreset>(() => Promise.resolve('edit'));
 
@@ -202,10 +191,8 @@ describe('LayoutPresetStrip acknowledgment', () => {
     expect(presetTab('compose').getAttribute('aria-selected')).toBe('true');
   });
 
-  // Three activations are silently dropped by the store — superseded, overtaken
-  // by a project switch, or aimed at a replaced preset definition. Painting the
-  // selection ahead of the store means the tab has to be handed back when that
-  // happens, or it shows a preset nothing ever applied, permanently.
+  // Restore store selection when supersession, project switch, or replaced definitions drop an optimistic
+  // activation.
   it('gives the selection back to the store when the activation is dropped', async () => {
     // Settled by hand inside `act` rather than pre-resolved: it pins the
     // handoff to the moment the outcome is known, instead of to whichever

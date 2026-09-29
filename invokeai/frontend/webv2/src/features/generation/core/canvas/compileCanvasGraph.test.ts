@@ -336,8 +336,6 @@ describe('compileCanvasGraph', () => {
         expect(getEdge(backendGraph, encode!.id, 'vae')).toBeDefined();
         expect(getEdge(backendGraph, 'denoise_latents', 'latents')?.source.node_id).toBe(encode?.id);
 
-        // denoising_start follows the base's strength curve (linear, or the
-        // exponent-0.2 optimized curve for sd-3 / flux / flux2).
         expect(backendGraph.nodes.denoise_latents?.type).toBe(denoiseType);
         expect(backendGraph.nodes.denoise_latents?.denoising_start).toBeCloseTo(
           expectedDenoisingStart(0.6, optimizedDenoising),
@@ -418,9 +416,7 @@ describe('compileCanvasGraph', () => {
     });
 
     it('rejects PiD with an actionable message rather than an internal VAE error', () => {
-      // Canvas compilation resolves the VAE from a `canvas_output.vae` edge and renames
-      // that node when compositing back; a PiD chain has neither, so without the guard
-      // this surfaces as "could not resolve a VAE source in the base graph".
+      // PiD lacks the VAE seam expected by canvas compilation, so reject it explicitly.
       for (const mode of ['txt2img', 'img2img'] as const) {
         expect(() =>
           compile(sdxlModel, mode, {
@@ -856,12 +852,7 @@ describe('compileCanvasGraph — outpaint per base', () => {
   });
 });
 
-// Review fix (Task 38, finding 2): `addControlLayers` has its own isolated unit
-// coverage (addControlLayers.test.ts), but nothing previously drove control
-// layers through the REAL `compileCanvasGraph` entry point — so a wiring
-// regression at the seam between the two (e.g. the wrong denoise node id, or a
-// base graph that no longer exposes `denoise_latents`) could pass every
-// existing test here while breaking a real canvas invoke.
+// Exercise control grafting through the real compiler entry point.
 describe('compileCanvasGraph — control layers (integration)', () => {
   const controlNetLayer: ControlLayerGraphInput = {
     beginEndStepPct: [0.1, 0.85],
@@ -888,15 +879,11 @@ describe('compileCanvasGraph — control layers (integration)', () => {
     expect(controlNode?.control_mode).toBe('more_control');
     expect(controlNode?.image).toEqual({ image_name: 'control-composite.png' });
 
-    // The control node feeds the collector, whose own output is what
-    // `denoise_latents.control` actually reads.
     expect(backendGraph.nodes.control_net_collector?.type).toBe('collect');
     expect(getEdge(backendGraph, 'control_net_collector', 'item')?.source.node_id).toBe('control_net_control-layer-1');
     expect(getEdge(backendGraph, 'denoise_latents', 'control')?.source.node_id).toBe('control_net_collector');
 
-    // The base img2img graph is untouched by the control graft: prompts, seed,
-    // the encode → denoise plumbing, and the composite-back output are all
-    // still present and wired exactly as they would be with no control layers.
+    // Canvas grafting must preserve unaffected base-graph wiring.
     expect(backendGraph.nodes.positive_prompt).toBeDefined();
     expect(backendGraph.nodes.negative_prompt).toBeDefined();
     expect(backendGraph.nodes.seed).toBeDefined();

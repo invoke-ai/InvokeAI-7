@@ -11,10 +11,8 @@ import { useTranslation } from 'react-i18next';
 const STEP_HOVER_PROPS = { bg: 'bg.muted', color: 'fg' };
 
 /**
- * The canvas edit history as a walkable list: every retained step, oldest
- * first, with the current position highlighted. Clicking a step replays
- * undo/redo up to it; the steps below the current one are the redoable future.
- * The list mirrors the engine's own bounded history — it owns nothing.
+ * Mirror bounded engine history oldest-first; selecting a step replays undo/redo, with future steps below the
+ * current position.
  */
 export const HistoryPane = () => {
   const { t } = useTranslation();

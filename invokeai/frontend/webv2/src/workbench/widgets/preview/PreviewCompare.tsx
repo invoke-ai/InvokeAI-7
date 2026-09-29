@@ -155,9 +155,7 @@ export const PreviewCompare = ({
     <Stack gap="3" h="full" minH="0" w="full">
       <PreviewStage fill="flex" padding="6">
         {mode === 'slider' ? (
-          // Not FittedFrame: this frame needs the drag cursor and pointer-capture
-          // handlers below, and FittedFrame's drop shadow would be a visual change
-          // this Box never had.
+          // Use a plain frame for capture/drag behavior without introducing FittedFrame's shadow.
           <Box
             ref={containerRef}
             borderColor="border.emphasized"
@@ -399,11 +397,8 @@ const CompareSidePane = ({
       cursor={isZoomed ? 'grab' : undefined}
       overflow="hidden"
       position="relative"
-      // Keeps the browser's own pan and pinch off the pane, so a two-finger
-      // gesture reaches the shared loupe instead of zooming the page — but only
-      // where there is a loupe: mismatched dimensions leave the panes without
-      // one, and suppressing the browser's gestures there would replace them
-      // with nothing.
+      // Suppress native pan/pinch only when the shared loupe can replace them; mismatched dimensions retain
+      // browser gestures.
       touchAction={pane ? 'none' : undefined}
       {...pane?.frameProps}
     >

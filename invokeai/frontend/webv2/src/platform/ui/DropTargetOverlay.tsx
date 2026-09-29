@@ -2,17 +2,7 @@ import { Text } from '@chakra-ui/react';
 
 import { DropZone } from './DropZone';
 
-/**
- * The drag-in-flight affordance every image/video drop target shares: renders
- * nothing until a compatible drag is active anywhere, then floats the
- * `DropZone` overlay treatment (dashed border over a surface tint, flipping
- * to accent while hovered) above the target's own content with a centered
- * call-to-action — the "potential target" / "over" pair of states.
- *
- * `pointerEvents` stays off — dnd-kit hit-tests the droppable's rect, not
- * this overlay — and the absolute inset needs `position: relative` (or any
- * containing block) on the target element.
- */
+/** Requires a positioned parent. Keep pointer events off: dnd-kit hit-tests the droppable, not this overlay. */
 export const DropTargetOverlay = ({
   isActive,
   isOver,

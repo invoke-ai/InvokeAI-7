@@ -15,6 +15,7 @@ import type {
   zFlux2VariantType,
   zFluxVariantType,
   zKrea2VariantType,
+  zLTX2VariantType,
   zModelFormat,
   zModelVariantType,
   zQwen3VariantType,
@@ -55,6 +56,7 @@ describe('Common types', () => {
   test('ZImageVariantType', () => assert<Equals<z.infer<typeof zZImageVariantType>, S['ZImageVariantType']>>());
   test('Krea2VariantType', () => assert<Equals<z.infer<typeof zKrea2VariantType>, S['Krea2VariantType']>>());
   test('Qwen3VariantType', () => assert<Equals<z.infer<typeof zQwen3VariantType>, S['Qwen3VariantType']>>());
+  test('LTX2VariantType', () => assert<Equals<z.infer<typeof zLTX2VariantType>, S['LTX2VariantType']>>());
   test('ModelFormat', () => assert<Equals<z.infer<typeof zModelFormat>, S['ModelFormat']>>());
 
   // Misc types

@@ -232,9 +232,7 @@ export const renderRasterComposite = async (
   const drawRef = async (ctx: Ctx, ref: CompositeLayerRef): Promise<void> => {
     const layerSurface = await deps.getLayerSurface(ref.id);
     if (ref.adjustments) {
-      // Bake non-destructive adjustments so the generated image matches what the
-      // user sees: render this layer alone into a bbox temp, apply the LUTs, then
-      // composite the adjusted temp with the layer's opacity/blend.
+      // Bake adjustments into an isolated bbox surface before applying layer opacity/blend to generation output.
       const temp = deps.backend.createSurface(width, height);
       const tempCtx = temp.ctx;
       setTransform(tempCtx, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });

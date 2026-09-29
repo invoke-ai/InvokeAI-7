@@ -97,8 +97,7 @@ describe('MiddleTruncate', () => {
 
     expect(head.textContent).toBe('Panther and t');
     expect(tail.textContent).toBe('he Flask');
-    // `white-space: pre` keeps the leading space from collapsing; with
-    // `nowrap` the flex item would strip it and fuse the halves.
+    // white-space: pre preserves the leading space at the flex split.
     expect(getComputedStyle(tail).whiteSpace).toBe('pre');
   });
 });

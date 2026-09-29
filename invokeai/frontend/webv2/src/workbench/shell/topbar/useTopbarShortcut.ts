@@ -5,13 +5,7 @@ import { formatHotkeyForPlatform, IS_MAC_OS } from '@workbench/hotkeys/keys';
 import { applyCustomHotkeys } from '@workbench/hotkeys/resolve';
 import { useWorkbenchPreferenceSelector } from '@workbench/settings/store';
 
-/**
- * Glyphs for the compact hints printed on control faces and menu rows.
- *
- * macOS spells modifiers as symbols and runs them together; everywhere else
- * they are words joined by `+`. Printing `⌘↵` on Linux would name a key that
- * keyboard does not have, which is worse than printing nothing.
- */
+/** Use adjacent modifier glyphs on macOS and word labels joined by + elsewhere. */
 const MAC_GLYPHS: Record<string, string> = {
   alt: '⌥',
   cmd: '⌘',
@@ -57,11 +51,7 @@ export const formatTopbarShortcutForAria = (hotkey: string): string =>
 const findDefinition = (commandId: string): HotkeyDefinition | undefined =>
   firstPartyHotkeyCatalog.find((hotkey) => hotkey.id === commandId);
 
-/**
- * The binding a command is *actually* on, formatted for this platform, or null
- * when the user has unbound it. Reading the effective binding rather than the
- * default means a remapped Invoke does not advertise a key that no longer works.
- */
+/** Display effective bindings, including remaps; return null for unbound commands. */
 export const useTopbarShortcut = (commandId: string): string | null => {
   const binding = useTopbarShortcutBinding(commandId);
 

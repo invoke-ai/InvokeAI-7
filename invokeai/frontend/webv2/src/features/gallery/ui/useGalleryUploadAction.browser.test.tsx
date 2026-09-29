@@ -21,18 +21,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@features/gallery/data/backend', () => ({
-  classifyGalleryUpload: (file: File) => {
-    const type = file.type.toLowerCase();
-    const name = file.name.toLowerCase();
-
-    if (['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(type) || /\.(jpe?g|png|webp)$/.test(name)) {
-      return { kind: 'image' as const };
-    }
-    if (type === 'video/mp4' || name.endsWith('.mp4')) {
-      return { kind: 'video' as const };
-    }
-    return null;
-  },
   isDateBoardId: (boardId: string) => boardId.startsWith('by_date:'),
   uploadGalleryImage: (...args: unknown[]) => mocks.uploadGalleryImage(...args),
   uploadGalleryVideo: (...args: unknown[]) => mocks.uploadGalleryVideo(...args),
@@ -55,7 +43,8 @@ vi.mock('react-i18next', () => ({
           values?.board
         )}. ${String(values?.failed)} failed.`,
         'widgets.gallery.uploadSuccessTitle': `Uploaded ${String(values?.count)} files`,
-        'widgets.gallery.uploadUnsupported': 'No supported media files to upload (PNG, JPEG, WebP, or MP4).',
+        'widgets.gallery.uploadUnsupported':
+          'No supported media files to upload (PNG, JPEG, or WebP images; video files; or audio files).',
         'widgets.gallery.uncategorized': 'Uncategorized',
         'widgets.gallery.videoCount': `${String(values?.count)} videos`,
       };
@@ -91,15 +80,21 @@ const adapter: GalleryUiAdapter = {
     setPageInfo: noop,
     setSearchTerm: noop,
     setStarredOnly: noop,
+    setSemanticSearchMode: noop,
+    setSemanticSearchText: noop,
+    commitSemanticSearch: noop,
+    clearSearch: noop,
     setView: noop,
     toggleItemSelection: noop,
     updateSettings: noop,
   },
   galleryValues: {},
   generateValues: {},
+  getItemLabel: () => Promise.resolve(null),
   liveFollowEnabled: false,
   progressSessions: [],
   pinnedProgressSessionId: null,
+  followedProgressSessionId: null,
   followProgressSession: vi.fn(),
   notifications: {
     add: (...args: unknown[]) => mocks.notificationsAdd(...args),
@@ -410,7 +405,7 @@ describe('focused gallery upload action', () => {
     expect(mocks.uploadGalleryVideo).not.toHaveBeenCalled();
     expect(mocks.notificationsReportError).toHaveBeenCalledWith({
       area: 'gallery-upload',
-      message: 'No supported media files to upload (PNG, JPEG, WebP, or MP4).',
+      message: 'No supported media files to upload (PNG, JPEG, or WebP images; video files; or audio files).',
       namespace: 'gallery',
     });
   });

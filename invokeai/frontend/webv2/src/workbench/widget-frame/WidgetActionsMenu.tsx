@@ -11,25 +11,40 @@ import { Icon, Menu, Portal, Text } from '@chakra-ui/react';
 import { flushWorkbenchDrafts } from '@platform/react/draftRegistry';
 import { IconButton } from '@platform/ui/Button';
 import { MenuContent } from '@platform/ui/Menu';
+import { toaster } from '@platform/ui/toaster';
 import { createGraphBearingSurface } from '@workbench/graphSurfaces';
 import { resolveWidgetLabel } from '@workbench/widgetLabels';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { GitBranchIcon, MoreHorizontalIcon, TargetIcon } from 'lucide-react';
-import { lazy, Suspense, useCallback, useMemo, useState } from 'react';
+import { Component, lazy, Suspense, useCallback, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 /**
- * The widget frame's shared header actions menu. It hosts the universal
- * graph-bearing actions (`Set Source`, `View Graph`) and any extra entries the
- * widget's manifest contributes via `headerMenu` — one menu per widget, so
- * widgets extend the frame instead of stacking their own menus and toolbars.
- *
- * Floating is not among them: it is a mode toggle, so it renders as its own
- * header icon ({@link WidgetFloatButton}) opposite the floating window's dock
- * control rather than as a menu item.
+ * Combine graph actions and manifest headerMenu contributions in one menu. Floating has its own {@link
+ * WidgetFloatButton} mode toggle.
  */
 
 const GraphPreviewHost = lazy(() => import('./GraphPreviewHost'));
+
+/** Contain preview errors as a toast and closed dialog, preserving the widget. Reopening creates a fresh boundary. */
+class GraphPreviewBoundary extends Component<
+  { children: ReactNode; onError: (error: Error) => void },
+  { hasFailed: boolean }
+> {
+  state = { hasFailed: false };
+
+  static getDerivedStateFromError(): { hasFailed: boolean } {
+    return { hasFailed: true };
+  }
+
+  componentDidCatch(error: Error) {
+    this.props.onError(error);
+  }
+
+  render() {
+    return this.state.hasFailed ? null : this.props.children;
+  }
+}
 
 const MENU_POSITIONING = { placement: 'bottom-end' } as const;
 const DISABLED_PROPS = { opacity: 0.4 };
@@ -89,9 +104,7 @@ export const WidgetActionsMenu = ({
 }) => {
   const { t } = useTranslation();
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
-  // Mount outlives `isPreviewOpen`: dropping the host the moment the dialog
-  // closes cancels its exit transition, so the preview blinked out of
-  // existence. The host reports when the transition is done instead.
+  // Keep the host until exit transition completion to avoid abrupt dialog removal.
   const [isPreviewMounted, setIsPreviewMounted] = useState(false);
   const label = resolveWidgetLabel(manifest, t);
   const surface = useMemo(
@@ -111,6 +124,14 @@ export const WidgetActionsMenu = ({
       setIsPreviewMounted(false);
     }
   }, [isPreviewOpen]);
+  const handlePreviewError = useCallback(
+    (error: Error) => {
+      toaster.create({ description: error.message, title: t('widgets.graph.previewFailed'), type: 'error' });
+      setIsPreviewOpen(false);
+      setIsPreviewMounted(false);
+    },
+    [t]
+  );
 
   if (!surface && !HeaderMenu) {
     return null;
@@ -137,14 +158,16 @@ export const WidgetActionsMenu = ({
         </Portal>
       </Menu.Root>
       {surface && isPreviewMounted ? (
-        <Suspense fallback={null}>
-          <GraphPreviewHost
-            isOpen={isPreviewOpen}
-            surface={surface}
-            onExitComplete={handlePreviewExitComplete}
-            onOpenChange={setIsPreviewOpen}
-          />
-        </Suspense>
+        <GraphPreviewBoundary onError={handlePreviewError}>
+          <Suspense fallback={null}>
+            <GraphPreviewHost
+              isOpen={isPreviewOpen}
+              surface={surface}
+              onExitComplete={handlePreviewExitComplete}
+              onOpenChange={setIsPreviewOpen}
+            />
+          </Suspense>
+        </GraphPreviewBoundary>
       ) : null}
     </>
   );

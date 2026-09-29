@@ -37,7 +37,12 @@ const mocks = vi.hoisted(() => ({
   gallerySelectItem: vi.fn(),
   gallerySetItemMultiSelection: vi.fn(),
   imageMetadata: vi.fn(),
+  imageResolve: vi.fn((..._args: unknown[]): Promise<unknown> => Promise.reject(new Error('no record'))),
   imageResolveMany: vi.fn((..._args: unknown[]) => Promise.resolve([])),
+  imageWorkflow: vi.fn((..._args: unknown[]): Promise<{ graph: string | null; workflow: string | null }> =>
+    Promise.resolve({ graph: null, workflow: null })
+  ),
+  requestWorkflowDocumentLoad: vi.fn(),
   videoMetadata: vi.fn((..._args: unknown[]) => Promise.resolve(null)),
   invalidateGallery: vi.fn(),
   invalidateGalleryItems: vi.fn(),
@@ -46,7 +51,10 @@ const mocks = vi.hoisted(() => ({
   itemSetStarred: vi.fn(),
   notificationsAdd: vi.fn(),
   onImagesDeleted: vi.fn(),
-  openWorkbenchWidget: vi.fn(),
+  openWorkbenchWidget: vi.fn((..._args: unknown[]): { ok: boolean; reason?: string; region?: string } => ({
+    ok: true,
+    region: 'center',
+  })),
   patchGalleryItemCaches: vi.fn((..._args: unknown[]) => vi.fn()),
   removeFromBoard: vi.fn(),
   reportError: vi.fn(),
@@ -59,7 +67,9 @@ const preferences = vi.hoisted(() => ({ confirmImageDeletion: false }));
 vi.mock('@features/gallery', () => ({
   galleryImages: {
     metadata: (...args: unknown[]) => mocks.imageMetadata(...args),
+    resolve: (...args: unknown[]) => mocks.imageResolve(...args),
     resolveMany: (...args: unknown[]) => mocks.imageResolveMany(...args),
+    workflow: (...args: unknown[]) => mocks.imageWorkflow(...args),
   },
   galleryItemOrganization: {
     delete: (...args: unknown[]) => mocks.itemDelete(...args),
@@ -83,6 +93,10 @@ vi.mock('@features/gallery', () => ({
   }),
   toGalleryItemKey: ({ kind, name }: { kind: string; name: string }) => `${kind}:${name}`,
   toGalleryItemRef: ({ kind, name }: { kind: 'image' | 'video'; name: string }) => ({ kind, name }),
+}));
+
+vi.mock('@features/workflow/react', () => ({
+  requestWorkflowDocumentLoad: (...args: unknown[]) => mocks.requestWorkflowDocumentLoad(...args),
 }));
 
 vi.mock('@features/gallery/queries', () => ({
@@ -163,6 +177,8 @@ vi.mock('@workbench/WorkbenchContext', () => ({
     getSnapshot: (...args: unknown[]) => mocks.getSnapshot(...args),
     isActiveProject: vi.fn(() => true),
   }),
+  // Only the Video panel's reference capacity is selected; no test here exercises it.
+  useWorkbenchSelector: () => false,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -173,6 +189,9 @@ vi.mock('react-i18next', () => ({
       }
       if (key === 'widgets.gallery.itemActions.move.success') {
         return `Moved to ${String(values?.board)}`;
+      }
+      if (key === 'widgets.gallery.itemActions.loadWorkflow.loadedLabel') {
+        return `${key}:${String(values?.name)}`;
       }
 
       return key;
@@ -260,8 +279,7 @@ beforeEach(() => {
   currentItemActionContext = null;
 });
 
-// After the account switch, which drops the table, and before the mount, so the Probe renders
-// with it present and is unmounted before it is dropped again; the order keeps both inside `act`.
+// Seed capabilities after account activation and before mounting so reset and teardown stay inside act.
 seedArchitectureCapabilities();
 
 beforeEach(async () => {
@@ -417,6 +435,85 @@ describe('image recall capability cancellation', () => {
   });
 });
 
+describe('load workflow from image', () => {
+  const image: GalleryImage = {
+    boardId: 'none',
+    height: 512,
+    imageCategory: 'general',
+    imageName: 'made-by-workflow.png',
+    imageUrl: '/full/made-by-workflow.png',
+    queuedAt: '2026-07-30T00:00:00.000Z',
+    sourceQueueItemId: 'queue-workflow',
+    starred: false,
+    thumbnailUrl: '/thumb/made-by-workflow.png',
+    width: 512,
+  };
+
+  it('offers the action only once the image record says a workflow is embedded', async () => {
+    mocks.imageMetadata.mockResolvedValue(null);
+    mocks.imageResolve.mockResolvedValueOnce({ ...image, hasWorkflow: true });
+
+    await expect(actionsRef.current?.getImageRecallCapabilities(image)).resolves.toMatchObject({ workflow: true });
+
+    mocks.imageResolve.mockResolvedValueOnce({ ...image, hasWorkflow: false });
+
+    await expect(actionsRef.current?.getImageRecallCapabilities(image)).resolves.toMatchObject({ workflow: false });
+
+    // An image that came through a record endpoint already knows; no second round trip.
+    mocks.imageResolve.mockClear();
+    await expect(
+      actionsRef.current?.getImageRecallCapabilities({ ...image, hasWorkflow: true })
+    ).resolves.toMatchObject({ workflow: true });
+    expect(mocks.imageResolve).not.toHaveBeenCalled();
+  });
+
+  it('reports, instead of queueing a load for a later editor, when the workflow widget cannot open', async () => {
+    mocks.imageWorkflow.mockResolvedValueOnce({ graph: null, workflow: JSON.stringify({ nodes: [] }) });
+    mocks.openWorkbenchWidget.mockReturnValueOnce({ ok: false, reason: 'unavailable' });
+
+    await act(async () => {
+      await actionsRef.current?.loadImageWorkflow(image);
+    });
+
+    expect(mocks.requestWorkflowDocumentLoad).not.toHaveBeenCalled();
+    expect(mocks.notificationsAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'error', title: 'widgets.gallery.itemActions.loadWorkflow.failed' })
+    );
+  });
+
+  it('hands the embedded workflow to the editor and opens it', async () => {
+    mocks.imageWorkflow.mockResolvedValueOnce({
+      graph: null,
+      workflow: JSON.stringify({ name: 'Embedded', nodes: [] }),
+    });
+
+    await act(async () => {
+      await actionsRef.current?.loadImageWorkflow(image);
+    });
+
+    expect(mocks.openWorkbenchWidget).toHaveBeenCalledWith('workflow', {
+      preferredRegions: ['center'],
+      requireCenterView: true,
+    });
+    expect(mocks.requestWorkflowDocumentLoad).toHaveBeenCalledWith(
+      { name: 'Embedded', nodes: [] },
+      'widgets.gallery.itemActions.loadWorkflow.loadedLabel:Embedded'
+    );
+  });
+
+  it('says so, and leaves the editor alone, when the image embeds no workflow', async () => {
+    await act(async () => {
+      await actionsRef.current?.loadImageWorkflow(image);
+    });
+
+    expect(mocks.requestWorkflowDocumentLoad).not.toHaveBeenCalled();
+    expect(mocks.openWorkbenchWidget).not.toHaveBeenCalled();
+    expect(mocks.notificationsAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'info', title: 'widgets.gallery.itemActions.loadWorkflow.missing' })
+    );
+  });
+});
+
 describe('partial image mutation outcomes', () => {
   it('moves optimistically, then rolls back and re-applies only backend-confirmed images', async () => {
     mocks.getItemBoardIds.mockReturnValue(new Map([['image:locked.png', 'board-0']]));
@@ -449,9 +546,6 @@ describe('partial image mutation outcomes', () => {
       boardId: 'board-1',
     });
 
-    // Partial failure: the optimistic patch is rolled back wholesale, the
-    // confirmed subset re-applied, and the rejected ref returns to the board
-    // it was captured on.
     expect(mocks.patchGalleryItemCaches.mock.results[0]?.value).toHaveBeenCalledOnce();
     expect(mocks.patchGalleryItemCaches).toHaveBeenNthCalledWith(2, expect.anything(), {
       boardId: 'board-1',
@@ -495,8 +589,6 @@ describe('partial image mutation outcomes', () => {
       starred: true,
     });
 
-    // The rejected ref must reappear where it was: the cache snapshot comes
-    // back and only the confirmed ref is re-applied; the store flips it back.
     expect(mocks.patchGalleryItemCaches.mock.results[0]?.value).toHaveBeenCalledOnce();
     expect(mocks.patchGalleryItemCaches).toHaveBeenNthCalledWith(2, expect.anything(), {
       kind: 'star',
@@ -664,8 +756,6 @@ describe('mixed item mutation outcomes', () => {
     );
     expect(mocks.galleryRemoveItems).toHaveBeenNthCalledWith(1, ['video:gone.mp4', 'image:locked.png']);
 
-    // The failed ref is resurrected by the rollback, then only the confirmed
-    // ref is removed again.
     expect(mocks.patchGalleryItemCaches.mock.results[0]?.value).toHaveBeenCalledOnce();
     expect(mocks.patchGalleryItemCaches).toHaveBeenNthCalledWith(2, expect.anything(), { kind: 'delete', result });
     expect(mocks.galleryRemoveItems).toHaveBeenNthCalledWith(2, ['video:gone.mp4']);
@@ -714,16 +804,11 @@ describe('total transport failure rollback', () => {
     // The optimistic removal happened up front, before the transport was asked.
     expect(mocks.galleryRemoveItems).toHaveBeenNthCalledWith(1, ['image:gone.png']);
 
-    // The transport threw outright: the cache rollback captured before the
-    // mutate call must run on the throw path rather than waiting on the
-    // (also-failing) trailing invalidation.
+    // Transport failures must roll back immediately; trailing invalidation may fail too.
     expect(mocks.patchGalleryItemCaches.mock.results[0]?.value).toHaveBeenCalledOnce();
 
-    // `gallery.removeItems` is a no-op stub here, so the pre/post-removal
-    // widget snapshot never actually diverges — nothing to restore, and the
-    // CAS-guarded restore correctly does nothing. Real restore correctness
-    // (recentImages, selection, upscale.inputImage, and the concurrent-change
-    // guard) is covered against the real reducer in galleryOptimisticRollback.test.ts.
+    // The removal stub leaves widget state unchanged, so CAS restoration does nothing. Real reducer rollback is
+    // covered in galleryOptimisticRollback.test.ts.
     expect(mocks.galleryWidgetsPatchValues).not.toHaveBeenCalled();
 
     expect(mocks.reportError).toHaveBeenCalledOnce();
@@ -814,9 +899,7 @@ describe('total transport failure rollback', () => {
     const beforePaint = makeMockProject('project-1', {
       recentImages: [{ ...recentImageFixture, boardId: 'board-overlay', imageName: 'overlay-only.png' }],
     });
-    // `gallery.patchItems` is a no-op stub here, so simulate its real effect
-    // by having the snapshot reflect the optimistic paint from the second
-    // call onward (the first call is the pre-paint `previousBoardIds` capture).
+    // Simulate optimistic board state after the initial pre-paint snapshot because patchItems is stubbed.
     const afterPaint = makeMockProject('project-1', {
       recentImages: [{ ...recentImageFixture, boardId: 'board-1', imageName: 'overlay-only.png' }],
     });
@@ -837,8 +920,6 @@ describe('total transport failure rollback', () => {
 
     expect(mocks.patchGalleryItemCaches.mock.results[0]?.value).toHaveBeenCalledOnce();
 
-    // The cache-known item and the overlay-only item both return to their
-    // captured prior board.
     expect(mocks.galleryPatchItems).toHaveBeenCalledWith(['image:moved.png'], { boardId: 'board-0' });
     expect(mocks.galleryPatchItems).toHaveBeenCalledWith(['image:overlay-only.png'], { boardId: 'board-overlay' });
 
@@ -868,9 +949,6 @@ describe('total transport failure rollback', () => {
       await getItemActions().moveItemsToBoard(refs, 'board-B');
     });
 
-    // The rollback must not force the item back to 'board-A': it's no
-    // longer on 'board-B' (this move's target), so something else already
-    // moved it on and that later write must win.
     expect(mocks.galleryPatchItems).not.toHaveBeenCalledWith(['image:overlay-only.png'], { boardId: 'board-A' });
     // Only the initial optimistic paint touched the store.
     expect(mocks.galleryPatchItems).toHaveBeenCalledOnce();
@@ -881,12 +959,8 @@ describe('total transport failure rollback', () => {
       { kind: 'image' as const, name: 'was-starred.png' },
       { kind: 'image' as const, name: 'was-unstarred.png' },
     ];
-    // One of the two requested items was already starred before this batch;
-    // a blanket invert-everything rollback would wrongly unstar it too. The
-    // cache reflects each item's real prior flag pre-paint, then (since
-    // `patchGalleryItemCaches` is a no-op stub here) the painted flag
-    // (`true`, this action's target) from the rollback's read onward,
-    // simulating the optimistic paint having actually landed.
+    // Capture each prior flag: one item was already starred, so blanket inversion would corrupt rollback. Later
+    // reads simulate the stubbed optimistic paint.
     mocks.getItemStarred
       .mockReturnValueOnce(
         new Map([
@@ -911,8 +985,6 @@ describe('total transport failure rollback', () => {
       starred: true,
     });
 
-    // Each store item reverts to its own prior flag, not a single blanket
-    // value; the cache restores the snapshot the optimistic patch returned.
     expect(mocks.galleryPatchItems).toHaveBeenCalledWith(['image:was-starred.png'], { starred: true });
     expect(mocks.galleryPatchItems).toHaveBeenCalledWith(['image:was-unstarred.png'], { starred: false });
     expect(mocks.patchGalleryItemCaches).toHaveBeenCalledOnce();
@@ -924,10 +996,7 @@ describe('total transport failure rollback', () => {
 
   it('does not clobber a star toggle a concurrent mutation already applied, in either the cache or the store', async () => {
     const refs = [{ kind: 'image' as const, name: 'shared.png' }];
-    // Prior: unstarred. This action stars it (painted = true). By the time
-    // the rollback reads current state, a concurrent toggle already left it
-    // somewhere other than what this action painted, in both the cache and
-    // the store overlay.
+    // Simulate a concurrent toggle replacing this action's painted flag in both cache and store.
     mocks.getItemStarred
       .mockReturnValueOnce(new Map([['image:shared.png', false]]))
       .mockReturnValue(new Map([['image:shared.png', false]]));
@@ -947,10 +1016,6 @@ describe('total transport failure rollback', () => {
       await getItemActions().setItemsStarred(refs, true);
     });
 
-    // The store restore never ran: the rollback's read of current state
-    // never matched what this batch painted (`true`), so it correctly assumed
-    // something else had already written a newer value and left it alone. The
-    // cache side hands the same decision to the snapshot's own CAS rollback.
     expect(mocks.galleryPatchItems).toHaveBeenCalledOnce();
     expect(mocks.patchGalleryItemCaches).toHaveBeenCalledOnce();
     expect(mocks.patchGalleryItemCaches.mock.results[0]?.value).toHaveBeenCalledOnce();
@@ -976,8 +1041,7 @@ const galleryItem = (kind: GalleryItem['kind'], name: string): GalleryItem => {
 
 describe('primary successor after confirmed deletion', () => {
   it('selects the next surviving item in display order — the one that takes the deleted slot', async () => {
-    // Also what keeps deletion out of the leading starred block. Pinned at the
-    // unit level in core/selection.test.ts.
+    // Selection also keeps deletion out of the leading starred block; core/selection.test.ts covers that rule.
     const before = galleryItem('video', 'before.mp4');
     const primary = galleryItem('image', 'primary.png');
     const after = galleryItem('image', 'after.png');
@@ -1105,9 +1169,7 @@ describe('primary successor after confirmed deletion', () => {
   });
 
   it('stamps the successor with the page the host navigates from, when the host provides one', async () => {
-    // The successor comes from the host's own list. Preview anchored deep in a
-    // board the grid shows from the top would otherwise have it stamped with
-    // the grid's page, outside the window it came from.
+    // Preserve the successor's host page rather than stamping the grid's unrelated navigation window.
     const before = galleryItem('video', 'before.mp4');
     const primary = galleryItem('image', 'primary.png');
     const after = galleryItem('image', 'after.png');

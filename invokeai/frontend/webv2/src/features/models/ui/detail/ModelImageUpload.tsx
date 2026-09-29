@@ -16,11 +16,6 @@ const ACCEPTED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 
 const dragContainsFiles = (event: DragEvent): boolean => Array.from(event.dataTransfer.types).includes('Files');
 
-/**
- * The model's cover image as one large dropzone: click anywhere on the tile
- * or drop an image file onto it to upload. The remove button sits in the top
- * corner and is hover/focus-revealed (and inert while hidden).
- */
 interface ModelImageUploadProps {
   model: Pick<ModelConfig, 'cover_image' | 'key' | 'name'>;
   onError: (message: string) => void;

@@ -1,9 +1,6 @@
 /**
- * Canvas "Scale before processing" for the generate widget: whether the bbox
- * is denoised at its own size, grown to the model's optimal area, or at a
- * manual size, with the result always resized back to the bbox. Persisted in
- * the canvas widget's values next to the denoising strength; read back by
- * `prepareCanvasInvocation` and threaded into the pure graph compiler.
+ * Choose bbox, optimal, or manual processing size, then resize results back to bbox. Persist in canvas values for
+ * invocation compilation.
  */
 
 import type { NumberInput as ChakraNumberInput, SelectValueChangeDetails } from '@chakra-ui/react';
@@ -32,9 +29,8 @@ const SELECT_POSITIONING = { placement: 'bottom-start', sameWidth: true } as con
 const selectCanvasValues = (project: Project): Record<string, unknown> => getProjectWidgetValues(project, 'canvas');
 
 /**
- * The generate model's base, type and variant, and the PiD mode, decide the grid and optimal area the
- * policy works in -- the same model `compileCanvasGraph` compiles with, variant included, or the size
- * shown here is not the size that is generated.
+ * Use model base/type/variant and PiD mode matching compileCanvasGraph so displayed size follows identical
+ * grid/area policy.
  */
 const selectProcessingContext = (project: Project) => {
   const generate = getProjectWidgetValues(project, 'generate') as {
@@ -72,9 +68,8 @@ export const GenerateCanvasScalingSection = () => {
   const values = useActiveProjectSelector(selectCanvasValues);
   const scaling = useMemo(() => readCanvasScaling(values), [values]);
   const context = useActiveProjectSelector(selectProcessingContext, processingContextEqual);
-  // Both answer from the capability table, so they are read inside the store's selector: to React
-  // Compiler a bare call is a pure function of `context` and `scaling`, and would keep the fallback
-  // grid 8 / optimal 1024 it answered before the table arrived.
+  // Read policy inside the capability selector so arrival replaces fallback grid/area despite compiler
+  // memoization.
   const { dimensions, processingSize } = useExternalStoreSelector(
     subscribeArchitectureCapabilities,
     getArchitectureCapabilitiesSnapshot,

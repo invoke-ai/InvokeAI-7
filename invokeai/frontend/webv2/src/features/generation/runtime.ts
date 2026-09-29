@@ -16,13 +16,7 @@ export interface GenerateWidgetSyncProjectSnapshot {
 }
 
 export interface GenerateWidgetSyncRuntimeDeps {
-  /**
-   * Whether the backend's architecture capability table has arrived.
-   *
-   * `reconcile` writes its result into the project, so it must not run on fallback policy: the
-   * values would be persisted, not just displayed. Subscribed like the other read models so the
-   * first reconcile happens as soon as the table lands.
-   */
+  /** Wait for authoritative capabilities before reconciliation can persist fallback values. */
   capabilitiesLoaded: ReadonlyStore<boolean>;
   models: ReadonlyStore<readonly GenerationModelCatalogItem[]>;
   patchValues(values: Partial<GenerateWidgetValues>, projectId: string, origin: 'system'): void;
@@ -34,11 +28,7 @@ export interface GenerateWidgetSyncRuntime {
   dispose(): void;
 }
 
-/**
- * Keeps the active project's persisted Generate values at the resolver's fixed
- * point. The runtime owns every external subscription and is deliberately
- * React-free; App supplies the two read models and the one aggregate command.
- */
+/** The runtime owns subscriptions and reconciles settings to a fixed point. */
 export const createGenerateWidgetSyncRuntime = (deps: GenerateWidgetSyncRuntimeDeps): GenerateWidgetSyncRuntime => {
   const promptTemplateOptions = promptTemplatesQueryOptions();
   const promptTemplateObserver = new QueryObserver(deps.queryClient, {

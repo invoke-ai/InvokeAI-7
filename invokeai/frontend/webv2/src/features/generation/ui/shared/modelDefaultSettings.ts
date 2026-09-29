@@ -44,11 +44,7 @@ export const getModelDefaultsPatch = (
   return patch;
 };
 
-/**
- * The model-governed keys grouped into user-level decisions, so the override
- * count reads as "3 overrides" the way a person made them: changing the size
- * touches five keys but is one decision.
- */
+/** Multi-key decisions such as size count as one override. */
 const MODEL_DEFAULT_DECISION_GROUPS: readonly (readonly (typeof MODEL_DEFAULT_VALUE_KEYS)[number][])[] = [
   ['aspectRatioId', 'aspectRatioIsLocked', 'aspectRatioValue', 'height', 'width'],
   ['steps'],
@@ -58,10 +54,7 @@ const MODEL_DEFAULT_DECISION_GROUPS: readonly (readonly (typeof MODEL_DEFAULT_VA
   ['vaePrecision'],
 ];
 
-/**
- * How many model-governed decisions deviate from the model's defaults. The VAE
- * override and the LoRA set each count once.
- */
+/** Count each VAE or LoRA set once. */
 export const countModelDefaultOverrides = (
   settings: GenerateSettings,
   modelDefaultSettings: GenerateSettings

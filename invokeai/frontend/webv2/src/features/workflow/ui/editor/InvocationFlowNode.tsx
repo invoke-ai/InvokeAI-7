@@ -2,7 +2,20 @@
 import type { FieldInputTemplate, FieldOutputTemplate, WorkflowInvocationNode } from '@features/workflow/contracts';
 import type { WorkflowNodeExecutionState as NodeExecutionState } from '@features/workflow/ui/contracts';
 
-import { Box, Checkbox, Field, Flex, HStack, Icon, IconButton, Image, Input, Stack, Text } from '@chakra-ui/react';
+import {
+  Box,
+  chakra,
+  Checkbox,
+  Field,
+  Flex,
+  HStack,
+  Icon,
+  IconButton,
+  Image,
+  Input,
+  Stack,
+  Text,
+} from '@chakra-ui/react';
 import { getWorkflowFieldSeedMode, isSeedInputField } from '@features/workflow/graph';
 import { FieldDescriptionPopover } from '@features/workflow/ui/fields/FieldDescriptionPopover';
 import { WorkflowFieldInput } from '@features/workflow/ui/fields/WorkflowFieldInput';
@@ -12,28 +25,36 @@ import {
   getWorkflowNodeHeaderProps,
   getWorkflowNodeShellProps,
   WORKFLOW_NODE_DENSITY,
+  WORKFLOW_NODE_SURFACE_TOKEN,
   WorkflowNodeInfoIcon,
   WorkflowNodeOutcomeIcon,
   type WorkflowNodeOutcome,
 } from '@features/workflow/ui/nodeChrome';
 import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCommands';
 import { useWorkflowNodeExecutionState } from '@features/workflow/ui/WorkflowUiContext';
+import { setNodePreviewCollapsed, workflowUiStore } from '@features/workflow/ui/workflowUiStore';
 import {
+  CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX,
   cloneWorkflowFieldDefault,
   formatOutputFieldValue,
+  getEffectiveWorkflowFieldDescription,
   getFieldTypeLabel,
+  getNodeUpdateStatus,
   getOutputFieldNamesByScope,
+  getWorkflowBatchGroupId,
+  isWorkflowBatchNodeType,
   getOutputFieldRows,
   getWorkflowFieldInvalidReason,
   isDirectInputField,
   isExposableField,
   isWorkflowFieldValueDefault,
 } from '@features/workflow/utility';
+import { useExternalStoreSelector } from '@platform/state/selectors';
 import { Tooltip } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { Handle, Position, useStore, type NodeProps } from '@xyflow/react';
 import { ChevronDownIcon, ChevronRightIcon, PinIcon, PinOffIcon, RotateCcwIcon, TriangleAlertIcon } from 'lucide-react';
-import { memo, useState, type ChangeEvent, type KeyboardEvent } from 'react';
+import { memo, useId, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { InvocationFlowNode as InvocationFlowNodeType, InvocationNodeTemplateView } from './flowAdapters';
@@ -48,6 +69,25 @@ const CONTENT_VISIBILITY_ZOOM = 0.4;
 
 /** True while the viewport is zoomed out far enough that field content is unreadable noise. */
 const useIsZoomedOut = (): boolean => useStore((state) => state.transform[2] < CONTENT_VISIBILITY_ZOOM);
+
+/** The node-level loading hint is only useful while a selected child signature is being fetched. */
+export const shouldShowCallSavedWorkflowLoadingHint = (node: WorkflowInvocationNode): boolean =>
+  node.data.type === 'call_saved_workflow' && node.data.callSavedWorkflowStatus === 'loading';
+
+/** A callable child can be valid without exposing any fields; explain the empty body instead of showing a blank node. */
+export const shouldShowCallSavedWorkflowNoExposedFieldsHint = (node: WorkflowInvocationNode): boolean => {
+  if (node.data.type !== 'call_saved_workflow' || node.data.callSavedWorkflowStatus !== 'ready') {
+    return false;
+  }
+
+  const workflowId = node.data.inputs.workflow_id?.value;
+  const hasSelectedWorkflow = typeof workflowId === 'string' && workflowId.trim() !== '';
+  const hasDynamicFields =
+    Object.keys(node.data.dynamicInputTemplates ?? {}).length > 0 ||
+    Object.keys(node.data.inputs).some((name) => name.startsWith(CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX));
+
+  return hasSelectedWorkflow && !hasDynamicFields;
+};
 
 /** Static placeholder bar standing in for text/controls at far zoom. No animation — there may be hundreds. */
 const SkeletonBar = ({ h = '2', w }: { h?: string; w?: string }) => <Box bg="bg.emphasized" h={h} rounded="sm" w={w} />;
@@ -69,10 +109,23 @@ const hasMissingRequiredInputs = (
 const getExecutionOutcome = (execution: NodeExecutionState | null): WorkflowNodeOutcome | null =>
   execution?.status === 'completed' || execution?.status === 'failed' ? execution.status : null;
 
+export const getNodeExecutionError = (
+  node: WorkflowInvocationNode,
+  error: string | null | undefined,
+  translate: (key: string, options: { error: string }) => string
+): string | null | undefined => {
+  if (!error || node.data.type !== 'call_saved_workflow') {
+    return error;
+  }
+
+  return translate('nodes.childWorkflowError', { error });
+};
+
 const NodeShell = ({
   hasMissingRequiredInput,
   children,
   isMissing,
+  isOutdated,
   isRunning,
   outcome,
   selected,
@@ -80,6 +133,7 @@ const NodeShell = ({
   hasMissingRequiredInput?: boolean;
   children: React.ReactNode;
   isMissing?: boolean;
+  isOutdated?: boolean;
   isRunning?: boolean;
   outcome?: WorkflowNodeOutcome | null;
   selected: boolean;
@@ -87,14 +141,29 @@ const NodeShell = ({
   const isInvalid = isMissing || hasMissingRequiredInput;
 
   return (
-    <Box w={NODE_WIDTH} {...getWorkflowNodeShellProps({ invalid: isInvalid, outcome, running: isRunning, selected })}>
+    <Box
+      w={NODE_WIDTH}
+      {...getWorkflowNodeShellProps({
+        invalid: isInvalid,
+        outcome,
+        outdated: isOutdated,
+        running: isRunning,
+        selected,
+      })}
+    >
       {children}
     </Box>
   );
 };
 
 /** The header's completed/failed mark, named for screen readers and tooltipped with the failure. */
-const NodeOutcomeIcon = ({ execution }: { execution: NodeExecutionState | null }) => {
+const NodeOutcomeIcon = ({
+  execution,
+  node,
+}: {
+  execution: NodeExecutionState | null;
+  node: WorkflowInvocationNode;
+}) => {
   const { t } = useTranslation();
   const outcome = getExecutionOutcome(execution);
 
@@ -104,7 +173,7 @@ const NodeOutcomeIcon = ({ execution }: { execution: NodeExecutionState | null }
 
   return (
     <WorkflowNodeOutcomeIcon
-      error={execution?.error}
+      error={getNodeExecutionError(node, execution?.error, t)}
       label={outcome === 'completed' ? t('nodes.executionCompleted') : t('nodes.executionFailed')}
       outcome={outcome}
     />
@@ -168,8 +237,7 @@ const NodeTitle = ({ node, title }: { node: WorkflowInvocationNode; title: strin
       minW="0"
       text={title}
       title="Double-click to rename"
-      // Editing always starts from the displayed title: an unset label
-      // prefills with the template title rather than an empty input.
+      // Start editing from the displayed title, including the template fallback for unset labels.
       onDoubleClick={() => setDraftLabel(title)}
     />
   );
@@ -227,6 +295,74 @@ const OutputFieldTooltip = ({ template }: { template: FieldOutputTemplate }) => 
   );
 };
 
+/** One line naming the node's version against its template's, for the tooltip and the inspector. */
+const getUpdateStatusText = (
+  t: ReturnType<typeof useTranslation>['t'],
+  node: WorkflowInvocationNode,
+  template: InvocationNodeTemplateView['template']
+): string | null => {
+  const status = getNodeUpdateStatus(node, template);
+  const versions = { from: node.data.version, to: template.version };
+
+  return status === 'current'
+    ? null
+    : status === 'updatable'
+      ? t('nodes.nodeUpdateAvailable', versions)
+      : status === 'newer'
+        ? t('nodes.nodeNewerThanBackend', versions)
+        : t('nodes.nodeVersionIncompatible', versions);
+};
+
+const UPDATE_TOOLTIP_POSITIONING = { placement: 'top-end' } as const;
+
+/** Legacy's group tints, so a zipped group reads as one colour across the canvas. */
+const BATCH_GROUP_COLORS: Record<string, string> = {
+  'Group 1': 'green.fg',
+  'Group 2': 'blue.fg',
+  'Group 3': 'purple.fg',
+  'Group 4': 'red.fg',
+  'Group 5': 'yellow.fg',
+};
+
+/** A batch node's group beside its title: zipped groups share a colour, an ungrouped node says so. */
+const BatchGroupSuffix = ({ node }: { node: WorkflowInvocationNode }) => {
+  const { t } = useTranslation();
+
+  if (!isWorkflowBatchNodeType(node.data.type)) {
+    return null;
+  }
+
+  const groupId = getWorkflowBatchGroupId(node);
+
+  return (
+    <Text color={BATCH_GROUP_COLORS[groupId] ?? 'fg.subtle'} flexShrink={0} fontSize="2xs" fontWeight="600">
+      ({groupId === 'None' ? t('nodes.noBatchGroup') : groupId})
+    </Text>
+  );
+};
+
+/** Header mark for a node whose version is not its template's; the tooltip says what can be done about it. */
+const NodeUpdateIcon = ({
+  node,
+  template,
+}: {
+  node: WorkflowInvocationNode;
+  template: InvocationNodeTemplateView['template'];
+}) => {
+  const { t } = useTranslation();
+  const label = getUpdateStatusText(t, node, template);
+
+  if (label === null) {
+    return null;
+  }
+
+  return (
+    <Tooltip content={label} positioning={UPDATE_TOOLTIP_POSITIONING} showArrow>
+      <Icon aria-label={label} as={TriangleAlertIcon} boxSize="3.5" color="fg.warning" flexShrink={0} role="img" />
+    </Tooltip>
+  );
+};
+
 const NodeInfoTooltipContent = ({
   node,
   template,
@@ -237,6 +373,7 @@ const NodeInfoTooltipContent = ({
   const { t } = useTranslation();
   const title = node.data.label ? `${node.data.label} (${template.title})` : template.title;
   const nodePack = node.data.nodePack || template.nodePack;
+  const updateStatusText = getUpdateStatusText(t, node, template);
 
   return (
     <Stack gap="1" maxW="20rem">
@@ -244,6 +381,7 @@ const NodeInfoTooltipContent = ({
       <Text color="fg.subtle">{t('nodes.nodeType', { type: template.type })}</Text>
       <Text color="fg.subtle">{t('nodes.nodePackLabel', { name: nodePack })}</Text>
       <Text color="fg.subtle">{t('nodes.nodeVersion', { version: node.data.version })}</Text>
+      {updateStatusText ? <Text color="fg.warning">{updateStatusText}</Text> : null}
       <Text color="fg.subtle">{t('nodes.nodeClassification', { classification: template.classification })}</Text>
       <Text color="fg.subtle">{t('nodes.nodeCategory', { category: template.category })}</Text>
       {template.description ? <Text fontStyle="italic">{template.description}</Text> : null}
@@ -264,6 +402,80 @@ const NodeInfoIcon = ({
     label={`Show details for ${node.data.label || template.title}`}
   />
 );
+
+/** Fixed so a run's differently shaped outputs do not resize the node and shove its neighbours around. */
+const NODE_OUTPUT_PREVIEW_HEIGHT = '10rem';
+
+/**
+ * The node's latest output image behind a disclosure. The fold is session-lived
+ * (`workflowUiStore`), matching the preview itself, so it is not a graph edit.
+ */
+const NodeOutputPreview = ({
+  imageUrl,
+  isSkeleton,
+  nodeId,
+  roundedBottom,
+}: {
+  imageUrl: string;
+  isSkeleton: boolean;
+  nodeId: string;
+  roundedBottom: boolean;
+}) => {
+  const { t } = useTranslation();
+  const contentId = useId();
+  const collapsed = useExternalStoreSelector(workflowUiStore.subscribe, workflowUiStore.getSnapshot, (snapshot) =>
+    snapshot.collapsedPreviewNodeIds.has(nodeId)
+  );
+
+  return (
+    <Box borderBottomRadius={roundedBottom ? 'lg' : 'none'} borderColor="border.subtle" borderTopWidth="1px">
+      <chakra.button
+        alignItems="center"
+        aria-controls={contentId}
+        aria-expanded={!collapsed}
+        className="nodrag"
+        display="flex"
+        focusVisibleRing="inside"
+        gap="1"
+        px={WORKFLOW_NODE_DENSITY.rowPaddingX}
+        py="1"
+        textAlign="start"
+        type="button"
+        w="full"
+        onClick={() => setNodePreviewCollapsed(nodeId, !collapsed)}
+      >
+        <Icon as={collapsed ? ChevronRightIcon : ChevronDownIcon} boxSize="3" color="fg.subtle" />
+        <Text
+          color="fg.subtle"
+          fontSize="2xs"
+          fontWeight="600"
+          letterSpacing="wide"
+          lineHeight="1"
+          textTransform="uppercase"
+        >
+          {t('nodes.latestOutput')}
+        </Text>
+      </chakra.button>
+      {/* The frame behind the image keeps a letterboxed output reading as a picture, not a gap. */}
+      <Box id={contentId} hidden={collapsed} pb="1.5" px={WORKFLOW_NODE_DENSITY.rowPaddingX}>
+        {collapsed ? null : isSkeleton ? (
+          <SkeletonBar h={NODE_OUTPUT_PREVIEW_HEIGHT} w="full" />
+        ) : (
+          <Image
+            alt={t('nodes.latestOutputImage')}
+            bg={WORKFLOW_NODE_SURFACE_TOKEN}
+            draggable={false}
+            h={NODE_OUTPUT_PREVIEW_HEIGHT}
+            objectFit="contain"
+            rounded="sm"
+            src={imageUrl}
+            w="full"
+          />
+        )}
+      </Box>
+    </Box>
+  );
+};
 
 const NodeFooter = ({ canUseCache, node }: { canUseCache: boolean; node: WorkflowInvocationNode }) => {
   const { editGraph } = useProjectGraphCommands();
@@ -393,7 +605,7 @@ const InputFieldRow = ({
             positioning={{ placement: 'top-start' }}
             content={
               <InputFieldTooltip
-                description={instance?.description || template.description}
+                description={getEffectiveWorkflowFieldDescription(instance, template)}
                 isConnected={isConnected}
                 isExposed={isExposed}
                 label={label}
@@ -643,18 +855,22 @@ const CompactInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNodeT
   const inputTemplates = templateView?.inputTemplates ?? [];
   const outputTemplates = templateView?.outputTemplates ?? [];
   const title = node.data.label || templateView?.template.title || node.data.type;
+  const isOutdated = templateView ? getNodeUpdateStatus(node, templateView.template) !== 'current' : false;
 
   return (
     <NodeShell
       isMissing={!templateView}
+      isOutdated={isOutdated}
       isRunning={execution?.status === 'running'}
       outcome={getExecutionOutcome(execution)}
       selected={selected ?? false}
     >
       <Flex {...getWorkflowNodeHeaderProps()}>
         <MiddleTruncate fontSize="sm" fontWeight="700" minW="0" text={title} />
+        <BatchGroupSuffix node={node} />
         <Box flex="1" />
-        <NodeOutcomeIcon execution={execution} />
+        <NodeOutcomeIcon execution={execution} node={node} />
+        {templateView && isOutdated ? <NodeUpdateIcon node={node} template={templateView.template} /> : null}
       </Flex>
       {templateView ? (
         <CompactNodeBody inputCount={inputTemplates.length} outputCount={outputTemplates.length} />
@@ -674,6 +890,7 @@ const CompactInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNodeT
 };
 
 const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNodeType>) => {
+  const { t } = useTranslation();
   const { editGraph } = useProjectGraphCommands();
   const isZoomedOut = useIsZoomedOut();
   const node = data.documentNode;
@@ -697,6 +914,7 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
   }
 
   const template = templateView.template;
+  const isOutdated = getNodeUpdateStatus(node, template) !== 'current';
   const connectedFieldNames = new Set(data.connectedTargetHandles);
   const exposedFieldNames = new Set(data.exposedFieldNames);
   const inputTemplates = templateView.inputTemplates;
@@ -705,7 +923,7 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
   const outputRows = getOutputFieldRows(getOutputFieldNamesByScope(outputTemplates));
   const isOpen = node.data.isOpen;
   const isRunning = execution?.status === 'running';
-  const isMissingRequiredInput = hasMissingRequiredInputs(node, Object.values(template.inputs), connectedFieldNames);
+  const isMissingRequiredInput = hasMissingRequiredInputs(node, inputTemplates, connectedFieldNames);
   const isCompact = data.isCompact && !selected;
   const withFooter = !isZoomedOut && templateView.isExecutable && templateView.hasImageOutput;
   const withOutputPreview = Boolean(execution?.outputImageUrl);
@@ -714,6 +932,7 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
   return (
     <NodeShell
       hasMissingRequiredInput={isMissingRequiredInput}
+      isOutdated={isOutdated}
       isRunning={isRunning}
       outcome={getExecutionOutcome(execution)}
       selected={selected ?? false}
@@ -734,8 +953,10 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
         ) : (
           <>
             <NodeTitle node={node} title={node.data.label || template.title} />
+            <BatchGroupSuffix node={node} />
             <Box flex="1" />
-            <NodeOutcomeIcon execution={execution} />
+            <NodeOutcomeIcon execution={execution} node={node} />
+            {isOutdated ? <NodeUpdateIcon node={node} template={template} /> : null}
             <NodeInfoIcon node={node} template={template} />
           </>
         )}
@@ -770,26 +991,26 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
               template={inputTemplate}
             />
           ))}
+          {shouldShowCallSavedWorkflowLoadingHint(node) ? (
+            <Text color="fg.subtle" fontSize="2xs" px={WORKFLOW_NODE_DENSITY.rowPaddingX} py="1">
+              {t('nodes.savedWorkflowDetailLoading')}
+            </Text>
+          ) : shouldShowCallSavedWorkflowNoExposedFieldsHint(node) ? (
+            <Text color="fg.subtle" fontSize="2xs" px={WORKFLOW_NODE_DENSITY.rowPaddingX} py="1">
+              {t('nodes.savedWorkflowNoExposedFields')}
+            </Text>
+          ) : null}
         </Box>
       ) : (
         <HiddenHandles inputTemplates={inputTemplates} outputTemplates={outputTemplates} />
       )}
       {isOpen && execution?.outputImageUrl ? (
-        <Box borderBottomRadius={withFooter ? 'none' : 'lg'} borderColor="border.subtle" borderTopWidth="1px" p="1.5">
-          {isZoomedOut ? (
-            <SkeletonBar h="6rem" w="full" />
-          ) : (
-            <Image
-              alt="Latest output of this node"
-              draggable={false}
-              maxH="10rem"
-              mx="auto"
-              objectFit="contain"
-              rounded="sm"
-              src={execution.outputImageUrl}
-            />
-          )}
-        </Box>
+        <NodeOutputPreview
+          imageUrl={execution.outputImageUrl}
+          isSkeleton={isZoomedOut}
+          nodeId={node.id}
+          roundedBottom={!withFooter}
+        />
       ) : null}
       {isOpen && withFooter ? <NodeFooter canUseCache={data.canUseCache} node={node} /> : null}
     </NodeShell>

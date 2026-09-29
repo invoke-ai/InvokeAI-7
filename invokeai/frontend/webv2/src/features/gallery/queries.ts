@@ -8,6 +8,8 @@ export {
   galleryItemNamesOptions,
   galleryItemsInfiniteOptions,
   galleryKeys,
+  galleryStarredStripOptions,
+  imageIndexAvailabilityOptions,
 } from './data/queries';
 export type {
   CanonicalGalleryItemsFilter,
@@ -24,3 +26,4 @@ export {
   patchGalleryItemCaches,
 } from './data/queryCache';
 export type { GalleryItemCachePatch } from './data/queryCache';
+export { createGalleryRealtimeRuntime } from './data/realtimeRuntime';

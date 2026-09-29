@@ -15,14 +15,12 @@ import { compileGeneratePreviewGraph, getGenerateNodeProvenance } from '@feature
 import { compileProjectGraph } from '@features/workflow/graph';
 import { ForLoopGraphValidationError } from '@features/workflow/utility';
 import { getDestinationLabel } from '@workbench/invocation';
+import { getActiveProjectGraph } from '@workbench/projectWorkflows';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 
 /**
- * Pure translation from the active project + surface into the preview
- * dialog's data. Kept side-effect free so it can run on every keystroke
- * (`GraphPreviewHost` recomputes it in a `useMemo`) without triggering any
- * loads itself — callers are responsible for ensuring models/templates are
- * fetched (`ensureModelsLoaded`, `ensureInvocationTemplatesLoaded`).
+ * Translate project/surface to preview data without effects; callers load models/templates before per-edit
+ * compilation.
  */
 export interface GraphPreviewSourceDeps {
   models: readonly ModelConfig[] | undefined;
@@ -67,10 +65,11 @@ const buildWorkflowSource = (
     return { ...EMPTY_SOURCE_BASE, graph: null, isLive: true };
   }
 
-  const positionHints = Object.fromEntries(project.projectGraph.nodes.map((node) => [node.id, node.position]));
+  const document = getActiveProjectGraph(project);
+  const positionHints = Object.fromEntries(document.nodes.map((node) => [node.id, node.position]));
 
   try {
-    const graph = compileProjectGraph(project.projectGraph, templates.templates);
+    const graph = compileProjectGraph(document, templates.templates);
 
     return { ...EMPTY_SOURCE_BASE, graph, isLive: true, positionHints };
   } catch (error) {
@@ -95,12 +94,24 @@ const buildGenerateSource = (
   models: readonly ModelConfig[] | undefined,
   t: TFunction
 ): GraphPreviewSourceWithoutDestination => {
-  const result = compileGeneratePreviewGraph({
-    destination: project.invocation.destination,
-    models: models ?? [],
-    storedValues: getProjectWidgetValues(project, 'generate'),
-    useCpuNoise: project.settings.useCpuNoise,
-  });
+  let result: ReturnType<typeof compileGeneratePreviewGraph>;
+
+  // Return compile failures as preview reasons instead of throwing through widget chrome.
+  try {
+    result = compileGeneratePreviewGraph({
+      destination: project.invocation.destination,
+      models: models ?? [],
+      storedValues: getProjectWidgetValues(project, 'generate'),
+      useCpuNoise: project.settings.useCpuNoise,
+    });
+  } catch (error) {
+    return {
+      ...EMPTY_SOURCE_BASE,
+      graph: null,
+      invalidReasons: [error instanceof Error ? error.message : String(error)],
+      isLive: true,
+    };
+  }
 
   if (result.status === 'invalid') {
     return { ...EMPTY_SOURCE_BASE, graph: null, invalidReasons: result.reasons, isLive: true };

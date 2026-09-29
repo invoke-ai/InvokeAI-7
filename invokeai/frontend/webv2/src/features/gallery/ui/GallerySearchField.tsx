@@ -3,7 +3,7 @@ import type { DateTokenParse } from '@platform/search/dateTokens';
 import { Box, Icon, Input } from '@chakra-ui/react';
 import { parseDateTokens } from '@platform/search/dateTokens';
 import { InputShell } from '@platform/ui/InputShell';
-import { SearchIcon } from 'lucide-react';
+import { SearchIcon, SparklesIcon } from 'lucide-react';
 import { useCallback, useMemo, useRef, type KeyboardEvent, type ReactNode, type Ref } from 'react';
 
 /** `key:value` runs the date grammar recognizes, matched against the raw value. */
@@ -55,6 +55,7 @@ export const getGallerySearchSegments = (value: string, parse: DateTokenParse): 
 const PLACEHOLDER_PROPS = { color: 'fg.subtle' } as const;
 
 const SEARCH_START_ELEMENT = <Icon as={SearchIcon} boxSize="3.5" color="fg.subtle" flexShrink={0} />;
+const SEMANTIC_START_ELEMENT = <Icon as={SparklesIcon} boxSize="3.5" color="fg.warning" flexShrink={0} />;
 
 const MIRROR_CHIP_CSS = {
   borderRadius: 'sm',
@@ -63,9 +64,8 @@ const MIRROR_CHIP_CSS = {
 } as const;
 
 /**
- * Search input that draws date tokens as chips. The mirror and the input share
- * one zero-padded cell, so they align by construction rather than by matching
- * padding; the input's own text is transparent and only its caret shows.
+ * Share a zero-padded cell to align date chips with transparent input text. Semantic descriptions remain plain
+ * text with persistent mode tint.
  */
 export const GallerySearchField = ({
   ariaLabel,
@@ -73,6 +73,7 @@ export const GallerySearchField = ({
   endElement,
   inputProps,
   isInvalid,
+  mode = 'metadata',
   placeholder,
   ref,
   value,
@@ -85,6 +86,7 @@ export const GallerySearchField = ({
   /** Listbox wiring (`aria-controls`, `aria-activedescendant`) for hosts that drive a list from the field. */
   inputProps?: Pick<React.ComponentProps<typeof Input>, 'aria-activedescendant' | 'aria-controls' | 'role'>;
   isInvalid?: boolean;
+  mode?: 'metadata' | 'semantic';
   placeholder: string;
   ref?: Ref<HTMLInputElement>;
   value: string;
@@ -92,7 +94,12 @@ export const GallerySearchField = ({
   onKeyDown?: (event: KeyboardEvent<HTMLInputElement>) => void;
 }) => {
   const mirrorRef = useRef<HTMLDivElement>(null);
-  const segments = useMemo(() => getGallerySearchSegments(value, parseDateTokens(value)), [value]);
+  const isSemantic = mode === 'semantic';
+  const segments = useMemo(
+    () =>
+      isSemantic ? [{ kind: 'text', text: value } as const] : getGallerySearchSegments(value, parseDateTokens(value)),
+    [isSemantic, value]
+  );
 
   const handleChange = useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => onChange(event.currentTarget.value),
@@ -111,9 +118,12 @@ export const GallerySearchField = ({
   return (
     <InputShell
       aria-invalid={isInvalid || undefined}
+      bg={isSemantic ? 'bg.warning' : undefined}
+      borderColor={isSemantic ? 'fg.warning' : undefined}
+      data-mode={mode}
       endElement={endElement}
       position="relative"
-      startElement={SEARCH_START_ELEMENT}
+      startElement={isSemantic ? SEMANTIC_START_ELEMENT : SEARCH_START_ELEMENT}
     >
       {/* Flex-centred: Chakra reads a scale number in `lineHeight` as a
           unitless multiplier, which drops the text out of the field. */}

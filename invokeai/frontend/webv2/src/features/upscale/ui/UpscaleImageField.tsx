@@ -32,9 +32,7 @@ export const UpscaleImageField = memo(
       [onChange]
     );
 
-    return (
-      <GalleryMediaSlot accept={ACCEPT} dropId={DROP_ID} uploadBoardId="none" value={value} onChange={handleChange} />
-    );
+    return <GalleryMediaSlot accept={ACCEPT} dropId={DROP_ID} value={value} onChange={handleChange} />;
   },
   (previous, next) =>
     previous.onChange === next.onChange && areInputImagesEquivalent(previous.inputImage, next.inputImage)

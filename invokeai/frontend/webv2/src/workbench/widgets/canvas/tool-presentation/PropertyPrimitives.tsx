@@ -11,10 +11,8 @@ import { setPropertyGroupCollapsed, usePropertyGroupCollapsed } from './property
 const GROUP_HEADER_HOVER = { color: 'fg' } as const;
 
 /**
- * One settings row of a tool property form: a fixed label column, a flexible
- * control cell, and a fixed trailing cell. Grid, not wrapping flex — a slider
- * and its number field are one row at every pane width. No label leaves the
- * column empty so a continuation row lines up under the row above.
+ * Use fixed label/trailing columns around a flexible control so sliders and numbers never wrap; blank labels
+ * preserve continuation alignment.
  */
 export const PropertyControlRow = ({ children, label }: { children: ReactNode; label?: string }) => (
   <Grid alignItems="center" columnGap="2" gridTemplateColumns="4.5rem minmax(0, 1fr) auto" minH="7" w="full">
@@ -154,11 +152,7 @@ export const PropertySegmentedRow = <Value extends string>({
   );
 };
 
-/**
- * Names what a dual-role form is editing right now: the creation defaults, or
- * the selected layer's own content. Shown once at the top of the affected
- * form, per the C0 §4 target-chip decision.
- */
+/** Identify whether the form edits creation defaults or selected content. */
 export const EditTargetChip = ({ layerName }: { layerName: string | null }) => {
   const { t } = useTranslation();
   return (
@@ -180,10 +174,6 @@ export const EditTargetChip = ({ layerName }: { layerName: string | null }) => {
   );
 };
 
-/**
- * A small gesture/keymap table for tools whose whole story is how you point at
- * the canvas: a chip naming the gesture, then what it does.
- */
 export const HintCard = ({ rows }: { rows: readonly { gesture: string; effect: string }[] }) => (
   <Stack gap="1">
     {rows.map((row) => (

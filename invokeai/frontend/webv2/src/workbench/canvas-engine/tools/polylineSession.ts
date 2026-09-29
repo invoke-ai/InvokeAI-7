@@ -1,11 +1,6 @@
 /**
- * A click-to-place polyline shared by the lasso's polygon mode and the shape
- * tool's polygon kind: vertices accumulate across presses, a rubber band
- * follows the cursor, and the shape closes on a double-click, on Enter, or on
- * a press within a screen radius of the first vertex — which the overlay
- * previews as an armed ring while the cursor hovers there.
- *
- * Zero React, zero import-time side effects.
+ * Shared click-to-place polyline with cursor band. Close on double-click, Enter or first-vertex screen-radius hit;
+ * preview that hit with a ring.
  */
 
 import type { LassoPreview } from '@workbench/canvas-engine/engineStores';
@@ -58,10 +53,6 @@ export const isOnFirstVertex = (ctx: ToolContext, session: PolylineSession, scre
   return distance(ctx.viewport.documentToScreen(first), screenPoint) <= POLYLINE_CLOSE_HIT_PX;
 };
 
-/**
- * Handles a press after the first: closes when it double-clicks or lands on
- * the first vertex, else places a vertex. Returns what happened.
- */
 export const pressPolyline = (ctx: ToolContext, session: PolylineSession, input: PointerInput): 'close' | 'place' => {
   const isDoubleClick =
     input.timeStamp - session.lastPressAt <= POLYLINE_DOUBLE_CLICK_MS &&

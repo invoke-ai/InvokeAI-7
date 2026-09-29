@@ -23,8 +23,7 @@ const stubs = vi.hoisted(() => ({
 
 vi.mock('@features/generation/ui/GenerationUiContext', async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  // Stubbed alongside the hook: the real one reads the context from its own
-  // unmocked module instance, which no provider in this harness fills.
+  // Mock the context-bearing component and hook together to avoid unmatched module instances.
   GenerationModelSelect: stubs.ModelSelect,
   useGenerationUi: () => ({
     capabilities: { canManagePromptTemplates: false, canManageSharedSystemPrompts: false },

@@ -1,9 +1,6 @@
 /**
- * The size a canvas generation is denoised at, before the result is resized
- * back to the exact bbox footprint. Legacy's "Scale Before Processing":
- * `none` keeps the bbox (snapped to the model grid), `auto` grows a small bbox
- * along its aspect ratio until it reaches the model's optimal pixel area, and
- * `manual` uses the user's own size. Pure data; no React, no transport.
+ * None snaps the bbox to the model grid; auto grows undersized content toward optimal area at its aspect ratio;
+ * manual uses the selected size. Restore final output to the exact bbox.
  */
 
 import type { GenerateModelConfig, PidMode } from '@features/generation/core/types';
@@ -49,10 +46,7 @@ const isSdxlTrainingSize = (base: string, { height, width }: CanvasSize): boolea
   base === 'sdxl' &&
   SDXL_TRAINING_DIMENSIONS.some(([a, b]) => (a === width && b === height) || (a === height && b === width));
 
-/**
- * Grows `size` in grid steps along its aspect ratio until it covers the
- * optimal area; a bbox already at or above that area is left alone.
- */
+/** Auto grows only below optimal area, preserving aspect ratio on the model grid. */
 const growToOptimalArea = (size: CanvasSize, optimal: number, grid: number): CanvasSize => {
   const width = snap(size.width, grid);
   const height = snap(size.height, grid);
@@ -80,8 +74,7 @@ const growToOptimalArea = (size: CanvasSize, optimal: number, grid: number): Can
 };
 
 export const resolveCanvasProcessingSize = (
-  // The variant participates: Wan TI2V-5B snaps to 32 where A14B snaps to 16, and a caller that
-  // dropped it would show one processing size while the graph compiles another.
+  // Keep the variant: Wan 5B and A14B use different grids.
   model: Pick<GenerateModelConfig, 'base' | 'type'> & { variant?: unknown },
   pidMode: PidMode,
   bbox: CanvasSize,

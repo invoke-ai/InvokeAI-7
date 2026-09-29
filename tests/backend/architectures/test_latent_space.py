@@ -16,6 +16,7 @@ from invokeai.backend.architectures.facets.latent_space import (
     COGVIEW4_16,
     FLUX2_32,
     FLUX_16,
+    LTX2_128,
     MINIMAX_H3_24,
     SD3_16,
     SD15_4,
@@ -63,6 +64,7 @@ DECLARED_LATENT_SPACES: dict[BaseModelType, tuple[LatentSpace, ...]] = {
     # Ideogram 4 a row at all.
     BaseModelType.Ideogram4: (FLUX2_32,),
     BaseModelType.Krea2: (WAN21_16,),
+    BaseModelType.LTX2: (LTX2_128,),
     BaseModelType.MiniMaxH3: (MINIMAX_H3_24,),
     BaseModelType.QwenImage: (WAN21_16,),
     BaseModelType.StableDiffusion1: (SD15_4,),
@@ -115,6 +117,8 @@ PINNED_PREVIEW_PIXELS: list[tuple[LatentSpace, float, tuple[int, int, int], tupl
     (MINIMAX_H3_24, 0.25, (173, 180, 97), (142, 145, 127)),
     # colsums (-0.5209, -0.1927, 0.9241), bias (0.0317, -0.0878, -0.1388)
     (WAN22_48, 1.0, (65, 91, 227), (131, 116, 109)),
+    # colsums (-0.0698, -0.0317, 0.0266), bias (-0.2223, -0.2864, -0.2917)
+    (LTX2_128, 0.25, (96, 89, 91), (99, 90, 90)),
 ]
 
 

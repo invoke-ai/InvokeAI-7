@@ -36,8 +36,7 @@ const render = async (children: React.ReactNode) => {
 
 describe('GenerateCollapsibleSection', () => {
   it('styles by DOM state so uncontrolled sections (no sectionId) still read as cards', async () => {
-    // Upscale's sections pass only defaultOpen — openness never reaches the
-    // component as a prop, so any prop-driven styling is blind to them.
+    // defaultOpen-only consumers require DOM-state styling.
     await render(
       <GenerateCollapsibleSection defaultOpen label="Uncontrolled">
         <div>body</div>

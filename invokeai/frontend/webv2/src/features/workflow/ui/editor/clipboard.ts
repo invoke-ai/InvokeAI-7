@@ -5,12 +5,8 @@ import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
 
 /**
- * Session-lived clipboard for workflow nodes. Copies hold deep clones of the
- * selected nodes plus the edges that connect them to each other; pasting
- * materializes fresh ids (remapping those internal edges) so a payload can be
- * pasted repeatedly. Deliberately not the system clipboard: node fragments are
- * not a valid workflow JSON, so a partial graph on the OS clipboard would only
- * masquerade as an importable document.
+ * Keep deep-cloned node fragments in a session clipboard; paste remaps internal edges to fresh IDs. Fragments are
+ * not valid system-clipboard workflow documents.
  */
 
 interface WorkflowClipboardSnapshot {
@@ -90,11 +86,7 @@ const materializeElements = (
   };
 };
 
-/**
- * Materializes the clipboard into paste-ready elements with fresh ids.
- * Positions shift by a fixed offset from the copied originals (or anchor the
- * group's top-left on `at` when given) so pastes do not stack on their source.
- */
+/** Assign fresh IDs and offset positions, or anchor the group's top-left at the requested point. */
 export const buildPasteElements = (at?: XYPosition): { nodes: WorkflowNode[]; edges: WorkflowEdge[] } =>
   materializeElements(clipboardStore.getSnapshot(), at);
 

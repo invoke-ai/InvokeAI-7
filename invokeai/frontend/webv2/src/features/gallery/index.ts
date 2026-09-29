@@ -46,10 +46,10 @@ import {
   getGalleryImageByName,
   getGalleryImageMetadata,
   getGalleryImagesByNames,
+  getGalleryImageWorkflow,
   getGalleryItemByRef,
   getGalleryVideoMetadata,
   getGalleryVideoWorkflow,
-  isDateBoardId,
   isInvalidGalleryBoardDestination,
   listGalleryBoards,
   makeImageCanvasAsset,
@@ -72,6 +72,7 @@ export const galleryImages = {
   metadata: getGalleryImageMetadata,
   resolve: getGalleryImageByName,
   resolveMany: getGalleryImagesByNames,
+  workflow: getGalleryImageWorkflow,
 } as const;
 
 /** Resolve either media kind while keeping the legacy image port strictly image-only. */
@@ -251,12 +252,6 @@ export const galleryDestinations = {
   list: listGalleryBoards,
 } as const;
 
-export const isGalleryVirtualBoard = isDateBoardId;
-
-/**
- * Whether a board id can actually receive item attachments. Virtual destinations
- * (date buckets, `generated`/`assets`) and `none` cannot: the organization
- * transports no-op for them rather than calling the backend.
- */
+/** Virtual boards and none cannot receive attachments; organization transports no-op for these destinations. */
 export const isGalleryBoardAttachable = (boardId: string): boolean =>
   boardId !== 'none' && !isInvalidGalleryBoardDestination(boardId);

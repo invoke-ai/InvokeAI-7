@@ -1,12 +1,6 @@
 import type { ModelConfig } from './types';
 
-/**
- * Pure logic for exporting a model's user-editable settings to JSON and
- * validating/partitioning an import. The file format is shared with the
- * legacy frontend: `{name?, description?, source_url?, default_settings?,
- * trigger_phrases?, cpu_only?, cover_image? (data URL)}`. Anything that
- * fetches or writes lives in the UI layer.
- */
+/** Keep JSON settings compatible with legacy exports; pure validation partitions imports while UI owns transport. */
 
 export const sanitizeFilename = (name: string): string => name.replace(/[<>:"/\\|?*]/g, '_');
 
@@ -135,12 +129,7 @@ export const validateImportData = (data: unknown): data is Record<string, unknow
   return true;
 };
 
-/**
- * Split validated import data into a PATCH body of fields the target model's
- * config actually carries, and the fields skipped as incompatible (e.g.
- * cpu_only imported onto a main model). The cover image is not part of the
- * body — it uploads through its own endpoint.
- */
+/** PATCH only supported config fields and report incompatible ones; upload cover images separately. */
 export const partitionImportableFields = (
   data: Record<string, unknown>,
   model: ModelConfig

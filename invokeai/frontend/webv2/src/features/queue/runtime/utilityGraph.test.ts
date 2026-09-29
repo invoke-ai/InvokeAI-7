@@ -1096,14 +1096,10 @@ describe('runUtilityGraph — enqueue failures', () => {
 
 describe('runUtilityGraph — origin isolation (Risk 4)', () => {
   it('mints a webv2:util: origin that project routing provably ignores', () => {
-    // The utility origin resolves to NO local queue item, so `queueCoordinator`
-    // (which keys backend items by `parseQueueItemOrigin`) and `routeQueueItemResults`
-    // never adopt a utility item into project staging / gallery routing.
+    // Utility origins must remain invisible to project adoption and staging/gallery routing.
     expect(isUtilityQueueItemOrigin(ORIGIN)).toBe(true);
     expect(parseQueueItemOrigin(ORIGIN)).toBeNull();
 
-    // A real project origin, by contrast, DOES parse to its local queue item id —
-    // demonstrating the coordinator adopts those but not utility items.
     const projectOrigin = buildQueueItemOrigin('local-1', 'project-1');
     expect(isUtilityQueueItemOrigin(projectOrigin)).toBe(false);
     expect(parseQueueItemOrigin(projectOrigin)).toBe('local-1');

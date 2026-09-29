@@ -16,10 +16,8 @@ const store = createExternalStoreCore<CanvasInvocationPreparationSnapshot>({ lea
 let nextLeaseToken = 1;
 
 /**
- * Acquires the user-facing canvas preparation slot before any asynchronous
- * module loading, prompt expansion, persistence, compositing, or upload begins.
- * The deeper canvas orchestrator keeps its own guard for non-active entry
- * points; this one owns the Ctrl+Enter/topbar acknowledgement window.
+ * Acquire the active-submit acknowledgement before any async work; the Canvas orchestrator separately guards other
+ * entry points.
  */
 export const beginCanvasInvocationPreparation = (projectId: string): CanvasInvocationPreparationLease | null => {
   const { leases } = store.getSnapshot();
@@ -37,9 +35,7 @@ export const beginCanvasInvocationPreparation = (projectId: string): CanvasInvoc
 export const endCanvasInvocationPreparation = (lease: CanvasInvocationPreparationLease): void => {
   const { leases } = store.getSnapshot();
 
-  // Account invalidation clears every lease synchronously. If an old async
-  // submission settles after a new account/project acquired the same id, its
-  // stale token must not release the new owner's acknowledgement.
+  // After account invalidation, an old submission token must not release a new owner's lease for the same id.
   if (leases.get(lease.projectId) !== lease.token) {
     return;
   }

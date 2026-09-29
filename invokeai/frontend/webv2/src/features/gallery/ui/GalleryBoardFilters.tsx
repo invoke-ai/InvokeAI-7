@@ -23,12 +23,6 @@ import { useGalleryWidget } from './GalleryWidgetContext';
 const SEARCH_START_ELEMENT = <Icon as={SearchIcon} size="xs" />;
 const SORT_MENU_POSITIONING = { placement: 'bottom-end' } as const;
 
-/**
- * Board search plus one options menu covering both list controls: what the
- * panel shows, and how it is ordered. A single icon-only trigger — the wide
- * sidebar has no room for labels, and two adjacent unlabelled icon buttons
- * read as noise you had to hover to tell apart.
- */
 export const GalleryBoardFilters = ({
   ref,
   searchTerm,
@@ -46,8 +40,7 @@ export const GalleryBoardFilters = ({
   const { actions, gallery } = useGalleryWidget();
   const { boardOrderBy, boardOrderDir, showArchivedBoards, showDateBoards, showOtherProjectBoards } = gallery.settings;
   const menuTriggerIds = useMenuTriggerIds();
-  // Any non-default visibility lifts the trigger out of `fg.muted`, so a
-  // filtered panel is legible without opening the menu.
+  // Highlight non-default visibility so filtering is apparent with the menu closed.
   const isVisibilityFiltered =
     showArchivedBoards !== DEFAULT_GALLERY_SETTINGS.showArchivedBoards ||
     showDateBoards !== DEFAULT_GALLERY_SETTINGS.showDateBoards ||
@@ -193,12 +186,7 @@ export const GalleryBoardFilters = ({
   );
 };
 
-/**
- * A checkable visibility row. Chakra ships no `Menu.CheckboxItem`, and the
- * codebase expresses checked state either as a radio group or as a zero-opacity
- * check that holds its own gutter; these are independent toggles, so it is the
- * latter.
- */
+/** Independent toggles use a reserved check gutter rather than mutually exclusive radio items. */
 const BoardVisibilityItem = ({
   icon,
   isChecked,

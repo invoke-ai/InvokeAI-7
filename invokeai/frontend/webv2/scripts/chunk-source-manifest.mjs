@@ -21,13 +21,8 @@ const getPackageOwner = (moduleId) => {
 };
 
 /**
- * Converts a bundler module id into a stable ownership id.
- *
- * First-party modules retain their repo-relative source path. Dependency
- * internals collapse to the package that owns them, so a lockfile refresh does
- * not rewrite the graph merely because pnpm's content-addressed path changed.
- * Virtual/runtime modules are intentionally excluded: they have no source
- * owner and their emitted bytes are still covered by the outcome budgets.
+ * Keep first-party paths; collapse dependencies to package IDs to ignore pnpm layout changes. Exclude ownerless
+ * virtual modules; byte budgets still cover them.
  */
 export const getModuleSourceOwner = (moduleId, projectRoot) => {
   if (typeof moduleId !== 'string' || moduleId.length === 0 || moduleId.startsWith(VIRTUAL_MODULE_PREFIX)) {

@@ -23,7 +23,7 @@ directly by the denoise invocation - they are stateless configs, not loaded weig
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import torch
 
@@ -32,8 +32,13 @@ from invokeai.backend.model_manager.configs.main import (
     Main_Checkpoint_MiniMaxH3_Config,
     Main_Diffusers_MiniMaxH3_Config,
 )
+from invokeai.backend.model_manager.load.fp8_capability import Unimplemented
 from invokeai.backend.model_manager.load.load_default import ModelLoader
 from invokeai.backend.model_manager.load.model_loader_registry import ModelLoaderRegistry
+from invokeai.backend.model_manager.load.model_loaders._single_file_guards import (
+    reject_float8_weights,
+    reject_formats_declared_in_the_header,
+)
 from invokeai.backend.model_manager.taxonomy import (
     AnyModel,
     BaseModelType,
@@ -43,6 +48,20 @@ from invokeai.backend.model_manager.taxonomy import (
 )
 from invokeai.backend.model_manager.util.qwen3_vl import normalize_qwen3vl_rope_config
 from invokeai.backend.util.devices import TorchDevice
+
+_H3_SUPPORTED_NOTE = "Only unquantized and Comfy 'int8_tensorwise' (int8/int8-convrot) single files are supported."
+
+
+def _reject_formats_declared_in_the_header(model_path: Path, what: str, logger: Any) -> None:
+    """H3's gate: only ``int8_tensorwise`` may be declared (see the shared guard for the rules)."""
+    from invokeai.backend.quantization.int8_convrot import INT8_TENSORWISE_FORMAT
+
+    reject_formats_declared_in_the_header(model_path, what, logger, {INT8_TENSORWISE_FORMAT}, _H3_SUPPORTED_NOTE)
+
+
+def _reject_float8_weights(sd: dict[str, Any], what: str, model_path: Path) -> None:
+    """H3's undeclared-fp8 refusal (see the shared guard for why it exists)."""
+    reject_float8_weights(sd, what, model_path, _H3_SUPPORTED_NOTE)
 
 
 def _raise_if_no_weight_shards(submodel_path: Path, submodel_label: str) -> None:
@@ -61,7 +80,15 @@ def _raise_if_no_weight_shards(submodel_path: Path, submodel_label: str) -> None
         )
 
 
-@ModelLoaderRegistry.register(base=BaseModelType.MiniMaxH3, type=ModelType.Main, format=ModelFormat.Diffusers)
+@ModelLoaderRegistry.register(
+    base=BaseModelType.MiniMaxH3,
+    type=ModelType.Main,
+    format=ModelFormat.Diffusers,
+    fp8_storage=Unimplemented(
+        "the transformer keeps fp32 patch projections and output heads beside bf16 blocks, and the cast "
+        "derives one compute dtype from the first float parameter; that has to be checked here first"
+    ),
+)
 class MiniMaxH3DiffusersModel(ModelLoader):
     """Loader for MiniMax H3 diffusers-format models (FL2VA)."""
 
@@ -147,7 +174,15 @@ class MiniMaxH3DiffusersModel(ModelLoader):
                 raise ValueError(f"Unsupported submodel type {submodel_type} for MiniMax H3 models.")
 
 
-@ModelLoaderRegistry.register(base=BaseModelType.MiniMaxH3, type=ModelType.Main, format=ModelFormat.Checkpoint)
+@ModelLoaderRegistry.register(
+    base=BaseModelType.MiniMaxH3,
+    type=ModelType.Main,
+    format=ModelFormat.Checkpoint,
+    fp8_storage=Unimplemented(
+        "the same mixed-precision islands as the diffusers path, and the int8-convrot build additionally "
+        "keeps packed int8 linears resident"
+    ),
+)
 class MiniMaxH3CheckpointModel(ModelLoader):
     """Loader for MiniMax H3 single-file transformer checkpoints (bf16 or Comfy int8-convrot,
     full or AdaLN-pruned).
@@ -187,7 +222,6 @@ class MiniMaxH3CheckpointModel(ModelLoader):
         )
         from invokeai.backend.model_manager.load.model_loaders.minimax_h3_state_dict_utils import (
             convert_minimax_h3_checkpoint_to_diffusers,
-            read_comfy_quant_markers,
         )
         from invokeai.backend.quantization.int8_convrot import (
             INT8_TENSORWISE_FORMAT,
@@ -200,22 +234,9 @@ class MiniMaxH3CheckpointModel(ModelLoader):
         # the vendored attention classes); see contiguous_attention for the measurements.
         patch_minimax_h3_attention_contiguous_qkv()
 
-        # Reject unsupported quantization formats from the header alone, before committing to
-        # the ~20 GiB tensor read (the fp8_scaled repacks share this key layout).
-        unsupported = sorted(
-            {
-                str(marker.get("format") or "unreadable")
-                for marker in read_comfy_quant_markers(model_path).values()
-                if marker.get("format") != INT8_TENSORWISE_FORMAT
-            }
-        )
-        if unsupported:
-            raise ValueError(
-                f"Unsupported quantization format(s) {unsupported} in MiniMax H3 checkpoint {model_path.name}. "
-                "Only unquantized and Comfy 'int8_tensorwise' (int8/int8-convrot) single files are supported."
-            )
-
+        _reject_formats_declared_in_the_header(model_path, "MiniMax H3 checkpoint", self._logger)
         sd = load_file(model_path)
+        _reject_float8_weights(sd, "MiniMax H3 checkpoint", model_path)
         rope_freq_dim = sd["rope.inv_freq"].shape[0] if "rope.inv_freq" in sd else 16
         sd, quant_markers = convert_minimax_h3_checkpoint_to_diffusers(sd)
 
@@ -260,6 +281,14 @@ class MiniMaxH3CheckpointModel(ModelLoader):
         # is what applies the scale-layout check and reads each marker's own `convrot_groupsize`
         # instead of assuming 256 -- a 64-wide repack derotated with a 256-wide Hadamard runs and
         # generates noise.
+        # Not redundant with `_reject_formats_declared_in_the_header`, though it looks it. The two
+        # read the same blob by different routes: the header check decodes raw file bytes, while
+        # `parse_comfy_quant_marker` goes through `tensor.numpy()`, which returns `{}` for a dtype
+        # numpy has no equivalent for -- bfloat16 and the float8s; int8, float16 and float32 all
+        # decode the same bytes fine. A marker stored as one of those therefore passes the gate and
+        # arrives here empty -- and an empty marker is not refused downstream, it is *defaulted*:
+        # `convrot` False and a 256-wide group, so a 64-wide repack is derotated with the wrong
+        # Hadamard and renders noise. Measured at correlation 0.14 to the true weight.
         for module_name, marker in quant_markers.items():
             if marker.get("format") != INT8_TENSORWISE_FORMAT:
                 raise ValueError(f"Unsupported comfy_quant format {marker!r} on {module_name}")
@@ -297,8 +326,6 @@ class MiniMaxH3TextEncoderCheckpointModel(ModelLoader):
     Like the H3 transformer checkpoints, quantized layers are not autocast-wrapped, so
     residency is all-or-nothing: the int8 file needs ~26 GiB free VRAM while encoding (it
     idle-offloads afterwards); graceful partial-load degradation is the folder encoder's job.
-    If partial load does engage, the tied lm_head/embed_tokens alias additionally splits into
-    two device tensors (~1.56 GB overhead) - see the tie_weights() note in the load path.
     """
 
     def _load_model(
@@ -333,7 +360,6 @@ class MiniMaxH3TextEncoderCheckpointModel(ModelLoader):
         from invokeai.backend.minimax_h3.text_conditioning import MINIMAX_H3_TEXT_ENCODER_LAYER
         from invokeai.backend.model_manager.load.model_loaders.minimax_h3_state_dict_utils import (
             convert_minimax_h3_text_encoder_checkpoint,
-            read_comfy_quant_markers,
         )
         from invokeai.backend.quantization.int8_convrot import (
             INT8_TENSORWISE_FORMAT,
@@ -342,23 +368,9 @@ class MiniMaxH3TextEncoderCheckpointModel(ModelLoader):
 
         model_path = Path(config.path)
 
-        # Reject unsupported quantization formats from the header alone, before the ~25 GiB
-        # tensor read (the nvfp4_awq repacks share this key layout).
-        unsupported = sorted(
-            {
-                str(marker.get("format") or "unreadable")
-                for marker in read_comfy_quant_markers(model_path).values()
-                if marker.get("format") != INT8_TENSORWISE_FORMAT
-            }
-        )
-        if unsupported:
-            raise ValueError(
-                f"Unsupported quantization format(s) {unsupported} in MiniMax H3 text encoder "
-                f"{model_path.name}. Only unquantized and Comfy 'int8_tensorwise' (int8/int8-convrot) "
-                "single files are supported."
-            )
-
+        _reject_formats_declared_in_the_header(model_path, "MiniMax H3 text encoder", self._logger)
         sd = load_file(model_path)
+        _reject_float8_weights(sd, "MiniMax H3 text encoder", model_path)
         sd, quant_markers = convert_minimax_h3_text_encoder_checkpoint(sd)
 
         self._ram_cache.make_room(sum(t.nelement() * t.element_size() for t in sd.values()))
@@ -399,6 +411,14 @@ class MiniMaxH3TextEncoderCheckpointModel(ModelLoader):
 
         # Shared helper, not a second copy: it applies the scale-layout check and reads each
         # marker's own `convrot_groupsize` rather than assuming 256.
+        # Not redundant with `_reject_formats_declared_in_the_header`, though it looks it. The two
+        # read the same blob by different routes: the header check decodes raw file bytes, while
+        # `parse_comfy_quant_marker` goes through `tensor.numpy()`, which returns `{}` for a dtype
+        # numpy has no equivalent for -- bfloat16 and the float8s; int8, float16 and float32 all
+        # decode the same bytes fine. A marker stored as one of those therefore passes the gate and
+        # arrives here empty -- and an empty marker is not refused downstream, it is *defaulted*:
+        # `convrot` False and a 256-wide group, so a 64-wide repack is derotated with the wrong
+        # Hadamard and renders noise. Measured at correlation 0.14 to the true weight.
         for module_name, marker in quant_markers.items():
             if marker.get("format") != INT8_TENSORWISE_FORMAT:
                 raise ValueError(f"Unsupported comfy_quant format {marker!r} on {module_name}")
@@ -413,10 +433,8 @@ class MiniMaxH3TextEncoderCheckpointModel(ModelLoader):
             )
         # Re-tie now that embed_tokens holds the loaded tensor (assign=True replaced the meta
         # parameter the original tie pointed at). The head is never run; tying keeps the module
-        # free of meta tensors and adds no RAM (aliased storage). Caveat: the model cache's
-        # partial-load path moves state-dict keys independently (no data_ptr dedupe), so on that
-        # path the tied pair splits into two device tensors (~1.56 GB extra VRAM, double-counted
-        # in the cache's accounting). Fully-resident loads - the intended regime - keep the alias.
+        # free of meta tensors and adds no RAM (aliased storage), and the model cache keeps the
+        # alias on the compute device too (see `tensor_aliases`).
         model.tie_weights()
 
         return model

@@ -105,12 +105,8 @@ interface Harness {
 }
 
 /**
- * A ToolContext whose transform-session seams mutate a real `transformSession`
- * store (mirroring the engine), so the tool's reads reflect its own writes across
- * a down→move→up drag. The viewport projects document→screen 1:1.
- *
- * Grid snapping starts OFF so the gesture-math tests assert raw pointer deltas;
- * the snapping tests re-enable it on `h.ctx.stores`. (The product default is on.)
+ * Real session stores reflect tool writes during 1:1 gesture tests. Snap defaults off here to isolate deltas;
+ * dedicated cases enable the product-default behavior.
  */
 const createHarness = (doc: CanvasDocumentContractV3, zoom = 1, float?: FloatingSelection | null): Harness => {
   const stores = createEngineStores();
@@ -434,14 +430,10 @@ describe('transform tool: rotation nub (regression — a nub press must rotate, 
     const tip = nubTipScreen(transformed, layerSize, zoom);
     down(tool, h.ctx, pointerAtScreen(tip, zoom));
 
-    // (a) Gesture start must NOT touch the session/override values. The bug read
-    // the nub press as off-frame and re-opened the session, resetting its live
-    // transform back to the committed one.
+    // Pressing the nub must preserve live session values rather than reopening from committed transforms.
     expect(h.session()?.transform).toEqual(startTransform);
     expect(h.overrides.length).toBe(overridesBefore);
 
-    // (b) A subsequent move begins a ROTATION: rotation changes by the swept
-    // angle, scale is untouched (not a move/scale/reset).
     const geo = transformOverlayGeometry(transformed, layerSize);
     const centerScreen: Vec2 = { x: zoom * geo.center.x, y: zoom * geo.center.y };
     const moved = rotateAbout(tip, centerScreen, 0.5);
@@ -518,8 +510,7 @@ describe('transform tool: apply / cancel', () => {
     const tool = createTransformTool();
     activate(tool, h.ctx);
 
-    // se corner drag, past the threshold — a gesture is now in progress and
-    // holds (conceptually) pointer capture.
+    // Southeast drag crosses the threshold and owns pointer capture.
     down(tool, h.ctx, pointer(100, 100));
     move(tool, h.ctx, pointer(120, 120));
     const midDrag = h.session()?.transform.scaleX;
@@ -527,8 +518,6 @@ describe('transform tool: apply / cancel', () => {
 
     tool.onKeyCommand?.(h.ctx, 'apply');
 
-    // No-op: the engine apply seam was NOT invoked (unlike the "Enter applies
-    // the session" test above, which has no live gesture).
     expect(h.applyCount()).toBe(0);
 
     // The gesture is still alive — it did not silently freeze mid-drag.
@@ -554,9 +543,7 @@ describe('transform tool: temp-tool switch (space/alt hold)', () => {
     tool.onDeactivate?.(h.ctx, { temporary: true });
     expect(h.session()?.transform).toEqual(edited);
 
-    // Space up: a temporary activate must not re-open the session from the
-    // current selection (which would stomp the preserved edit with the
-    // layer's committed transform).
+    // Temporary reactivation must preserve live edits instead of reopening from committed values.
     tool.onActivate?.(h.ctx, { temporary: true });
     expect(h.session()?.transform).toEqual(edited);
   });
@@ -569,8 +556,7 @@ describe('transform tool: temp-tool switch (space/alt hold)', () => {
     expect(h.session()).not.toBeNull();
 
     tool.onDeactivate?.(h.ctx, { temporary: true });
-    // Simulates the engine's layer-change teardown (Task 26 finding #3)
-    // cancelling the session out-of-band while temp-switched away.
+    // Simulate engine cancellation while temporarily switched away after the layer disappears.
     h.ctx.cancelTransform?.();
     expect(h.session()).toBeNull();
 

@@ -1,6 +1,7 @@
 import type { Project } from '@workbench/projectContracts';
 
 import { fontKeys } from '@features/fonts/contracts';
+import { createLogger } from '@platform/logging/logger';
 import {
   assertAccountScopeCurrent,
   captureAccountScope,
@@ -20,14 +21,9 @@ import { duplicateLibraryProject } from './library';
 import { exportLibraryProject, exportOpenProject, importProjectFile, pickProjectFile } from './projectFile';
 import { startProjectFileReport } from './projectFileToasts';
 
-/**
- * Picking, importing and exporting a project file, with the reporting attached.
- *
- * Five surfaces offer these, and each had its own copy of the scope capture, picker, try/catch and
- * toast — which had already drifted. One sequence is what makes progress and partial-success
- * reporting land on all five at once. Only what happens with the imported record differs, and that
- * is the callback.
- */
+/** Share the scoped transfer and reporting lifecycle across callers. */
+
+const projectFileLogger = createLogger({ area: 'project-file', namespace: 'persistence' });
 
 /** Runs the sequence, keeping the toast and the account scope in step. */
 const runReported = async <T>(
@@ -40,24 +36,30 @@ const runReported = async <T>(
 
   try {
     await run(report, owner);
+    projectFileLogger.info({
+      context: { direction: titles.direction, operation: titles.running },
+      message: 'Project file operation completed',
+      name: 'persistence.project-file-completed',
+    });
   } catch (error) {
-    // An operation cancelled by the account going away failed on purpose, and
-    // its error is written for a developer. There is no verdict to show,
-    // because there is no longer anyone the verdict is about.
+    // Account-cancellation errors stay silent because the operation no longer belongs to the active session.
     if (!isAccountScopeCurrent(owner)) {
       report.dismiss();
 
       return;
     }
 
+    projectFileLogger.error({
+      context: { direction: titles.direction },
+      error,
+      message: titles.failed,
+      name: 'persistence.project-file-failed',
+    });
     report.fail(titles.failed, error);
   }
 };
 
-/**
- * Import from the file picker. Resolves without doing anything if the picker is
- * dismissed — no toast is opened for a decision not to import.
- */
+/** Picker dismissal resolves without work or a toast. */
 export const useImportProjectFile = (onImported: (record: ProjectRecordDTO) => Promise<void> | void): (() => void) => {
   const { t } = useTranslation();
   const { requestReferencesOnlyImport } = useProjectFileOptions();
@@ -127,13 +129,7 @@ export const useExportLibraryProject = (): ((projectId: string, name: string) =>
   );
 };
 
-/**
- * Duplicate a project, reported like the transfers it shares its engine with.
- *
- * Duplication is a project file operation in everything but the file: same restore, same partial
- * success, same durations. It reported none of that — no progress for the whole server-side copy,
- * and `InvkFormatError`'s developer message straight into a toast on failure.
- */
+/** Duplication shares transfer progress and partial-success reporting. */
 export const useDuplicateProject = (
   onDuplicated?: (duplicated: DuplicatedProject) => Promise<void> | void
 ): ((projectId: string) => void) => {
@@ -146,8 +142,7 @@ export const useDuplicateProject = (
         { direction: 'write', failed: t('projects.duplicateFailed'), running: t('projects.duplicating') },
         async (report, owner) => {
           const duplicated = await duplicateLibraryProject(projectId, {
-            // Everything a duplication moves is restored onto the copy's board, so the phase is
-            // fixed. Naming it here keeps the reporting vocabulary in the reporting layer.
+            // Duplication uses the restore phase; this owner defines its reporting vocabulary.
             onProgress: ({ completed, total }) => report.report({ completed, phase: 'restoring', total }),
             owner,
           });

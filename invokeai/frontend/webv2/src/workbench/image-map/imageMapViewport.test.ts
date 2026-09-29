@@ -84,8 +84,7 @@ describe('zoomFactorFromWheel', () => {
   });
 
   it('normalizes line and page deltas, so a Firefox wheel is not inert', () => {
-    // Firefox reports a classic mouse wheel as ±3 LINES. Read as pixels that
-    // is a 0.3% zoom — ~230 notches to double the view.
+    // Firefox mouse deltas use three lines; interpreting them as pixels makes zoom nearly inert.
     const firefoxNotch = zoomFactorFromWheel(3, LINE, false);
     expect(firefoxNotch).toBeGreaterThan(1.02);
     expect(firefoxNotch).toBeCloseTo(zoomFactorFromWheel(48, PIXEL, false), 10);
@@ -153,8 +152,7 @@ describe('fitRangesToAspect', () => {
   });
 
   it('keeps at least 90% of points in view for any container shape', () => {
-    // The user-facing contract for the first render: the fitted view must
-    // show (nearly) the whole map, however skewed the container.
+    // Initial fitting must show nearly the whole map at any container aspect ratio.
     const points: ImageMapPoint[] = Array.from({ length: 100 }, (_, index) => ({
       cluster: 0,
       item: { kind: 'image', name: `p${index}.png` },

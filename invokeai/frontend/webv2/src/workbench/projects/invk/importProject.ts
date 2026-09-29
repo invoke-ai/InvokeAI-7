@@ -32,14 +32,7 @@ import { type InvkManifest, parseInvkManifest } from './manifest';
 import { restoreProjectMedia } from './restoreProjectMedia';
 import { toMediaRefs } from './transfer';
 
-/**
- * Reading an `.invk` back, in two steps a caller can put a decision between.
- *
- * {@link readInvkArchive} is pure inspection — no network, no mutation — so everything structural
- * fails before a board or a single uploaded image exists. {@link restoreArchiveMedia} is the part
- * with consequences. Neither touches the document: the caller applies the returned mapping,
- * because the caller is also the one assigning the new project id.
- */
+/** Inspect before creating resources; callers own document remapping and fresh project identity. */
 
 export interface InvkArchiveContents {
   /**
@@ -74,10 +67,7 @@ const parseDocumentEntry = (bytes: Uint8Array): Record<string, unknown> => {
   return parsed as Record<string, unknown>;
 };
 
-/**
- * The board enumeration, or `null` when the archive carries none. Absent is valid; *malformed* is
- * not, and must fail before anything is created — half an enumeration is not a board.
- */
+/** An absent board entry is valid; a malformed one must fail before mutations. */
 const parseBoardEntry = (entries: ReadonlyMap<string, Uint8Array>): InvkBoardSnapshot | null => {
   const entry = entries.get(INVK_BOARD_ENTRY);
 
@@ -96,11 +86,7 @@ const parseBoardEntry = (entries: ReadonlyMap<string, Uint8Array>): InvkBoardSna
   }
 };
 
-/**
- * The part of `images/<name>` that is a name, or `null` otherwise. A ZIP path is attacker-controlled:
- * `images/../../x.png` would let an entry masquerade as media the board enumeration asks for by
- * name. Server media names never contain a separator, so the check costs nothing legitimate.
- */
+/** Reject path separators so malicious ZIP paths cannot impersonate board media. */
 const toSafeBasename = (path: string, prefix: string): string | null => {
   const name = path.slice(prefix.length);
 
@@ -135,8 +121,7 @@ export const readInvkArchive = async (file: File): Promise<InvkArchiveContents> 
     throw new InvkFormatError('damaged', `Archive has no ${INVK_DOCUMENT_ENTRY}.`);
   }
 
-  // Before the bytes are indexed: an archive whose enumeration is malformed must create nothing,
-  // and the enumeration is what decides which of those bytes are board media at all.
+  // Validate enumeration before indexing bytes or creating resources.
   const boardSnapshot = parseBoardEntry(entries);
   const images = new Map<string, Uint8Array>();
   const videos = new Map<string, Uint8Array>();
@@ -179,14 +164,7 @@ export interface ArchiveBoardUploadDeps {
   uploadBoardVideo?: typeof uploadBoardVideo;
 }
 
-/**
- * The import half of the materialization seam: board media comes out of the archive. Uploaded with
- * no existence check — see `transfer.ts`. A descriptor the archive carries no bytes for is reported
- * rather than skipped: the exporting server said it was there.
- *
- * Entries are dropped as they land. An `.invk` may be two gigabytes, and holding every one until
- * the import finishes means holding the archive *and* everything unpacked from it.
- */
+/** Upload fresh identities, report missing bytes, and release materialized entries to bound memory. */
 export const createArchiveMediaMaterializer = (
   archive: Pick<InvkArchiveContents, 'images' | 'videos'>,
   deps: ArchiveBoardUploadDeps = {}
@@ -223,8 +201,7 @@ export const createArchiveMediaMaterializer = (
         result.materialized.push({ kind: item.kind, name, sourceName: item.name });
         entries.delete(item.name);
       } catch (error) {
-        // A cancelled signal or an expired account is not this item failing — it is every
-        // remaining item failing at once, which is an ended operation rather than a lossy one.
+        // Cancellation or account expiry aborts the operation rather than counting as per-item loss.
         if (isRequestCancellation(error)) {
           throw error;
         }

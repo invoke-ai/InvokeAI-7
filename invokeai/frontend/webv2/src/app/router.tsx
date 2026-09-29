@@ -10,6 +10,7 @@ import {
   type Capabilities,
 } from '@features/identity';
 import { ModelInstallRuntime } from '@features/models';
+import { createLogger } from '@platform/logging/logger';
 import {
   createHashHistory,
   createRootRoute,
@@ -24,7 +25,7 @@ import {
   useRouter,
 } from '@tanstack/react-router';
 import { WorkbenchSplashScreen } from '@workbench/components/WorkbenchSplashScreen';
-import { isLaunchpadIntentId, isLaunchpadLayoutId } from '@workbench/launchpad/intents';
+import { isLaunchpadIntentId } from '@workbench/launchpad/intents';
 import { Launchpad } from '@workbench/launchpad/Launchpad';
 import { ProjectFileOptionsProvider } from '@workbench/projects/components/ProjectFileOptionsProvider';
 import { peekOpenProjectIds, type WorkbenchSearch } from '@workbench/projects/session';
@@ -34,27 +35,16 @@ import { Fragment } from 'react';
 import { SocketHubRuntime } from './SocketHubRuntime';
 
 /**
- * Code-based route tree. The authenticated layout route owns the auth guard,
- * which resolves the backend's multi-user status once per app load:
- *
- * - multi-user off → authenticated routes render directly; /login + /setup bounce home
- * - setup required → everything funnels to /setup
- * - signed out     → authenticated routes redirect to /login
- *
- * Under it, `/` is the Launchpad (project library, model manager, profile,
- * resources) and `/app` is the editor. The editor bundle — canvas, workflow,
- * widgets — is code-split behind `lazyRouteComponent`, so the Launchpad stays
- * light; `defaultPreload: 'intent'` starts fetching that chunk the moment a
- * project card is hovered.
- *
- * Hash history is used because the bundle is served with a relative base
- * (`./`), so the app cannot rely on server-side fallback for deep paths.
+ * The authenticated layout owns setup/login guards; lazy /app keeps editor code out of Launchpad. Hash history
+ * supports the relative base without server deep-path fallback.
  */
+
+/** Route render and loader failures reach the router's catch boundary; record them once there. */
+const routerLogger = createLogger({ area: 'router', namespace: 'app' });
 
 const RouterError = ({ error }: ErrorComponentProps) => {
   'use no memo';
-  // Cold-path boundary: Compiler's memo cache costs more than this render.
-  // The browser retry test and production build budget guard its behavior.
+  // Skip compiler memoization on this cold path; retry tests and build budgets guard it.
   const router = useRouter();
 
   return error instanceof AuthSessionUnavailableError ? (
@@ -67,11 +57,8 @@ const RouterError = ({ error }: ErrorComponentProps) => {
 const rootRoute = createRootRoute({ component: Outlet, errorComponent: RouterError });
 
 /**
- * Wraps every authenticated route with the shared backend socket transport
- * and the model-install runtime — installs must progress and toast no matter
- * which surface started them. Heavier feature runtimes still attach their own
- * listeners only where needed, keeping the light Launchpad bundle free of
- * editor/model-manager view code.
+ * Keep socket and install progress alive across authenticated routes; mount heavier feature listeners only where
+ * needed.
  */
 const AuthenticatedLayout = () => {
   'use no memo';
@@ -128,8 +115,6 @@ const requireLaunchpadCapability = async (capability: keyof Capabilities): Promi
   }
 };
 
-// `/` plus a deep-link alias per Launchpad section. All render the same shell;
-// it reads the path to pick the active page.
 const launchpadRouteOptions = {
   component: Launchpad,
   getParentRoute: () => authenticatedRoute,
@@ -173,21 +158,12 @@ const fontsHomeRoute = createRoute({
 
 const workbenchRoute = createRoute({
   beforeLoad: async ({ cause, search }) => {
-    // Warm the editor bundle while the guard's session peek is in flight. The
-    // module loader dedupes against `lazyRouteComponent`'s own import, so on a
-    // cold deep link the chunk downloads in parallel with the peek instead of
-    // after it.
+    // Preload the editor during the session peek; the module loader deduplicates the lazy-route import.
     void import('./WorkbenchApp');
 
-    // Photoshop semantics: the editor without documents is Home. A definite
-    // empty session redirects unless the URL explicitly asks for a project or
-    // a fresh draft; an unknowable session (first run, legacy blob, backend
-    // unreachable) falls through and the editor boots from what it can find.
-    //
-    // Only actual entries are checked: search-only changes ('stay', e.g. the
-    // session controller stripping ?new before the draft has autosaved) must
-    // not re-evaluate a blob that is still catching up, and hover preloads
-    // should not hit the session endpoint at all.
+    // Redirect a definitively empty session to Home unless ?project/?new is supplied. Unknown sessions fall
+    // through. Check only entries: search changes can precede autosave, and hover preloads must not fetch the
+    // session.
     if (cause !== 'enter' || search.project || search.new) {
       return;
     }
@@ -204,7 +180,6 @@ const workbenchRoute = createRoute({
   validateSearch: (search: Record<string, unknown>): WorkbenchSearch => ({
     intent: isLaunchpadIntentId(search.intent) ? search.intent : undefined,
     new: search.new === true || search.new === 'true' || search.new === 1 ? true : undefined,
-    preset: isLaunchpadLayoutId(search.preset) ? search.preset : undefined,
     project: typeof search.project === 'string' && search.project.length > 0 ? search.project : undefined,
   }),
 });
@@ -243,6 +218,13 @@ const RouterPending = () => <WorkbenchSplashScreen messageKey="splash.loadingApp
 
 export const router = createRouter({
   defaultNotFoundComponent: () => <Navigate to="/" />,
+  defaultOnCatch: (error, errorInfo) =>
+    routerLogger.error({
+      context: errorInfo?.componentStack ? { componentStack: errorInfo.componentStack } : undefined,
+      error,
+      message: 'Route rendering failed',
+      name: 'app.route-failed',
+    }),
   defaultPendingComponent: RouterPending,
   defaultPreload: 'intent',
   history: createHashHistory(),

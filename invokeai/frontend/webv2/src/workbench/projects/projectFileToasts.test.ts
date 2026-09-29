@@ -2,13 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type * as toastsModule from './projectFileToasts';
 
-/**
- * What a project file says while it runs and when it stops.
- *
- * The two properties worth pinning are that it is *one* toast for the whole
- * operation — a slow export must not stack a line per asset — and that a run
- * which lost assets does not finish looking like a clean one.
- */
+/** Update one toast throughout the transfer; partial loss finishes as a warning. */
 
 interface ToastOptions {
   description?: string;
@@ -60,10 +54,7 @@ describe('startProjectFileReport', () => {
     expect(toaster.update.mock.calls.every(([id]) => id === 'toast-1')).toBe(true);
   });
 
-  /**
-   * Progress arrives once per asset and a project can hold hundreds of them, during the phase
-   * already saturating the network. The first count shows at once; the rest coalesce.
-   */
+  /** Show the first progress update immediately and coalesce subsequent per-asset updates. */
   it('redraws at most once per interval while assets settle', () => {
     vi.useFakeTimers();
 
@@ -109,11 +100,7 @@ describe('startProjectFileReport', () => {
     }
   });
 
-  /**
-   * `succeed` runs before a caller's own follow-up work — the navigation after an import. A
-   * failure there is not a failure of the transfer, and saying so after it demonstrably worked is
-   * the worse lie.
-   */
+  /** Navigation failure after transfer cannot change its successful verdict. */
   it('does not take back a verdict it has already given', () => {
     const report = toasts.startProjectFileReport(t, 'projects.importing');
 
@@ -136,11 +123,7 @@ describe('startProjectFileReport', () => {
     );
   });
 
-  /**
-   * Losing a board result and losing a canvas layer are different sizes of problem, so one count
-   * cannot stand for both — and a project that lost forty layers must not read the same as one
-   * that lost none.
-   */
+  /** Count missing board media separately from missing document references. */
   it.each([
     ['nothing', [], [], { title: 'projects.exported', type: 'success' }],
     [

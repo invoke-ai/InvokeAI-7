@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { LibraryWorkflowLoadRequest } from './workflowUiStore';
+import type { WorkflowLoadRequest, WorkflowLoadSource } from './workflowUiStore';
 
-import { startPendingLibraryWorkflowLoadRuntime } from './pendingLibraryWorkflowLoadRuntime';
+import { startPendingWorkflowLoadRuntime } from './pendingLibraryWorkflowLoadRuntime';
 
 const deferred = () => {
   let resolve!: () => void;
@@ -13,43 +13,45 @@ const deferred = () => {
   return { promise, resolve };
 };
 
-describe('pending library workflow load runtime', () => {
+describe('pending workflow load runtime', () => {
   it('serializes loads, keeps only the latest queued request, and compare-clears completions', async () => {
     const listeners = new Set<() => void>();
     const loads = new Map<string, ReturnType<typeof deferred>>();
-    const load = vi.fn((workflowId: string) => {
+    const load = vi.fn((source: WorkflowLoadSource) => {
       const pending = deferred();
-      loads.set(workflowId, pending);
+      loads.set(source.kind === 'library' ? source.workflowId : source.label, pending);
       return pending.promise;
     });
-    let request: LibraryWorkflowLoadRequest | null = null;
+    const loadedIds = () =>
+      load.mock.calls.map(([source]) => (source.kind === 'library' ? source.workflowId : source.label));
+    let request: WorkflowLoadRequest | null = null;
     const clearRequest = vi.fn((requestId: number) => {
       if (request?.requestId === requestId) {
         request = null;
       }
     });
-    const emit = (next: LibraryWorkflowLoadRequest) => {
+    const emit = (next: WorkflowLoadRequest) => {
       request = next;
       listeners.forEach((listener) => listener());
     };
-    const stop = startPendingLibraryWorkflowLoadRuntime({
+    const stop = startPendingWorkflowLoadRuntime({
       clearRequest,
       getRequest: () => request,
       load,
-      subscribe: (listener) => {
+      subscribe: (listener: () => void) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
     });
 
-    emit({ requestId: 1, workflowId: 'first' });
-    emit({ requestId: 2, workflowId: 'superseded' });
-    emit({ requestId: 3, workflowId: 'latest' });
-    expect(load.mock.calls.map(([workflowId]) => workflowId)).toEqual(['first']);
+    emit({ requestId: 1, source: { kind: 'library', workflowId: 'first' } });
+    emit({ requestId: 2, source: { kind: 'library', workflowId: 'superseded' } });
+    emit({ requestId: 3, source: { kind: 'document', label: 'latest', raw: {} } });
+    expect(loadedIds()).toEqual(['first']);
 
     loads.get('first')?.resolve();
-    await vi.waitFor(() => expect(load.mock.calls.map(([workflowId]) => workflowId)).toEqual(['first', 'latest']));
-    expect(request).toEqual({ requestId: 3, workflowId: 'latest' });
+    await vi.waitFor(() => expect(loadedIds()).toEqual(['first', 'latest']));
+    expect(request).toEqual({ requestId: 3, source: { kind: 'document', label: 'latest', raw: {} } });
 
     loads.get('latest')?.resolve();
     await vi.waitFor(() => expect(request).toBeNull());
@@ -60,9 +62,9 @@ describe('pending library workflow load runtime', () => {
   it('does not clear shared state when an in-flight load settles after the runtime stops', async () => {
     const pending = deferred();
     const clearRequest = vi.fn();
-    const stop = startPendingLibraryWorkflowLoadRuntime({
+    const stop = startPendingWorkflowLoadRuntime({
       clearRequest,
-      getRequest: () => ({ requestId: 1, workflowId: 'user-a-workflow' }),
+      getRequest: () => ({ requestId: 1, source: { kind: 'library', workflowId: 'user-a-workflow' } }),
       load: () => pending.promise,
       subscribe: () => () => undefined,
     });

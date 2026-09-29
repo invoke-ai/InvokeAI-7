@@ -11,10 +11,7 @@ import { useTranslation } from 'react-i18next';
 const isFiltering = (filters: ModelLibraryFilters): boolean =>
   filters.typeFilter !== null || filters.baseFilter !== null || filters.missingOnly;
 
-/**
- * Search box plus a combined filter/sort menu. The menu reflects only values
- * present in the current library so it never offers dead filters.
- */
+/** Offer taxonomy filters only for values present in the library. */
 export const ModelFilterBar = ({
   availableBases,
   availableTypes,

@@ -1,24 +1,8 @@
 import type { GalleryItemKey } from '@features/gallery';
 
 /**
- * "Play this video item from A to B, on a loop" — the gesture behind the Video panel's
- * play buttons, which ask Preview to show what a trim actually selected.
- *
- * An ephemeral intent aimed at whichever player is mounted, not a piece of state: it is
- * module-scoped so it is never replayed in a later session, and it carries a token so a
- * repeated press on an unchanged window still reads as a new request. The publisher lives
- * in App (it has to select the item and raise the widget first); the consumer is this
- * widget's `<video>` element, which is why the channel is owned here rather than beside
- * the gallery's reveal request — that one's consumer is the gallery grid itself.
- *
- * The timestamp bounds it. The publisher raises Preview before publishing, so a player
- * mounts promptly; a request read long afterwards belongs to a gesture the user has moved
- * on from, and honouring it would start unmuted audio out of nowhere.
- *
- * The return channel is the playback STATE below: the player that honoured a request
- * reports, under that request's token, whether the window is running and how to stop it,
- * so the button that made the request can show a pause control for as long as — and only
- * as long as — its own loop is the one on screen.
+ * Publish ephemeral tokenized trim-loop intents after selecting media and raising Preview. Expire stale requests
+ * to prevent unexpected delayed audio; the player reports running state and stop control under the same token.
  */
 
 export interface VideoSpanPlaybackRequest {
@@ -81,15 +65,8 @@ export const subscribeVideoSpanPlaybackRequests = (listener: () => void): (() =>
 };
 
 /**
- * What the player is doing with the request it last honoured. `null` between loops: before
- * any request has been acted on, once the user takes the playhead out of the window, and
- * whenever the player leaves the screen.
- *
- * `isPlaying` follows the element's own `play`/`pause` events rather than the request, so
- * a pause from the native controls — or an autoplay refusal — shows in the panel as
- * faithfully as one from the panel's button, and a native play resumes it. `pause` leaves
- * the loop armed for the same reason the autoplay case does: the native play control then
- * resumes the selection, not the whole clip.
+ * Report actual element playback for the current loop, null before use, after leaving its span, or while hidden.
+ * Pausing keeps the loop armed for native resume.
  */
 export interface VideoSpanPlaybackState {
   isPlaying: boolean;

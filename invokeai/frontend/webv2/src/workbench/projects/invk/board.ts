@@ -4,19 +4,8 @@ import { INVK_MAX_ENTRIES } from './archive';
 import { InvkFormatError } from './format';
 
 /**
- * `board.json`: what was on the project's board when the archive was written. A document names only
- * the media it draws with, so everything else the project produced appears nowhere in it — this
- * entry is the difference between carrying a project's canvas and carrying its workspace.
- *
- * ```json
- * { "version": 1, "items": [{ "category": "general", "kind": "image", "name": "…", "starred": false }] }
- * ```
- *
- * The version is the *file's*, not the API's: an archive format pinned to the wire format would
- * have to move whenever it did, and vice versa.
- *
- * Validation is strict and structural — a duplicate `(kind, name)` or a non-basename name means the
- * file is malformed and must be refused before anything is uploaded, not reported alongside it.
+ * The independently versioned board entry includes unreferenced media. Validate it strictly before uploading
+ * anything.
  */
 
 export type InvkMediaKind = 'image' | 'video';
@@ -34,11 +23,7 @@ export interface InvkBoardSnapshot {
   items: InvkBoardItem[];
 }
 
-/**
- * A media name must be exactly what the server would name a file: no separators, no traversal, no
- * NUL. The archive stores these under `images/` and `videos/`, so anything else would either
- * escape that prefix or fail to round-trip through the ZIP.
- */
+/** Names must be basenames without separators, traversal, or NUL to round-trip safely as archive paths. */
 const zMediaName = z
   .string()
   .min(1)
@@ -56,25 +41,18 @@ const zBoardItem = z.object({
 
 const zBoardSnapshot = z
   .object({
-    // Bounded by the same ceiling as archive entries: every item is at most one entry, so a list
-    // that could not be packed cannot be honest either.
+    // Board item count cannot exceed the archive entry capacity.
     items: z.array(zBoardItem).max(INVK_MAX_ENTRIES),
     version: z.literal(1),
   })
-  // Unknown keys are refused rather than ignored: this file is small, entirely generated, and a
-  // reader silently dropping a field a later version added would restore the wrong thing quietly.
+  // Reject unknown fields rather than silently discard future semantics.
   .strict();
 
 /** Sort by kind then name. Images and videos are separate namespaces, so one name can be both. */
 const compareItems = (left: InvkBoardItem, right: InvkBoardItem): number =>
   left.kind.localeCompare(right.kind) || left.name.localeCompare(right.name);
 
-/**
- * Parse and canonicalize `board.json`.
- *
- * Input order is free — the server's ordering is its own business — but the result is sorted, so
- * every consumer sees one order and tests can compare whole structures.
- */
+/** Accept arbitrary input order; emit deterministic order. */
 export const parseInvkBoardSnapshot = (data: unknown): InvkBoardSnapshot => {
   const parsed = zBoardSnapshot.safeParse(data);
 

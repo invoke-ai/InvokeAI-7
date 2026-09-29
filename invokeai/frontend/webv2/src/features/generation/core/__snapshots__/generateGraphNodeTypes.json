@@ -136,7 +136,10 @@
     "ernie-image": {
       "componentsFilled": {
         "diffusers": [],
-        "standalone-components": []
+        "standalone-components": [
+          "mistralEncoderModel",
+          "vae"
+        ]
       },
       "nodeTypes": [
         "core_metadata",
@@ -188,7 +191,11 @@
     "ideogram-4": {
       "componentsFilled": {
         "diffusers": [],
-        "standalone-components": []
+        "standalone-components": [
+          "ideogram4UnconditionalModel",
+          "qwen3VLEncoderModel",
+          "vae"
+        ]
       },
       "nodeTypes": [
         "core_metadata",
@@ -550,6 +557,7 @@
         "ideogram4_sampler_preset": [
           "V4_QUALITY_48"
         ],
+        "ideogram4_unconditional_model": [],
         "is_intermediate": [
           true
         ],
@@ -608,7 +616,7 @@
         ],
         "vae": [],
         "wan_component_source": [],
-        "wan_t5_encoder": [],
+        "wan_t5_encoder_model": [],
         "width": [
           1024,
           512,
@@ -712,12 +720,14 @@
           true
         ],
         "model": [],
+        "text_encoder_model": [],
         "use_cache": [
           true
         ],
         "use_prompt_enhancer": [
           false
-        ]
+        ],
+        "vae_model": []
       },
       "outputs": [
         "text_encoder",
@@ -1013,7 +1023,8 @@
       "inputs": [
         "positive_conditioning",
         "seed",
-        "transformer"
+        "transformer",
+        "unconditional_transformer"
       ],
       "literalInputs": {
         "height": [
@@ -1059,13 +1070,17 @@
           true
         ],
         "model": [],
+        "qwen3_vl_encoder_model": [],
+        "unconditional_model": [],
         "use_cache": [
           true
-        ]
+        ],
+        "vae_model": []
       },
       "outputs": [
         "qwen3_encoder",
         "transformer",
+        "unconditional_transformer",
         "vae"
       ]
     },

@@ -1,23 +1,19 @@
 import type { ProjectGraphAction } from '@features/workflow/core/document';
 import type { ForLoopValidationReason } from '@features/workflow/core/forLoops';
-import type { ProjectGraphState, XYPosition } from '@features/workflow/core/types';
+import type { ProjectGraphState, ProjectWorkflowSource, XYPosition } from '@features/workflow/core/types';
+import type { LogSource } from '@platform/logging/contracts';
 
 export type WorkflowRegion = 'left' | 'right' | 'bottom' | 'center' | 'dialog' | 'popover' | 'floating';
 
 /**
- * Panel regions workflow surfaces may open/select widgets in. Structural
- * mirror of workbench's `WidgetRegion` (`workbench/layoutContracts.ts`) —
- * the feature may not import workbench, so drift is caught as a tsc error at
- * the check site: the `widgets` wiring in `app/WorkflowUiAdapter.tsx`.
+ * Mirror Workbench regions structurally; app/WorkflowUiAdapter widgets wiring catches drift without a forbidden
+ * feature-to-workbench import.
  */
 export type WorkflowWidgetPanelRegion = 'left' | 'right' | 'bottom' | 'center';
 
 /**
- * Invocation sources the graph preview can route. Structural mirror of
- * workbench's `InvocationSourceId` (`workbench/invocationContracts.ts`) —
- * drift is caught as a tsc error at the check sites: the `graphPreview`
- * wiring in `app/WorkflowUiAdapter.tsx` and the `GraphPreviewDialog` mount in
- * `workbench/widget-frame/WidgetActionsMenu.tsx`.
+ * Mirror invocation source IDs structurally; adapter and WidgetActionsMenu wiring provide type checks across the
+ * ownership boundary.
  */
 export type WorkflowInvocationSourceId = 'generate' | 'workflow' | 'upscale' | 'video' | 'canvas';
 
@@ -44,12 +40,28 @@ export interface WorkflowWidgetLabelProps {
   presentation?: 'compact' | 'expanded' | 'tooltip';
 }
 
+/** Where an edit or history step lands; absent means the active project's active workflow. */
+export interface WorkflowTarget {
+  projectId: string;
+  workflowId: string;
+}
+
 export interface WorkflowCommands {
-  bindLibraryWorkflow(libraryWorkflowId: string): void;
-  editGraph(action: ProjectGraphAction): void;
-  replace(document: ProjectGraphState, label: string): void;
-  redo(): void;
-  undo(): void;
+  /** Adds and activates a document in the active project; returns the id the project knows it by. */
+  addWorkflow(
+    document: ProjectGraphState,
+    options: { label: string; reusePlaceholder?: boolean; source?: ProjectWorkflowSource }
+  ): string;
+  createWorkflow(): string;
+  duplicateWorkflow(workflowId: string, copyName: string): string | null;
+  editGraph(action: ProjectGraphAction, target?: WorkflowTarget): void;
+  redo(target?: WorkflowTarget): void;
+  removeWorkflow(workflowId: string): void;
+  renameWorkflow(workflowId: string, name: string): void;
+  selectWorkflow(workflowId: string): void;
+  /** Records a publication target; ignored once that project or workflow no longer exists. */
+  setWorkflowSource(target: WorkflowTarget, source: ProjectWorkflowSource | undefined): void;
+  undo(target?: WorkflowTarget): void;
 }
 
 export interface WorkflowWidgetCommands {
@@ -101,12 +113,8 @@ export interface GraphPreviewProvenance {
 }
 
 /**
- * The preview dialog's data source, built fresh per render by
- * `workbench/widget-frame/graphPreviewSource.ts` from the active surface's
- * `sourceId`. `isLive` drives the dialog's "Updates as you change settings."
- * subtitle — true for sources that recompile from live project state
- * (`generate`, `workflow`), false for sources that only replay their last
- * compiled widget graph (`upscale`, `canvas`).
+ * isLive distinguishes recompilation from current project state from replaying a saved compiled graph and controls
+ * the dialog subtitle.
  */
 export interface GraphPreviewSourceState {
   graph: WorkflowPreviewGraph | null;
@@ -122,10 +130,5 @@ export interface GraphPreviewSourceState {
   getProvenance?: (nodeId: string, fieldName: string) => GraphPreviewProvenance | null;
 }
 
-export interface WorkflowPerfSource {
-  instanceId: string;
-  kind: 'widget';
-  projectId: string;
-  region: WorkflowRegion;
-  typeId: string;
-}
+/** Attribution for editor timings. */
+export type WorkflowPerfSource = LogSource;

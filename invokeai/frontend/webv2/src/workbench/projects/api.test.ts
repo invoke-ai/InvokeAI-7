@@ -31,12 +31,7 @@ beforeEach(() => {
   accountLifecycle.activate('project-api-test-user');
 });
 
-/**
- * The caller has already uploaded a board's worth of media by the time this runs, and it deletes
- * that media if — and only if — this proves the project does not exist. Getting it wrong one way
- * leaves clutter; the other way guts a project that does exist. So absence has to be *proved*, never
- * assumed from silence.
- */
+/** Cleanup requires proven project absence after an ambiguous create. */
 describe('createProjectSettled', () => {
   const request = { data: {}, name: 'Imported', project_id: 'project-1' };
   const post = () => ({
@@ -54,11 +49,7 @@ describe('createProjectSettled', () => {
     expect(transport.apiFetchJson).toHaveBeenCalledTimes(1);
   });
 
-  /**
-   * The case a `GET` cannot answer. The create may be mid-transaction, so a read of the id returns
-   * 404 about a project that is moments from existing — and the caller deletes its media. A second
-   * `POST` cannot commit before the first, so its answer is about a settled database.
-   */
+  /** Settle with a retry write: GET 404 can race the initial create transaction. */
   it('adopts the project when a retried create finds the first one committed', async () => {
     transport.apiFetchJson
       .mockRejectedValueOnce(new TypeError('network error'))

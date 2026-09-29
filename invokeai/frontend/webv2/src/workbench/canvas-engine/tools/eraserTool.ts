@@ -1,12 +1,6 @@
 /**
- * The eraser tool: clears pixels along a stroke by compositing the same freehand
- * shape as the brush with `destination-out` into the target paint layer's cache.
- * A thin binding over {@link createPaintTool} sourcing size/opacity from the
- * engine's `eraserOptions` store; the eraser is pressure-insensitive (thinning 0)
- * and has no color (the shape alone drives the erase).
- *
- * Each engine builds its own instance so gesture state is per-engine. Zero React,
- * zero import-time side effects.
+ * Eraser binds shared paint gestures to destination-out with eraser size/opacity, no color and pressure thinning
+ * zero. Gesture state is per engine.
  */
 
 import { createPaintTool } from '@workbench/canvas-engine/tools/paintTool';
@@ -21,8 +15,6 @@ export const createEraserTool = (): Tool =>
     id: 'eraser',
     hardness: (ctx) => ctx.stores.eraserOptions.get().hardness,
     opacity: (ctx) => ctx.stores.eraserOptions.get().opacity,
-    // Upstream keeps eraser pressure width-only too; a pressure-faded erase reads as a
-    // failed erase rather than a soft one.
     pressureOpacity: () => false,
     size: (ctx) => ctx.stores.eraserOptions.get().size,
     thinning: () => 0,

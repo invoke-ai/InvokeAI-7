@@ -56,9 +56,8 @@ const OpModeButton = ({
 };
 
 /**
- * The boolean op mode every pixel-selection tool shares (also settable
- * transiently with shift / alt while committing), plus the gesture hint while
- * no selection exists. The mode lives in each tool's own options store.
+ * Share selection operation mode and empty-selection hints; each tool stores its mode, with transient Shift/Alt
+ * overrides.
  */
 /** The four op-mode toggles alone; the form places them in a labelled row. */
 export const SelectionOpModeButtons = ({

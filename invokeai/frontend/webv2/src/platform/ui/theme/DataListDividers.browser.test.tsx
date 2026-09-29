@@ -55,8 +55,7 @@ describe('dataList slot recipe', () => {
   it('uses the subtle border token, not the inherited text color', async () => {
     const { reference, rows } = await renderDataList();
 
-    // A failed token lookup would fall back to `currentColor`; comparing
-    // against a border.subtle reference catches that regression.
+    // Compare the resolved border token to catch accidental currentColor fallback.
     expect(getComputedStyle(rows[1]).borderTopColor).toBe(getComputedStyle(reference).borderTopColor);
     expect(getComputedStyle(rows[1]).borderTopColor).not.toBe(getComputedStyle(rows[1]).color);
   });

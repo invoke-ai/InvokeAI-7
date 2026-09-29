@@ -37,12 +37,8 @@ type CreateFromBboxEngine = CanvasCompositeExportEngine & {
 };
 
 /**
- * Composites the visible raster layers within the generation bbox, uploads
- * the PNG as a canvas-owned image, and either hands the upload back for the
- * global-reference flow or creates the destination layer at the bbox origin
- * via the shared gallery-import pipeline (which re-checks the document
- * captured in `project` against the latest state, covering the export/upload
- * window).
+ * Upload visible raster content inside the bbox for a global reference or layer at the bbox origin. The shared
+ * import pipeline rechecks document identity after export/upload.
  */
 export const createFromBbox = async (options: {
   applyCanvasMutation: (projectId: string, mutation: CanvasProjectMutation) => boolean | void;

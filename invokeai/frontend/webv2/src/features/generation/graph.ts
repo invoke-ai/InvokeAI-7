@@ -1,9 +1,4 @@
-/**
- * Generation's eagerly shared graph surface: the generate compiler, Canvas
- * validation policies, and graph-builder primitives used by other invocation
- * sources. Canvas compilation lives in the lazy `canvasGraph` interface.
- * Curated, caller-driven export list — add a symbol only when a consumer needs it.
- */
+/** Keep ordinary graph compilation eager and canvasGraph lazy. */
 export {
   addLoraCollectionLoader,
   addTransformerLoraCollectionLoader,

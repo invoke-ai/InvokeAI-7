@@ -16,10 +16,8 @@ import { ProjectCompatibilityBadge } from './ProjectCompatibilityBadge';
 import { ProjectCover } from './ProjectCover';
 
 /**
- * One saved project in the library grid. The whole card is a deep link into
- * the editor (`/app?project=…` — hovering preloads the editor chunk); the
- * corner menu and right-click carry the library actions, served by the page's
- * shared `ProjectActionsMenuHost`.
+ * Cards deep-link to the editor and preload on hover; the shared menu host handles overflow and right-click
+ * actions.
  */
 
 const CARD_HOVER = { bg: 'bg.muted', borderColor: 'border.emphasized' } as const;

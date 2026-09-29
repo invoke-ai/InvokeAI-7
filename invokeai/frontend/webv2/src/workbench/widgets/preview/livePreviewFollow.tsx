@@ -1,15 +1,27 @@
 import type { QueueActiveSession, QueueProgressSession } from '@features/queue/contracts';
 import type { ReactNode } from 'react';
 
-import { getQueueActiveSessions, getQueueProgressSessions, isGalleryProgressItem } from '@features/queue/contracts';
+import {
+  getFollowedProgressSession,
+  getQueueActiveSessions,
+  getQueueProgressSessions,
+  isGalleryProgressItem,
+} from '@features/queue/contracts';
 import { useActiveProgressTargets, useFollowedProgressTargets } from '@features/queue/react';
-import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
+import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { createContext, use, useMemo, useState } from 'react';
 
 interface LivePreviewFollow {
   sessions: QueueActiveSession[];
   gallerySessions: QueueProgressSession[];
   pinnedSessionId: string | null;
+  /**
+   * Shared live target: pinned, then newest-started running session, then first settling session in gallery order,
+   * else null.
+   */
+  followedSessionId: string | null;
+  /** Turns live-follow on and pins `sessionId`: a tile click, or an arrow step onto a tile. */
+  follow(sessionId: string): void;
   pin(sessionId: string): void;
   showAll(): void;
 }
@@ -46,15 +58,27 @@ export const LivePreviewFollowProvider = ({ children }: { children: ReactNode })
     setSelection({ projectId, sessionId: null });
   }
   const pinnedSessionId = isStale ? null : selection.sessionId;
+  // Follow the highest-id running session (FIFO start order), not the latest progress frame; pins take precedence.
+  const newestRunningSessionId = sessions.filter((session) => session.state === 'running').at(-1)?.id ?? null;
+  const preferredSessionId = pinnedSessionId ?? newestRunningSessionId;
+  const followedSessionId = enabled
+    ? (getFollowedProgressSession(gallerySessions, preferredSessionId)?.id ?? null)
+    : null;
+  const { account } = useWorkbenchCommands();
   const value = useMemo<LivePreviewFollow>(
     () => ({
       sessions,
       gallerySessions,
       pinnedSessionId,
+      followedSessionId,
+      follow: (sessionId) => {
+        account.updateProjectPreferences({ showProgressImagesInViewer: true });
+        setSelection({ projectId, sessionId });
+      },
       pin: (sessionId) => setSelection({ projectId, sessionId }),
       showAll: () => setSelection({ projectId, sessionId: null }),
     }),
-    [sessions, gallerySessions, pinnedSessionId, projectId]
+    [account, sessions, gallerySessions, followedSessionId, pinnedSessionId, projectId]
   );
   return <LivePreviewFollowContext value={value}>{children}</LivePreviewFollowContext>;
 };

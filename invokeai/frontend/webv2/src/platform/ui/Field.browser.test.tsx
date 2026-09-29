@@ -54,10 +54,8 @@ const render = async (hinted: boolean) => {
 
 describe('Field with a hint', () => {
   /**
-   * The hover-card trigger stamps its own `id` on whatever element it wraps, so
-   * making the `<label>` itself the trigger replaced the Field-derived id that
-   * controls reference through `aria-labelledby` — axe reported every hinted
-   * Select as having no accessible name. The trigger must sit *inside* the label.
+   * Keep the hint trigger inside the label so its generated ID cannot replace the control's aria-labelledby
+   * target.
    */
   it('keeps the Field-derived label id when a hint is attached', async () => {
     const hosted = await render(true);

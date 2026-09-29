@@ -5,12 +5,8 @@ import { WORKFLOW_NODE_SURFACE_TOKEN } from '@features/workflow/ui/nodeChrome';
 import { THEMES_BY_ID } from '@theme/themes';
 
 /**
- * Theme bridge for xyflow surfaces. xyflow's stylesheet only knows light/dark,
- * so every flow renderer (workflow editor, graph preview) applies these
- * Chakra-token-backed `--xy-*` override vars on its wrapper — they inherit
- * into `.react-flow` and outrank the colorMode defaults. `--wb-flow-grid` is
- * ours, consumed by `<Background color>` and preview handles; `--wb-node-surface`
- * feeds the node-body token to inline-styled field handles.
+ * Override xyflow light/dark defaults with inherited Chakra-backed variables; workbench variables also color grids
+ * and inline handles.
  */
 export const flowThemeCss: SystemStyleObject = {
   '--wb-flow-grid': '{colors.fg.grid}',

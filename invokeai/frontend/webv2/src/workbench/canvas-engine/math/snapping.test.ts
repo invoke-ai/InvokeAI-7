@@ -100,8 +100,7 @@ describe('constrainAspect', () => {
 
   it('keeps the sw corner fixed', () => {
     const result = constrainAspect(square, 0.5, 'sw');
-    // bottom edge (30) stays fixed; height = width / aspect... width kept? currentAspect(1) < aspect? no aspect=0.5 <1
-    // currentAspect(1) > aspect(0.5) -> keep width(20), height = width/aspect = 40
+    // Keep width 20 and bottom edge 30; aspect 0.5 requires height 40.
     expect(result).toEqual({ x: 10, y: -10, width: 20, height: 40 });
   });
 

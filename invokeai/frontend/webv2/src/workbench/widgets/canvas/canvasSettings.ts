@@ -1,25 +1,7 @@
 /**
- * Canvas view settings — the sectioned, legacy-style popover of per-project
- * canvas preferences (Behavior / Display / Grid), plus the Shift-revealed Debug
- * actions rendered separately in the header.
- *
- * Each setting is a boolean persisted in the canvas widget's own state values
- * (`widgetInstances['canvas'].state.values[key]`) — the same plumbing as the
- * denoising strength (`invoke/canvasStrength.ts`), so it survives reloads and is
- * read when a queue submission is compiled. Persistence is per-user (per-project), NEVER in
- * the canvas undo history.
- *
- * A setting either drives an engine boolean store (`store` set — React resolves
- * the persisted value and feeds it down; see the settings-feed effect in
- * `CanvasWidgetView`, the engine reads only its stores and never React) OR is
- * consumed elsewhere in the frontend (`store` absent — e.g. `showProgressOnCanvas`
- * in the widget shell or `outputOnlyMaskedRegions` during invocation submission).
- * The feed is strictly
- * one-directional: settings → engine, never the reverse.
- *
- * The list is data-driven: adding a boolean setting is one entry here plus its
- * i18n label and (when engine-backed) the store it drives. Pure data + readers;
- * no React, no engine imports — unit-testable in node.
+ * Persist canvas preferences in per-project widget values outside undo history. Feed engine-backed settings
+ * one-way into stores; other consumers read values directly. Popover and engine bindings derive from this data
+ * list.
  */
 
 import { CANVAS_COMPOSITING_KEYS, DEFAULT_CANVAS_COMPOSITING } from './invoke/canvasCompositing';
@@ -51,8 +33,7 @@ export const CANVAS_SHOW_PROGRESS_KEY = 'showProgressOnCanvas';
 export const CANVAS_OUTPUT_ONLY_MASKED_REGIONS_KEY = CANVAS_COMPOSITING_KEYS.outputOnlyMaskedRegions;
 
 const OUTPUT_ONLY_MASKED_REGIONS_SETTING: CanvasBooleanSetting = {
-  // Legacy parity: generation results keep alpha outside the expanded mask
-  // unless the user explicitly asks to composite them over the source image.
+  // Keep output alpha outside the expanded mask unless source compositing is explicitly enabled.
   defaultValue: DEFAULT_CANVAS_COMPOSITING.outputOnlyMaskedRegions,
   key: CANVAS_OUTPUT_ONLY_MASKED_REGIONS_KEY,
   labelKey: 'widgets.canvas.settings.outputOnlyMaskedRegions',
@@ -73,11 +54,7 @@ export interface CanvasBooleanSetting {
   section: CanvasSettingSection;
 }
 
-/**
- * The canvas settings, in popover order (grouped by section). Extend by adding an
- * entry (plus its label and, when engine-backed, a store); the popover,
- * persistence, and engine feed all derive from this list.
- */
+/** Derive popover order, persistence, and engine feeds from these sectioned entries. */
 export const CANVAS_SETTINGS: readonly CanvasBooleanSetting[] = [
   // ── Behavior ──────────────────────────────────────────────────────────────
   {

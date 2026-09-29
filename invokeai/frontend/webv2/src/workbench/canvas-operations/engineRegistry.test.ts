@@ -21,6 +21,7 @@ import {
 } from '@workbench/canvas-operations/generationCompositePlan';
 import { createEmptyCanvasDocument } from '@workbench/canvasMigration';
 import { applyCanvasProjectMutation } from '@workbench/canvasProjectMutations';
+import { createCanvasHeldMediaSources } from '@workbench/projects/projectAssets';
 import { createInitialWorkbenchState } from '@workbench/workbenchState';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -47,6 +48,7 @@ const createFakeDeps = (): EngineDeps => {
   const listeners = new Set<() => void>();
   return {
     backend: createTestStubRasterBackend(),
+    ensureProjectOnServer: () => Promise.resolve(),
     imageResolver: () => Promise.resolve(new Blob()),
     mutationPort: {
       commitEdit: () => undefined,
@@ -145,13 +147,55 @@ const createFakeTimers = (): { timers: RegistryTimers; flush: () => void; pendin
 describe('createEngineRegistry', () => {
   it('disposes the process registry synchronously when its account expires', () => {
     accountLifecycle.activate('user-a');
-    const engine = getOrCreateEngine('shared-project-id', createFakeDeps());
+    const heldMedia = createCanvasHeldMediaSources();
+    const engine = getOrCreateEngine('shared-project-id', { ...createFakeDeps(), heldMedia });
     const dispose = vi.spyOn(engine.lifecycle, 'dispose');
+    expect(heldMedia.read('shared-project-id')).toEqual({ images: [], videos: [] });
 
     accountLifecycle.invalidate();
 
     expect(getCanvasEngine('shared-project-id')).toBeUndefined();
+    expect(heldMedia.read('shared-project-id')).toBeUndefined();
     expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a released engine for its own Workbench but replaces it for a remounted one', () => {
+    const { flush, timers } = createFakeTimers();
+    const registry = createEngineRegistry({ timers });
+    const first = createCanvasHeldMediaSources();
+    const second = createCanvasHeldMediaSources();
+    const onHeldChange = vi.fn();
+    first.subscribe(onHeldChange);
+
+    const engine = registry.getOrCreateEngine('p1', { ...createFakeDeps(), heldMedia: first });
+    registry.releaseEngine('p1');
+    expect(registry.getOrCreateEngine('p1', { ...createFakeDeps(), heldMedia: first })).toBe(engine);
+    registry.releaseEngine('p1');
+    const dispose = vi.spyOn(engine.lifecycle, 'dispose');
+    onHeldChange.mockClear();
+
+    const replacement = registry.getOrCreateEngine('p1', { ...createFakeDeps(), heldMedia: second });
+    expect(replacement).not.toBe(engine);
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(first.read('p1')).toBeUndefined();
+    expect(onHeldChange).toHaveBeenCalled();
+    expect(second.read('p1')).toEqual({ images: [], videos: [] });
+    flush();
+    expect(registry.getEngine('p1')).toBe(replacement);
+    registry.disposeAll();
+  });
+
+  it('refuses an engine another Workbench still uses instead of sharing or replacing it', () => {
+    const registry = createEngineRegistry();
+    const first = createCanvasHeldMediaSources();
+    const engine = registry.getOrCreateEngine('p1', { ...createFakeDeps(), heldMedia: first });
+
+    expect(() =>
+      registry.getOrCreateEngine('p1', { ...createFakeDeps(), heldMedia: createCanvasHeldMediaSources() })
+    ).toThrow(/another Workbench/);
+    expect(registry.getEngine('p1')).toBe(engine);
+    expect(first.read('p1')).toEqual({ images: [], videos: [] });
+    registry.disposeAll();
   });
 
   it('returns the same instance per project id and distinct instances across ids', () => {
@@ -399,6 +443,7 @@ describe('createEngineRegistry', () => {
     const deps: EngineDeps = {
       backend: createTestStubRasterBackend(),
       bitmapStore,
+      ensureProjectOnServer: () => Promise.resolve(),
       imageResolver: () => Promise.resolve(new Blob()),
       mutationPort,
       reportError: vi.fn(),

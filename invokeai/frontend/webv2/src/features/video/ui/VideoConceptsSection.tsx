@@ -13,13 +13,7 @@ import { useTranslation } from 'react-i18next';
 
 import { areVideoLorasEquivalent, areVideoModelsEquivalent } from './videoComparators';
 
-/**
- * Concepts (LoRAs) for the Video panel. The picker is an adder (never shows a
- * selection); compatibility follows the shared generation rule, which for Wan
- * already encodes the A14B/5B family split. Expert routing is the graph's job
- * ('auto' reads each LoRA's probed high/low tag), so rows carry no target
- * control.
- */
+/** Graph compilation routes LoRAs to experts from their probed tags; the UI supplies no target override. */
 
 const LORA_MODEL_TYPES: readonly ModelTaxonomyType[] = ['lora'];
 const SWITCH_CHECKED_PROPS = { bg: 'accent.solid' };

@@ -251,8 +251,7 @@ describe('live cache rect (freshly-painted, not-yet-flushed content)', () => {
 
   it('unions the live rect with persisted content (both contribute to the hit area)', () => {
     const layer = paintLayer('p', { width: 10, height: 10 }); // persisted content [0,0,10,10]
-    const liveRect = { height: 10, width: 10, x: 40, y: 40 }; // grown region off to the side
-    // A point only inside the grown live region is now hit-testable.
+    const liveRect = { height: 10, width: 10, x: 40, y: 40 };
     expect(hitTestLayer(layer, doc([layer]), { x: 45, y: 45 }, liveRect)).toBe(true);
     // The original persisted region is still hit-testable.
     expect(hitTestLayer(layer, doc([layer]), { x: 5, y: 5 }, liveRect)).toBe(true);
@@ -261,11 +260,8 @@ describe('live cache rect (freshly-painted, not-yet-flushed content)', () => {
 
 describe('a layer erased to nothing behaves exactly like a brand-new one', () => {
   /**
-   * The reported bug: an erased layer kept a full-size transparent bitmap, so it still
-   * drew a movable, transformable outline around nothing. The paint-cache trim now
-   * clears it to `{ bitmap: null }` — a freshly-added layer's source — so every
-   * affordance derived from `hittableLayerRect` disappears. Pinning that equivalence
-   * is why the fix needs no change to the overlay or the tools.
+   * Trimmed empty layers become null-bitmap sources, so bounds-derived move/transform affordances disappear like
+   * those of fresh layers.
    */
   it('reports no hittable extent once its bitmap has been cleared', () => {
     const erased = paintLayer('erased');

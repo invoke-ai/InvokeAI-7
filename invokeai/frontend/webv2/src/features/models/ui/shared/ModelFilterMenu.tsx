@@ -38,11 +38,7 @@ export const SORT_FIELD_OPTIONS: readonly ModelFilterSortOption[] = [
   { field: 'path', labelKey: 'models.sort.path' },
 ];
 
-/**
- * Shared taxonomy filter + sort menu for installed and starter model lists.
- * Generic over the sort-field subset so a menu fed a narrowed `sortFields`
- * list reports only those fields to `onSortChange`.
- */
+/** Narrow sort callbacks to the supplied sort-field subset. */
 export const ModelFilterMenu = <Field extends ModelSortField>({
   ariaLabel,
   availableBases,
@@ -74,11 +70,7 @@ export const ModelFilterMenu = <Field extends ModelSortField>({
   sortFields: readonly ModelFilterSortOption<Field>[];
   typeAllChecked?: boolean;
   typeFilter: ModelTaxonomyType | null;
-  /**
-   * What the Model Type row should read when the filter is neither "all" nor
-   * one of `availableTypes` — the caller's own pseudo-type from
-   * `extraTypeItems`, which this component cannot name for itself.
-   */
+  /** Caller-supplied label for pseudo-types outside availableTypes. */
   typeSummary?: string;
 }) => {
   const { t } = useTranslation();
@@ -161,16 +153,7 @@ export const ModelFilterMenu = <Field extends ModelSortField>({
   );
 };
 
-/**
- * One filter dimension, folded away behind its own row.
- *
- * The three groups used to stack in a single panel that scrolled at 70vh — on
- * a library with a dozen base architectures, choosing a sort order meant
- * scrolling past every one of them. Folding each into a submenu costs a
- * hover, so the row carries its current value: the state stays readable
- * without opening anything, which is the only reason the flat list was worth
- * keeping.
- */
+/** Submenus prevent long taxonomy lists from hiding sort controls; show current values on closed rows. */
 const FilterSubMenu = ({
   children,
   icon,

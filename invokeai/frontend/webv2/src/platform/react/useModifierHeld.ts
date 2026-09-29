@@ -1,10 +1,6 @@
 import { useEffect, useState } from 'react';
 
-/**
- * Tracks whether a keyboard modifier is currently held, event-driven (no
- * polling). Shared across widgets: the workflow editor's Control-snap and the
- * canvas settings popover's Shift-revealed Debug section both key off it.
- */
+/** Share event-driven modifier state across widgets. */
 export const useModifierHeld = (key: 'Alt' | 'Control' | 'Meta' | 'Shift'): boolean => {
   const [isHeld, setIsHeld] = useState(false);
 

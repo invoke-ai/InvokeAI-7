@@ -13,6 +13,7 @@ import type { Rect } from '@workbench/canvas-engine/types';
 
 import { getDocumentLayer } from '@workbench/canvas-engine/document/documentIndex';
 import { renderableSourceOf } from '@workbench/canvas-engine/document/sources';
+import { collectHistoryMediaRefs } from '@workbench/canvas-engine/history/history';
 import { intersect, isEmpty, roundOut } from '@workbench/canvas-engine/math/rect';
 
 export type CropLayerResult =
@@ -152,6 +153,7 @@ export class CropLayerController {
         publish(after, prepared);
         this.deps.history.push({
           bytes: beforePixels.rect.width * beforePixels.rect.height * 4 + cropRect.width * cropRect.height * 4 + 256,
+          heldAssetRefs: collectHistoryMediaRefs(before, after),
           label: 'Crop layer to bbox',
           redo: () => apply(after, afterPixels),
           replayFailureAtomic: true,

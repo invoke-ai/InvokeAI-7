@@ -45,10 +45,6 @@ const LORA_WEIGHT_DEBOUNCE_MS = 250;
 const isCompatibleLora = (lora: GenerateLora, selectedModel: GenerateModelConfig | undefined): boolean =>
   Boolean(selectedModel && isLoraCompatibleWithModel(lora.model, selectedModel));
 
-/**
- * Concept (LoRA) conditioning, rendered inside the Guidance section (the
- * section chrome and combined badges live in `GenerateGuidanceSection`).
- */
 export const GenerateConceptsContent = ({
   loraModels,
   onCommit,

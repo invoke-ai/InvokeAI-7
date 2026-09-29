@@ -87,11 +87,7 @@ export const useLayerTransformEditor = (engine: ToolFormProps['engine'], labelKe
   return { patch, transform };
 };
 
-/**
- * The shared Position rows: the frame's document bbox under the Frame tool,
- * else the selected layer / transform session. One component for every
- * geometry tool, so the X/Y fields keep DOM identity across tool switches.
- */
+/** Share geometry rows across frame, selected layer, and transform session to preserve X/Y DOM identity. */
 const GeometryPositionSettings = ({ engine }: ToolFormProps) => {
   const { t } = useTranslation();
   const activeTool = useCanvasActiveTool(engine);
@@ -116,8 +112,6 @@ const GeometryPositionSettings = ({ engine }: ToolFormProps) => {
       [bboxEditor, isFrame, layerEditor]
     )
   );
-  // The group header already says Position; the fields carry their own X/Y
-  // prefixes, so a row label would just repeat it.
   return (
     <Flex gap="2" w="full">
       <FormNumberField

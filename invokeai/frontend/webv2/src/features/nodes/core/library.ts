@@ -1,11 +1,5 @@
 import type { NodePackInfo } from './catalog';
 
-/**
- * Pure filter/sort policy for the pack library, mirroring the model manager's
- * `core/library`. Kept out of the components so it is unit-testable and the
- * list stays presentational.
- */
-
 export type NodePackSortField = 'name' | 'nodeCount' | 'path';
 
 export interface NodePackFilters {
@@ -24,9 +18,8 @@ export const DEFAULT_NODE_PACK_FILTERS: NodePackFilters = {
 };
 
 /**
- * The backend derives nodeCount from the live invocation registry, so zero
- * means the pack's import failed or a reload/restart is pending — the
- * strongest health signal the catalog carries.
+ * Zero nodes indicates failed import or pending reload/restart because counts come from the live invocation
+ * registry.
  */
 export const isProblemPack = (pack: Pick<NodePackInfo, 'nodeCount'>): boolean => pack.nodeCount === 0;
 

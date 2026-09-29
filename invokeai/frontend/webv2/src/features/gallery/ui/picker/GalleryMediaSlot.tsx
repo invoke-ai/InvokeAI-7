@@ -3,15 +3,14 @@ import type { GalleryItem, GalleryItemKind, GalleryItemRef } from '@features/gal
 
 import { Box, HStack, Icon, Image, Spinner, Stack, Text } from '@chakra-ui/react';
 import { useDndMonitor } from '@dnd-kit/core';
-import { classifyGalleryUpload, getGalleryItemByRef } from '@features/gallery/data/backend';
+import { classifyGalleryUpload, getGalleryUploadAccept } from '@features/gallery/core/items';
+import { getGalleryItemByRef } from '@features/gallery/data/backend';
 import { getGalleryImageThumbnailUrl } from '@features/gallery/data/imageUrls';
-import { galleryBoardsOptions } from '@features/gallery/data/queries';
 import { getGalleryVideoThumbnailUrl } from '@features/gallery/data/videoUrls';
 import { FindInGalleryThumbnailButton } from '@features/gallery/ui/FindInGalleryButton';
 import { isGalleryItemDragData, useGalleryItemDroppable } from '@features/gallery/ui/galleryDnd';
 import { useGalleryUi } from '@features/gallery/ui/GalleryUiContext';
-import { useGalleryUploadAction } from '@features/gallery/ui/useGalleryUploadAction';
-import { getGalleryUploadAccept, useGalleryUploadInput } from '@features/gallery/ui/useGalleryUploadInput';
+import { useGalleryUploadInput } from '@features/gallery/ui/useGalleryUploadInput';
 import {
   assertAccountScopeCurrent,
   captureAccountScope,
@@ -21,7 +20,6 @@ import { Button } from '@platform/ui/Button';
 import { DropTargetOverlay } from '@platform/ui/DropTargetOverlay';
 import { DropZone } from '@platform/ui/DropZone';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
-import { useQuery } from '@tanstack/react-query';
 import { ChevronDownIcon, ImagePlusIcon, RefreshCwIcon, UploadIcon, XIcon } from 'lucide-react';
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -30,7 +28,6 @@ import type { GalleryPickerAccept } from './galleryPicker';
 
 import { GalleryPickerPopover } from './GalleryPickerPopover';
 
-const EMPTY_BOARDS: never[] = [];
 const DROP_ZONE_FOCUS_PROPS = {
   outlineColor: 'accent.focusRing',
   outlineOffset: '2px',
@@ -70,12 +67,8 @@ const getThumbnailUrl = (value: GalleryMediaSlotValue): string =>
   value.kind === 'video' ? getGalleryVideoThumbnailUrl(value.name) : getGalleryImageThumbnailUrl(value.name);
 
 /**
- * A single-item media field: click opens the gallery picker, a gallery drag
- * can be dropped on it, and a file can be uploaded from its action row. Owns
- * the async resolve/upload work and its busy and error states; the consumer
- * only sees `onChange` with a full item (or null when cleared). A consumer
- * that stores the file itself takes it through `onUploadFile` instead of the
- * gallery, and can show its own `thumbnail` for a value the gallery lacks.
+ * Own async resolution and report complete items through onChange. onUploadFile and custom thumbnails support
+ * media stored outside the gallery.
  */
 export const GalleryMediaSlot = ({
   accept,
@@ -84,7 +77,6 @@ export const GalleryMediaSlot = ({
   dropId,
   labels: labelOverrides,
   thumbnail,
-  uploadBoardId = 'none',
   value,
   onChange,
   onFind,
@@ -99,22 +91,15 @@ export const GalleryMediaSlot = ({
   labels?: Partial<GalleryMediaSlotLabels>;
   /** Replaces the gallery thumbnail of `value`, for media the gallery does not hold. */
   thumbnail?: ReactNode;
-  /** Where a file uploaded from the action row lands; a getter is read when the upload starts. */
-  uploadBoardId?: string | (() => string);
   value: GalleryMediaSlotValue | null;
   onChange: (item: GalleryItem | null) => void;
-  /**
-   * Reveals the current value in the Gallery grid. Given, the thumbnail carries
-   * a find badge on hover; omitted, it stays a plain preview — a slot holding
-   * media the gallery does not own has nothing to reveal.
-   */
+  /** Provide onFind only for gallery-owned media; it enables the thumbnail reveal badge. */
   onFind?: () => void;
-  /** Takes an uploaded file directly instead of sending it to the gallery. */
+  /** Takes a file the consumer stores itself; gallery-backed slots upload through the picker instead. */
   onUploadFile?: (file: File) => void;
 }) => {
   const { t } = useTranslation();
   const { notifications } = useGalleryUi();
-  const { data: boards } = useQuery(galleryBoardsOptions());
   const [isBusy, setIsBusy] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const isInert = disabled || isBusy;
@@ -185,7 +170,6 @@ export const GalleryMediaSlot = ({
 
   useDndMonitor({ onDragEnd: handleDragEnd });
 
-  const uploadFiles = useGalleryUploadAction({ boards: boards ?? EMPTY_BOARDS, selectedBoardId: uploadBoardId });
   const uploadOptions = useMemo(() => ({ accept: getGalleryUploadAccept(accept), multiple: false }), [accept]);
   const handleUpload = useCallback(
     ([file]: File[]) => {
@@ -194,32 +178,17 @@ export const GalleryMediaSlot = ({
       setErrorMessage(null);
 
       // The input's `accept` is advisory ("All files" bypasses it); a kind the
-      // slot cannot take must not be uploaded only to be dropped on the floor.
+      // slot cannot take must not be handed on only to be dropped on the floor.
       if (!file || (kind && !accept.includes(kind))) {
         setErrorMessage(
           t(kind === 'video' ? 'widgets.gallery.picker.unsupportedVideo' : 'widgets.gallery.picker.unsupportedImage')
         );
         return;
       }
-      if (onUploadFile) {
-        onUploadFile(file);
-        return;
-      }
 
-      setIsBusy(true);
-      void uploadFiles([file])
-        .then((uploaded) => {
-          const item = uploaded.find((candidate) => accept.includes(candidate.kind));
-
-          if (item) {
-            onChange(item);
-          } else {
-            setErrorMessage(t('widgets.gallery.picker.uploadFailed'));
-          }
-        })
-        .finally(() => setIsBusy(false));
+      onUploadFile?.(file);
     },
-    [accept, onChange, onUploadFile, t, uploadFiles]
+    [accept, onUploadFile, t]
   );
   const { inputProps: uploadInputProps, openPicker: openUploadPicker } = useGalleryUploadInput(
     handleUpload,
@@ -313,12 +282,10 @@ export const GalleryMediaSlot = ({
           </DropZone>
         </GalleryPickerPopover>
         {value && onFind ? (
-          /* A sibling of the slot's face, not a child of it: that face is a
-             <button>, which may not contain another. The row repeats the value
-             row's own box metrics — its height, padding, and tile size — so the
-             badge lands on the thumbnail's corner without measuring anything.
-             It rides a pixel high, by the face's border; nothing a corner badge
-             can show. */
+          /*
+           * Keep the badge beside the button face to avoid nested buttons; matching row metrics align it without
+           * measurement.
+           */
           <HStack gap="3" h="20" insetInline="0" p="2" pointerEvents="none" position="absolute" top="0">
             <Box boxSize="16" flexShrink="0" position="relative">
               <FindInGalleryThumbnailButton name={value.name} onFind={onFind} />
@@ -327,26 +294,28 @@ export const GalleryMediaSlot = ({
         ) : null}
         <DropTargetOverlay isActive={acceptsActiveDrag} isOver={isOver} label={labels.drop} />
       </Box>
-      <HStack justify="end">
-        {disabled ? null : (
-          <Button disabled={isBusy} size="xs" variant="ghost" onClick={openUploadPicker}>
-            <Icon as={UploadIcon} boxSize="3" />
-            {t('widgets.gallery.picker.upload')}
-          </Button>
-        )}
-        {value ? (
-          <Button disabled={isBusy} size="xs" variant="ghost" onClick={handleClear}>
-            <Icon as={XIcon} boxSize="3" />
-            {labels.remove}
-          </Button>
-        ) : null}
-      </HStack>
+      {(onUploadFile && !disabled) || value ? (
+        <HStack justify="end">
+          {onUploadFile && !disabled ? (
+            <Button disabled={isBusy} size="xs" variant="ghost" onClick={openUploadPicker}>
+              <Icon as={UploadIcon} boxSize="3" />
+              {t('widgets.gallery.picker.upload')}
+            </Button>
+          ) : null}
+          {value ? (
+            <Button disabled={isBusy} size="xs" variant="ghost" onClick={handleClear}>
+              <Icon as={XIcon} boxSize="3" />
+              {labels.remove}
+            </Button>
+          ) : null}
+        </HStack>
+      ) : null}
       {errorMessage ? (
         <Text aria-live="polite" color="fg.error" fontSize="2xs" role="alert" textWrap="pretty">
           {errorMessage}
         </Text>
       ) : null}
-      <input {...uploadInputProps} />
+      {onUploadFile ? <input {...uploadInputProps} /> : null}
     </Stack>
   );
 };

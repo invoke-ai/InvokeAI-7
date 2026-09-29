@@ -6,20 +6,10 @@ import { compileGenerateGraph } from './graph';
 import { resolveGenerateWidgetValues } from './resolveGenerateWidgetValues';
 import { normalizeGenerateSettings } from './settings';
 
-/**
- * Preview-only compile: deterministic where the submit path is intentionally
- * random. Ids from `createId` (`prefix_<b36 time>_<6 rand>`) collapse to
- * `prefix`, `prefix_2`, … in insertion order so selection and layout survive
- * live recompiles, and the seed stays the stored literal (the dialog labels it
- * "regenerated each run" when randomization is on).
- */
+/** Stable preview IDs and literal seeds make recompilation deterministic. */
 
 const NO_SUPPORTED_MODEL = 'Generate needs a supported model before it can be invoked.';
-// `getDefaultGenerateSettings` (the fallback `resolveGenerateWidgetValues` reaches for
-// when `storedValues` doesn't parse — first run, cleared storage, corrupted state) sets
-// `seed: Math.floor(Math.random() * SEED_MAX)`. A stored seed is always kept verbatim;
-// this placeholder only stands in for the synthesized-default case, so the preview is
-// deterministic even before Generate settings have ever been persisted.
+// Use the deterministic placeholder only for synthesized defaults; preserve stored seeds.
 const UNINITIALIZED_SEED_PLACEHOLDER = 0;
 
 export interface GeneratePreviewInput {
@@ -115,9 +105,7 @@ export const compileGeneratePreviewGraph = (input: GeneratePreviewInput): Genera
     const compiled = compileGenerateGraph(settings, settings.model, input.destination, {
       useCpuNoise: input.useCpuNoise,
     });
-    // The submit path leaves the seed node's `value` unset and injects the
-    // resolved seed via queue batch data instead (see `promptBatch.ts`). The
-    // preview has no batch step, so bake the literal, unresolved seed in here.
+    // Preview graphs bake a literal seed because they have no queue-batch injection step.
     const seedNode = compiled.backendGraph.nodes[compiled.seedNodeId];
     const backendGraphWithSeed: BackendGraphContract = seedNode
       ? {

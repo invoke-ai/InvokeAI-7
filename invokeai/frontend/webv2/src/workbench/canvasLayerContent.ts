@@ -5,17 +5,8 @@ import type {
 } from '@workbench/canvas-engine/api';
 
 /**
- * The single source of truth for "does this layer carry pixels the generation
- * pipeline will actually use".
- *
- * Both the composite planner (which decides what reaches the backend) and the
- * invoke readiness checks (which decide what the user is told) gate on these
- * predicates. They used to be two hand-maintained copies; a desync there means
- * readiness silently disagrees with what the graph does — a layer reported ready
- * but dropped from the composite, or vice versa.
- *
- * Depends only on layer contracts, so the pure planner can import it without
- * pulling in models, graph, or React.
+ * Shared pixel-content predicates for composite planning and invocation readiness; depends only on layer
+ * contracts.
  */
 
 /** True when a control layer holds an image source or committed paint pixels. */

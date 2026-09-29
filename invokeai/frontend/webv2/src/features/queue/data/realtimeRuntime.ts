@@ -29,9 +29,8 @@ export interface QueueRealtimeRuntime {
 }
 
 /**
- * Owns the global queue read model's one realtime subscription. Event bursts
- * collapse into one invalidation; progress frames update their transient store
- * directly and never force the full queue list through React state.
+ * Own one realtime subscription; coalesce list invalidations while progress frames update transient stores
+ * directly.
  */
 export const createQueueRealtimeRuntime = ({
   backend,

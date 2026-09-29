@@ -182,7 +182,14 @@ def label_clusters(
         phrase and the unit centroid, so it stays comparable across clusters.
     """
     results: dict[int, dict] = {}
-    clustered = image_embeddings[cluster_labels >= 0]
+    is_clustered = cluster_labels >= 0
+    # The one production caller strips noise rows before this point, so the
+    # mask is always all-True there and this would duplicate the whole
+    # (points x embedding dim) float32 matrix — 522MB on a 170k-item gallery
+    # — to select every row of it. Skipping it avoids that allocation and
+    # memcpy; it does not move the function's peak RSS, which is set by the
+    # per-cluster gathers in the loop below (measured at +499MB either way).
+    clustered = image_embeddings if is_clustered.all() else image_embeddings[is_clustered]
     corpus_scores: np.ndarray | None = None
     if clustered.shape[0]:
         corpus_mean = clustered.mean(axis=0)

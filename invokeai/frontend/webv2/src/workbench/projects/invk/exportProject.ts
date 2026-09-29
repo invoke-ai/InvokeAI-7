@@ -32,16 +32,7 @@ import {
 import { buildInvkManifest, toInvkFileName } from './manifest';
 import { createTransferIssueLog, planMediaTransfer, toMediaRefs } from './transfer';
 
-/**
- * Writing an `.invk`, split into a pure planner and an impure executor, as
- * `canvas-engine/export/psdExport.ts` splits PSD export. {@link planInvkExport} decides what the
- * archive contains from the document alone, so that decision is a node test.
- *
- * An unservable image is logged and skipped, never fatal. Cancellation is the one failure that is
- * *not* a skip: it makes every asset unservable at once, and skipping all of them would pack an
- * archive of nothing and hand it over as a finished download. The signal is checked once more
- * before the archive is written.
- */
+/** Skip unavailable assets, but abort on cancellation before packing. */
 
 export interface InvkExportPlan {
   /** The board's contents exactly as they will be written to `board.json`. */
@@ -65,10 +56,7 @@ export interface InvkExportPlan {
   transferItems: InvkTransferItem[];
 }
 
-/**
- * Fixed entries every archive carries: manifest, document, board. The cover is counted separately
- * because it is optional.
- */
+/** Budget fixed entries separately from the optional cover. */
 const FIXED_ENTRY_COUNT = 3;
 
 export const planInvkExport = (input: {
@@ -82,16 +70,13 @@ export const planInvkExport = (input: {
 }): InvkExportPlan => {
   const sourceProjectId = typeof input.projectDocument.id === 'string' ? input.projectDocument.id : undefined;
 
-  // Installation state is dropped here rather than left to the collector's skip list: not bundling
-  // a reference does not stop it travelling, it only stops it arriving with pixels. The planner is
-  // where "what belongs in a project file" is decided, so it is where the answer is applied.
+  // Strip installation state during planning; excluding its bytes alone leaves dangling references.
   const projectDocument = stripInstallationState(input.projectDocument);
   const boardSnapshot = buildInvkBoardSnapshot(input.boardItems);
   const transferItems = planMediaTransfer(boardSnapshot.items, toMediaRefs(collectLiveAssetRefs(projectDocument)));
   const fonts = collectFontDependencies(projectDocument);
 
-  // Refused before a single byte is fetched. An archive that cannot be packed is not worth the
-  // hundreds of round trips it would take to discover that at the end.
+  // Check the archive budget before downloading assets.
   const worstCaseEntries = FIXED_ENTRY_COUNT + transferItems.length + (input.includeFonts ? fonts.length : 0) + 1;
 
   if (worstCaseEntries > INVK_MAX_ENTRIES) {
@@ -101,8 +86,7 @@ export const planInvkExport = (input: {
   return {
     boardSnapshot,
     coverImageName: selectCoverImageName(projectDocument),
-    // Compact rather than indented: the document is machine-read, and the two
-    // bytes per line would be the largest entry in the archive before deflate.
+    // Serialize compactly to limit the uncompressed document size.
     documentJson: JSON.stringify(projectDocument),
     fileName: toInvkFileName(input.name),
     fonts,
@@ -192,9 +176,7 @@ export const executeInvkExport = async (plan: InvkExportPlan, deps: InvkExportDe
     plan.coverImageName === null ? null : await skipUnservable(() => readThumbnail(plan.coverImageName!, deps.signal));
   const coverEntryName = cover === null ? undefined : `cover.${coverExtensionForMime(cover.contentType)}`;
 
-  // One queue over both kinds and both roles: an item that is on the board *and* referenced by the
-  // document is one fetch, not two. The concurrency limit exists to be kind to the backend, and it
-  // would not be if images and videos each got their own.
+  // Share one deduplicated queue and concurrency budget across media kinds and roles.
   const assets = plan.transferItems;
 
   await mapWithConcurrency(assets, INVK_TRANSFER_CONCURRENCY, async (item) => {
@@ -207,8 +189,7 @@ export const executeInvkExport = async (plan: InvkExportPlan, deps: InvkExportDe
     deps.onProgress?.({ completed, phase: 'bundling', total });
 
     if (bytes === null) {
-      // Reported against every role it filled: the same failure costs a board result and a canvas
-      // layer, and the person holding the file needs to know which.
+      // Report loss for each affected board/document role.
       if (item.isBoardItem) {
         issues.addBoardItemIssue(item, 'fetch-failed');
       }
@@ -231,9 +212,7 @@ export const executeInvkExport = async (plan: InvkExportPlan, deps: InvkExportDe
     entries.set(`${INVK_VIDEOS_PREFIX}${name}`, binaryEntry(bytes));
   });
 
-  // The last fetch may have completed just as the export stopped being wanted;
-  // no fetch would have rejected in that window, and packing is the expensive
-  // step that precedes handing a file to the browser.
+  // Check cancellation again before expensive packing.
   deps.signal?.throwIfAborted();
 
   deps.onProgress?.({ completed, phase: 'packing', total });
@@ -247,10 +226,7 @@ export const executeInvkExport = async (plan: InvkExportPlan, deps: InvkExportDe
   // The manifest is the one entry a person may open by hand, so it is indented.
   entries.set(INVK_MANIFEST_ENTRY, textEntry(JSON.stringify(manifest, null, 2)));
   entries.set(INVK_DOCUMENT_ENTRY, textEntry(plan.documentJson));
-  // Written even when empty. "This project's board held nothing" is a fact the reader needs; its
-  // absence would be indistinguishable from a v2 archive that never knew about boards. The
-  // descriptor is kept for an item whose bytes could not be fetched, so the loss is reported on
-  // import rather than silently forgotten here.
+  // Write an explicit empty board entry and retain missing-byte descriptors for import reporting.
   entries.set(INVK_BOARD_ENTRY, textEntry(JSON.stringify(plan.boardSnapshot)));
 
   if (cover !== null && coverEntryName !== undefined) {

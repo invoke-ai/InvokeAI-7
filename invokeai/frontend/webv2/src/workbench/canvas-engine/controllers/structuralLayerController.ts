@@ -157,10 +157,8 @@ export class StructuralLayerController {
   }
 
   /**
-   * Live gesture previews coalesce to one dispatch per frame: sliders, color
-   * pickers and curve drags fire per pointer move, and every dispatch fans out
-   * to the whole project-state subscriber tree. `true` means accepted, not
-   * delivered — a lock, gesture, or dispose landing before the flush drops it.
+   * Coalesce gesture previews to one dispatch per frame to limit project subscriptions. True means queued; a lock,
+   * gesture or disposal before flush discards it.
    */
   preview(action: CanvasProjectMutation): boolean {
     if (!this.canCommit()) {

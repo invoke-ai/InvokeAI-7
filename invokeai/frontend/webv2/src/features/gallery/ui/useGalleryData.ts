@@ -27,13 +27,7 @@ export interface GalleryData {
   isLoadingItems: boolean;
   /** The resolved board the items were fetched for. */
   selectedBoardId: string;
-  /**
-   * True when the infinite window is full *and* the board holds more images
-   * than it can reach. `hasMore` is false in that case exactly as it is at the
-   * true end of a board, so the two must be distinguishable: stopping at the
-   * end is complete, stopping at the cap is not, and only one of them owes the
-   * user an explanation.
-   */
+  /** Distinguish reaching the window cap from reaching the board end; only truncation needs an explanation. */
   isWindowTruncated: boolean;
   items: GalleryItem[] | null;
   loadMore: () => void;
@@ -58,9 +52,7 @@ const useGalleryBoards = ({ settings }: { settings: GallerySettings }) => {
 };
 
 const isRecentItemVisible = (item: GalleryItem, filter: GalleryItemsFilter): boolean => {
-  // A recent belongs to the unstarred listing (the grid); the starred-only
-  // listing has no slot for it — exactly like a text search — and a recent
-  // starred since it landed has moved to the strip.
+  // Overlay recents only in the unstarred listing; newly starred recents belong to the strip.
   if (
     filter.searchTerm !== '' ||
     filter.createdFrom !== undefined ||
@@ -121,15 +113,7 @@ export const mergeGalleryItemWindow = ({
   return mergedItems.slice(0, maxRows);
 };
 
-/**
- * Distinguishes "this board has no more images" from "this board has more
- * images than the infinite window can reach".
- *
- * Both leave `hasNextPage` false, but only the second one is incomplete, and a
- * gallery that silently stops scrolling with a thousand images on the server
- * reads as a bug. Paginated mode is never truncated: every page is reachable
- * by asking for it.
- */
+/** A false hasNextPage can mean either completion or truncation. Paginated mode remains fully reachable. */
 export const isGalleryWindowTruncated = ({
   hasNextPage,
   isPaginated,
@@ -207,10 +191,7 @@ export const useGalleryData = ({
   } = useInfiniteQuery(
     galleryItemsInfiniteOptions(
       filter,
-      // In infinite mode `page` anchors where the window starts — 0 in normal
-      // browsing (every board/search/view change resets it). A reveal to an
-      // image deeper than the base window's reach sets it, so the grid can
-      // show that part of the listing at all.
+      // Infinite page values anchor deep reveals; board/search/view changes reset them to zero.
       isPaginated
         ? { kind: 'anchor', offset: page * GALLERY_PAGE_SIZE }
         : { kind: 'infinite', offset: page * GALLERY_PAGE_SIZE }

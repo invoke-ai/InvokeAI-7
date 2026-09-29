@@ -38,12 +38,8 @@ const clamp = (value: number, min: number, max: number): number => Math.min(max,
 const FORMAT_HOVER_PROPS = { bg: 'bg.muted', color: 'fg' };
 
 /**
- * The color pane's workspace: the active foreground/background pair with an
- * explicit target, one picking surface (wheel or box, remembered per user),
- * and channel inputs in the shared picker format. The shelves live in the
- * sibling Swatches pane. Everything edits the one persisted pair; nothing here
- * owns color state of its own beyond the sticky HSV needed to keep hue through
- * greys.
+ * Edit one persisted foreground/background pair using the user's preferred wheel/box and shared channels. Keep
+ * only sticky HSV locally to preserve hue through greys; shelves live in Swatches.
  */
 export const ColorPane = () => {
   const { t } = useTranslation();
@@ -88,9 +84,7 @@ export const ColorPane = () => {
     },
     [commands, maskTint, target]
   );
-  // Held arrow keys commit per repeat; the recents shelf hears only the
-  // settled color, not two dozen intermediate hues. An immediate record (hex
-  // commit, pipette) supersedes the pending one, and unmount flushes it.
+  // Record only settled arrow-repeat colors; immediate commits supersede pending recents and unmount flushes them.
   const pendingRecent = useRef<{ hex: string; timer: ReturnType<typeof setTimeout> } | null>(null);
   const settlePendingRecent = useCallback((record: boolean) => {
     if (!pendingRecent.current) {

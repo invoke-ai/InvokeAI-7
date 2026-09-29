@@ -5,11 +5,7 @@ import { socketHub } from '@platform/transport/socketHub';
 
 let isConfigured = false;
 
-/**
- * App composition for resources whose implementations Identity must not know.
- * Lazy feature modules register their own account-owned caches with the same
- * lifecycle when they load.
- */
+/** App composes cross-owner account cleanup; lazy features register their caches when loaded. */
 export const configureAppAccountLifecycle = (): void => {
   if (isConfigured) {
     return;
@@ -18,8 +14,7 @@ export const configureAppAccountLifecycle = (): void => {
 
   registerAccountOwnedResource({
     clear: () => {
-      // QueryClient.clear() synchronously destroys queries, which cancels their
-      // retryers before removing both query and mutation caches.
+      // clear() cancels query retryers synchronously before removing caches.
       queryClient.clear();
     },
     name: 'query-client',

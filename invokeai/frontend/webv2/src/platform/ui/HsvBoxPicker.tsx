@@ -23,13 +23,7 @@ const HUE_STRIP_CSS = {
   background: 'linear-gradient(to right, red, yellow, lime, cyan, blue, magenta, red)',
 };
 
-/**
- * The box-mode HSV picker: a saturation/value square under the hue, with a hue
- * strip beneath — the layout the popover picker uses, sharing the wheel's
- * `HsvColor` contract so the color pane can flip between the two. The square's
- * shading is exact: white→hue across saturation, multiplied down to black by
- * value, which is precisely two stacked linear gradients.
- */
+/** Shares HsvColor with the wheel; layered white-to-hue and transparent-to-black gradients encode saturation/value. */
 export const HsvBoxPicker = ({
   disabled = false,
   heightPx = 140,

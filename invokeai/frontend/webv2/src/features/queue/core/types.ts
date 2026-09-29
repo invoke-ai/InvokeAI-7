@@ -1,6 +1,11 @@
-import type { QueuePromptSeedBehaviour, QueueSeedStep, QueueWorkflowSeed } from '@features/queue/core/promptBatch';
+import type {
+  QueuePromptSeedBehaviour,
+  QueueSeedStep,
+  QueueWorkflowBatchDatum,
+  QueueWorkflowSeed,
+} from '@features/queue/core/promptBatch';
 
-export type { QueueSeedStep, QueueWorkflowSeed };
+export type { QueueSeedStep, QueueWorkflowBatchDatum, QueueWorkflowSeed };
 
 export interface QueueBackendInvocation {
   id: string;
@@ -43,8 +48,12 @@ interface QueueEnqueueRequestBase {
 }
 
 export interface QueueEnqueueWorkflowRequest extends QueueEnqueueRequestBase {
+  /** Serialized parent workflow, compatible with the backend's `WorkflowWithoutID` schema. */
+  workflow?: Record<string, unknown>;
   /** The seed inputs that vary between the `batchCount` runs; the graph carries each one's first seed. */
   seeds?: QueueWorkflowSeed[];
+  /** Batch-node value lists: outer groups multiply, inner datums zip. */
+  batchData?: QueueWorkflowBatchDatum[][];
 }
 
 export interface QueueEnqueueGenerateRequest extends QueueEnqueueRequestBase {
@@ -61,10 +70,7 @@ export interface QueueEnqueueGenerateRequest extends QueueEnqueueRequestBase {
   seedBehaviour?: QueuePromptSeedBehaviour;
   seedNodeId: string;
   seedStep: QueueSeedStep;
-  /**
-   * Set only when replaying an item queued before seed modes: its `seedStep` is
-   * the mapped random toggle, and the expansion follows that version's rules.
-   */
+  /** Legacy recovery maps the old random toggle to seedStep and preserves its expansion rules. */
   legacySeedPlan?: true;
 }
 
@@ -81,14 +87,17 @@ export type QueueCompiledSubmission =
       batchCount: number;
       graph: QueueBackendGraph;
       kind: 'workflow';
+      /** Serialized parent workflow, compatible with the backend's `WorkflowWithoutID` schema. */
+      workflow?: Record<string, unknown>;
       /** The seed inputs that vary between runs, expanded into one zipped batch group at send time. */
       seeds?: QueueWorkflowSeed[];
+      /** Batch-node value lists resolved at compile time: outer groups multiply, inner datums zip. */
+      batchData?: QueueWorkflowBatchDatum[][];
       /**
-       * The library record this run's workflow was loaded from, when the project
-       * graph is bound to one. Stamped at compile time so a completed run can be
-       * attributed back to the library record even after the editor moved on.
+       * The project workflow the graph was compiled from, so results return to it whatever is active later. Absent
+       * on records queued before projects owned several workflows; those results keep their destination only.
        */
-      libraryWorkflowId?: string;
+      projectWorkflowId?: string;
     }
   | {
       batchCount: number;
@@ -133,22 +142,23 @@ export interface QueueResultImage {
   width: number;
 }
 
-/** A settled run of a library-bound workflow, reported once its results are routed. */
-export interface QueueWorkflowRunCompletedEvent {
-  /** Result images in run order; the last one is the run's final output. */
-  imageNames: readonly string[];
-  libraryWorkflowId: string;
-  projectId: string;
-  queueItemId: string;
-}
-
-/**
- * Optional observer for completed library-bound workflow runs. The Queue owns
- * neither the workflow library nor the gallery, so the App composition root
- * supplies the implementation; a missing sink simply disables the notification.
- */
-export interface QueueWorkflowRunSink {
-  onWorkflowRunCompleted(event: QueueWorkflowRunCompletedEvent): void;
+export interface QueueResultVideo {
+  /** Board the video is on when read (after any destination attach); unset when uncategorized. */
+  boardId?: string;
+  category: 'general' | 'control' | 'mask' | 'user' | 'other';
+  /** Backend creation timestamp; `queuedAt` is the submission instant. */
+  createdAt?: string;
+  durationSeconds: number;
+  fps?: number;
+  height: number;
+  isIntermediate: boolean;
+  mediaOrigin?: string;
+  queuedAt: string;
+  sourceQueueItemId: string;
+  thumbnailUrl: string;
+  videoName: string;
+  videoUrl: string;
+  width: number;
 }
 
 export type QueueItemStatus = 'pending' | 'in_progress' | 'waiting' | 'completed' | 'failed' | 'canceled';
@@ -259,6 +269,12 @@ export interface QueueResultImageOptions {
   resultNodeIds?: readonly string[];
 }
 
+/** The project workflow a run was compiled from; node progress is shown only in that editor. */
+export interface QueueRunOrigin {
+  projectId: string;
+  workflowId: string;
+}
+
 export interface QueueResultVideoOptions extends QueueResultImageOptions {
   /** Drop videos whose DTO reports is_intermediate — the video analogue of filterIntermediateResults. */
   excludeIntermediate?: boolean;
@@ -275,21 +291,16 @@ export interface QueueFeatureCommands {
   resumeProcessor(): Promise<void>;
 }
 
-/**
- * The queue feature's backend seam. It owns both command transport and realtime
- * events so runtimes never assemble HTTP calls and socket subscriptions.
- */
-/**
- * The backend's preview snapshot (`ProgressPreviewDTO`): the fields of an
- * `invocation_progress` socket event a preview consumer reads. The coordinator
- * feeds it through the same handler as the socket event, where the revision
- * gate drops anything the live stream already delivered.
- */
+/** Own command transport and realtime events together so runtimes do not assemble HTTP/socket plumbing. */
+/** Feed preview snapshots through the socket handler's revision gate to reject frames already delivered live. */
 export interface QueueProgressPreviewPayload {
   queue_id: string;
   item_id: number;
   session_id: string;
   invocation_source_id: string;
+  parent_item_id?: number | null;
+  root_item_id?: number | null;
+  workflow_call_parent_source_id?: string | null;
   revision: number | null;
   message: string;
   percentage: number | null;
@@ -314,6 +325,8 @@ export interface QueueBackendPort extends QueueFeatureCommands {
   ): Promise<QueueResultImage[]>;
   /** Names of the videos a completed backend item produced (no DTO hydration needed). */
   getResultVideoNames(itemId: number, options?: QueueResultVideoOptions): Promise<string[]>;
+  /** Hydrate result videos for display; videos that are gone or unreadable are omitted. */
+  getResultVideos(videoNames: string[], sourceQueueItemId: string, queuedAt: string): Promise<QueueResultVideo[]>;
   listItems(): Promise<QueueBackendItem[]>;
   readCurrent(scope?: QueueQueryScope, signal?: AbortSignal): Promise<QueueItemReadModel | null>;
   readItemIds(order: 'asc' | 'desc', scope?: QueueQueryScope, signal?: AbortSignal): Promise<QueueItemIdsReadModel>;

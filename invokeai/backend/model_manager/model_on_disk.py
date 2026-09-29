@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from typing import Any, Optional, TypeAlias
 
@@ -41,6 +42,27 @@ SAFETENSORS_DTYPES: dict[str, torch.dtype] = {
 """safetensors dtype names mapped to their torch equivalents."""
 
 
+def read_safetensors_header(path: Path) -> dict[str, Any]:
+    """Read a safetensors file's JSON header: dtype, shape and data offsets per tensor key, without `__metadata__`.
+
+    Raises:
+        OSError: The file could not be read.
+        ValueError: The header is not valid JSON (an empty or truncated file, or not safetensors at all).
+    """
+    with open(path, "rb") as f:
+        header_length = int.from_bytes(f.read(8), "little")
+        # Any 8 bytes decode to a length; for a file that is not safetensors that length is garbage, and reading it
+        # would try to allocate it.
+        if header_length > os.fstat(f.fileno()).st_size - 8:
+            raise ValueError(f"{path} is not a safetensors file: its header length exceeds the file size")
+        header = json.loads(f.read(header_length))
+
+    if not isinstance(header, dict):
+        raise ValueError(f"{path} is not a safetensors file: its header is not a JSON object")
+    header.pop("__metadata__", None)
+    return header
+
+
 def _safetensors_meta_state_dict(path: Path) -> StateDict:
     """Build a state dict of `meta` tensors from a safetensors file's header.
 
@@ -52,11 +74,7 @@ def _safetensors_meta_state_dict(path: Path) -> StateDict:
         Exception: The header could not be parsed, or names a dtype with no torch equivalent. Callers should
             fall back to loading the file for real.
     """
-    with open(path, "rb") as f:
-        header_length = int.from_bytes(f.read(8), "little")
-        header = json.loads(f.read(header_length))
-
-    header.pop("__metadata__", None)
+    header = read_safetensors_header(path)
     return {
         key: torch.empty(info["shape"], dtype=SAFETENSORS_DTYPES[info["dtype"]], device="meta")
         for key, info in header.items()

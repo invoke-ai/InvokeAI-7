@@ -1,30 +1,7 @@
 /**
- * Rasterizes a `text` layer source. Text layers are PARAMETRIC and
- * EDITABLE-FOREVER: their pixels are derived from the source params (`content`,
- * `fontFamily`, `fontSize`, `fontWeight`, `fontStyle`, `fontVariations`,
- * `lineHeight`, `align`, `color`) rather
- * than a persisted bitmap, so a style/content edit re-renders for free — the
- * headline upgrade over legacy's rasterized (frozen) text.
- *
- * Layout is deliberately SIMPLE (Risk 8): manual line breaks on `\n`, a
- * `lineHeight` multiplier over `fontSize`, and per-line horizontal alignment
- * within the measured block width. There is NO shaping engine — no BiDi, no
- * complex-script clustering, no automatic word wrap, no kerning beyond what the
- * platform `fillText` applies. Metrics come through the {@link RasterSurface}
- * `ctx` seam (`measureText`), so node tests run on the stub's deterministic
- * `width = chars × fontSizePx × 0.6` (see `raster.testStub.ts`).
- *
- * Extent semantics: like a shape, the surface is sized to the text BLOCK's own
- * measured `width`×`height` (its layer-local extent, top-left origin); the
- * compositor applies the layer transform (position/scale) when drawing. A layer
- * with an empty `content` still produces a minimal 1×lineHeight surface so its
- * transform/anchor stays meaningful.
- *
- * Font loading (late web-font availability) is handled by the ENGINE, not here:
- * this rasterizer draws with whatever metrics `ctx` currently reports, and the
- * engine re-rasterizes when a pending font resolves (see `render/fontLoader.ts`).
- *
- * Zero React, zero import-time side effects.
+ * Editable parametric text uses manual newlines, font-size line-height and per-line alignment within measured
+ * bounds. Browser measureText/fillText supply metrics and shaping; there is no custom layout or automatic
+ * wrapping. Empty text retains a minimal 1xlineHeight extent. The engine owns late-font rerasterization.
  */
 
 import type { CanvasLayerSourceContract } from '@workbench/canvas-engine/contracts';
@@ -37,12 +14,8 @@ export type TextSource = Extract<CanvasLayerSourceContract, { type: 'text' }>;
 type Ctx = RasterSurface['ctx'];
 
 /**
- * Per-character horizontal advance as a fraction of the font's pixel size, used
- * by the pure {@link estimateTextExtent}. It matches the test stub's
- * `measureText` factor so a text layer's estimated extent and its
- * stub-measured surface size agree exactly in node tests. In the browser the
- * true `measureText` governs the rendered surface; the estimate is only a
- * pre-measure cache-size / bounds approximation.
+ * Pure estimated character advance matches node stub metrics. Browser measureText determines final surfaces;
+ * estimates only seed bounds/cache sizing.
  */
 export const TEXT_CHAR_WIDTH_FACTOR = 0.6;
 
@@ -66,11 +39,8 @@ export const textLines = (content: string): string[] => content.split('\n');
 const lineHeightPx = (source: TextSource): number => source.fontSize * source.lineHeight;
 
 /**
- * A pure, DOM-free estimate of a text block's unscaled pixel extent, matching
- * the stub's deterministic metrics (`TEXT_CHAR_WIDTH_FACTOR`). Used by the pure
- * geometry helpers (`sources.ts`) to size caches / bounds before a real
- * `measureText` runs; the rasterizer resizes the surface to the precise
- * measured size, so a browser mismatch only affects the initial cache size.
+ * DOM-free text extent estimate for pre-measure geometry. Rasterization resizes to actual measured bounds; node
+ * stubs use matching metrics.
  */
 export const estimateTextExtent = (source: TextSource): { width: number; height: number } => {
   const lines = textLines(source.content);
@@ -94,10 +64,8 @@ const measureBlock = (ctx: Ctx, source: TextSource, lines: string[]): { width: n
 };
 
 /**
- * Draws a text source into a surface sized to the measured text block, reusing
- * `target` if provided (resizing it to the measured extent), matching the
- * paint/image/shape rasterizer contract. Synchronous work wrapped in a resolved
- * promise so it shares the `rasterizeSource` dispatch signature.
+ * Draws into measured text bounds, resizing an optional target. Returns a resolved promise to match source
+ * dispatch.
  */
 export const rasterizeTextSource = (
   source: TextSource,

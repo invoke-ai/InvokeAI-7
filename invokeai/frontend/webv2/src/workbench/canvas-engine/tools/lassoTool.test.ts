@@ -32,8 +32,7 @@ const createHarness = () => {
     invalidate: vi.fn(),
     stores,
     updateCursor: vi.fn(),
-    // Identity viewport: document and screen coordinates coincide, so the
-    // polygon's close-on-first-vertex hit test is expressed in the same numbers.
+    // Identity viewport makes document coordinates valid for the screen-space polygon close test.
     viewport: { documentToScreen: (p: { x: number; y: number }) => p },
   } as unknown as ToolContext;
   return { commits, ctx, dispatched, stores };

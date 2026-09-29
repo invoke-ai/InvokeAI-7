@@ -27,41 +27,11 @@ module renames it to the vendored diffusers-style
   out to all three of ``to_q``/``to_k``/``to_v``).
 """
 
-import json
-import struct
-from pathlib import Path
 from typing import Any
 
 import torch
 
-from invokeai.backend.quantization.int8_convrot import parse_comfy_quant_bytes, parse_comfy_quant_marker
-
-
-def read_comfy_quant_markers(path: Path) -> dict[str, dict[str, Any]]:
-    """Read every ``<layer>.comfy_quant`` marker from a safetensors file WITHOUT loading tensor
-    data - header parse plus a seek per marker blob. Keys are the raw (un-renamed) layer names.
-
-    Lets the loader reject unsupported quantization formats (e.g. the fp8_scaled repacks, which
-    share this key layout) before committing to a ~20 GiB read.
-
-    Marker bytes go through the same tolerant parser the state-dict readers use. This reader runs
-    FIRST, so a strict parse here is what a NUL-padded marker -- which Comfy writes, and which that
-    parser exists to absorb -- would actually hit: a `JSONDecodeError` out of the middle of a load,
-    naming neither the file nor the key.
-    """
-    markers: dict[str, dict[str, Any]] = {}
-    with open(path, "rb") as f:
-        header_len = struct.unpack("<Q", f.read(8))[0]
-        header = json.loads(f.read(header_len))
-        header.pop("__metadata__", None)
-        for key, entry in header.items():
-            if not key.endswith(".comfy_quant"):
-                continue
-            start, end = entry["data_offsets"]
-            f.seek(8 + header_len + start)
-            markers[key[: -len(".comfy_quant")]] = parse_comfy_quant_bytes(f.read(end - start))
-    return markers
-
+from invokeai.backend.quantization.int8_convrot import parse_comfy_quant_marker
 
 _QKV_SUFFIXES = (".weight", ".weight_scale")
 

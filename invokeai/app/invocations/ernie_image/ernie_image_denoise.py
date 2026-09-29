@@ -21,8 +21,9 @@ from invokeai.backend.flux.schedulers import (
     ERNIE_IMAGE_SCHEDULER_LABELS,
     ERNIE_IMAGE_SCHEDULER_MAP,
     ERNIE_IMAGE_SCHEDULER_NAME_VALUES,
+    ERNIE_IMAGE_SHIFT,
 )
-from invokeai.backend.model_manager.taxonomy import BaseModelType
+from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat
 from invokeai.backend.stable_diffusion.diffusers_pipeline import PipelineIntermediateState
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import ErnieImageConditioningInfo
 from invokeai.backend.util.devices import TorchDevice
@@ -224,18 +225,26 @@ class ErnieImageDenoiseInvocation(BaseInvocation):
         model_path = (context.config.get().models_path / config.path).resolve()
         scheduler_dir = model_path / "scheduler"
         if not scheduler_dir.is_dir():
-            context.logger.warning(
-                f"No scheduler config found at {scheduler_dir}; falling back to {scheduler_cls.__name__} defaults."
-            )
-            return scheduler_cls()
+            # A single-file checkpoint has no `scheduler/` by construction -- `config.path` is the
+            # file itself -- so there is nothing to read and nothing worth warning about. What
+            # matters is the value: both released pipelines ship `shift=4.0`, and the driver hands
+            # the scheduler raw sigmas expecting it to apply that shift, so default-constructing
+            # would silently denoise on the unshifted schedule. Turbo feels it worst at 8 steps.
+            if config.format is not ModelFormat.Checkpoint:
+                context.logger.warning(
+                    f"No scheduler config found at {scheduler_dir}; using {scheduler_cls.__name__} "
+                    f"with the released ERNIE-Image shift={ERNIE_IMAGE_SHIFT}."
+                )
+            return scheduler_cls(shift=ERNIE_IMAGE_SHIFT)
         try:
             return scheduler_cls.from_pretrained(model_path, subfolder="scheduler")
         except Exception as e:
             context.logger.warning(
                 f"Failed to load scheduler config from {scheduler_dir} ({e}); "
-                f"falling back to {scheduler_cls.__name__} defaults."
+                f"falling back to {scheduler_cls.__name__} with the released ERNIE-Image "
+                f"shift={ERNIE_IMAGE_SHIFT}."
             )
-            return scheduler_cls()
+            return scheduler_cls(shift=ERNIE_IMAGE_SHIFT)
 
     def _load_conditioning(
         self,

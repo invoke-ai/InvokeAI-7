@@ -1,9 +1,6 @@
 /**
- * The RasterBackend seam: every place the engine needs a 2D canvas surface
- * or an ImageBitmap, it goes through an injected `RasterBackend` instead of
- * calling `document.createElement('canvas')` / `new OffscreenCanvas(...)`
- * directly. This keeps the engine testable in node — tests inject
- * `render/raster.testStub.ts`'s stub backend instead of `createDomRasterBackend()`.
+ * Injected RasterBackend owns all canvas/ImageBitmap creation, allowing node tests to use recording surfaces
+ * instead of browser globals.
  */
 
 /** A single drawable/resizable 2D surface, backed by either an OffscreenCanvas or an HTMLCanvasElement. */
@@ -14,26 +11,9 @@ export interface RasterSurface {
   readonly height: number;
   resize(w: number, h: number): void;
   /**
-   * Resizes to `w`×`h` while keeping the current pixels, placed at `(dx, dy)`
-   * in the new surface.
-   *
-   * This exists because {@link resize} cannot preserve anything: assigning
-   * `canvas.width` resets the backing store, so a caller that wants its pixels
-   * back has to read them out to the CPU first and upload them again. That
-   * round trip is the dominant cost of growing a layer cache during a stroke —
-   * measured at 33.8 ms for a 3520×3200 → 3840×3712 growth, against a 14.9 ms
-   * floor for reallocating and preserving nothing.
-   *
-   * Adopting a fresh canvas and blitting the old one into it does the copy on
-   * the GPU instead, for 17.9 ms on the same growth. It costs no extra
-   * allocation — the copy's target IS the new surface, and the old canvas is
-   * dropped — which is what separates it from a temp-buffer scheme, where the
-   * second allocation gives back everything the faster copy wins.
-   *
-   * `canvas` and `ctx` are therefore REPLACED, not mutated. The surface object
-   * itself keeps its identity (caches key derived surfaces on it), but anything
-   * holding a reference to the old `canvas`/`ctx` across this call is holding a
-   * detached one. As with `resize`, all context state resets to defaults.
+   * Resize preserves pixels at (dx,dy) by adopting a fresh canvas and blitting the old backing store, avoiding CPU
+   * readback and a second temporary allocation. Surface identity remains stable, but canvas/context references are
+   * replaced and all context state resets.
    */
   resizePreserving(w: number, h: number, dx: number, dy: number): void;
 }
@@ -47,10 +27,6 @@ export interface RasterSurfaceOptions {
 export interface RasterBackend {
   createSurface(width: number, height: number, options?: RasterSurfaceOptions): RasterSurface;
   createImageBitmap(source: ImageBitmapSource): Promise<ImageBitmap>;
-  /**
-   * Encodes a surface's pixels to an image `Blob` (PNG by default). Used by the
-   * bitmap store to persist painted layers as content-hashed server images.
-   */
   encodeSurface(surface: RasterSurface, type?: string): Promise<Blob>;
 }
 
@@ -158,11 +134,7 @@ class DomCanvasRasterSurface implements RasterSurface {
   }
 }
 
-/**
- * Creates a `RasterBackend` backed by the DOM/browser: `OffscreenCanvas`
- * when available, falling back to `HTMLCanvasElement` otherwise (notably
- * Safari < 16.4, which lacks `OffscreenCanvas` support).
- */
+/** Uses OffscreenCanvas when available, otherwise HTMLCanvasElement. */
 export const createDomRasterBackend = (): RasterBackend => {
   const useOffscreen = isOffscreenCanvasSupported();
   return {

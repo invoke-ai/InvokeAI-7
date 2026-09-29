@@ -103,11 +103,7 @@ interface HarnessOptions {
   canLift?: boolean;
   /** A float that is already in flight before the gesture starts. */
   existingFloat?: boolean;
-  /**
-   * Grid-snapping state. Defaults to OFF so the drag/commit-contract tests below
-   * assert raw pointer deltas; the snapping tests opt in explicitly. (The product
-   * default is on — see `createEngineStores`.)
-   */
+  /** Tests default snapping off to isolate raw deltas; snapping cases opt in. Product default is on. */
   snapToGrid?: boolean;
   /** The grid snapping uses when enabled; defaults to the engine's own default. */
   bboxGrid?: number;
@@ -151,8 +147,6 @@ const createHarness = (doc: CanvasDocumentContractV3, options: HarnessOptions = 
     getFloatingSelection: () => float.current,
     invalidate: vi.fn(),
     isPointInSelection: () => options.selectionContainsPoint === true,
-    // A real (empty) layer cache so the tool's cache seam resolves; no test here
-    // relies on cached content, so entries stay absent.
     layers: createLayerCacheStore(createTestStubRasterBackend()),
     liftFloatingSelection: (layerId) => {
       if (options.canLift === false) {
@@ -221,8 +215,7 @@ describe('move tool: the layers panel owns selection', () => {
   });
 
   it('does not steal the selection when pressing another layer above the selected one', () => {
-    // The exact complaint this contract exists to fix: 'bottom' is selected in
-    // the panel and 'top' covers the press point.
+    // The panel selects bottom while top covers the press point.
     const doc = makeDoc(
       [imageLayer('top', { width: 50, height: 50 }), imageLayer('bottom', { width: 50, height: 50 })],
       'bottom'
@@ -320,8 +313,6 @@ describe('move tool: drag', () => {
   });
 
   it('drags a parametric shape layer, committing one structural transform', () => {
-    // Regression: shape/gradient/text layers were not hit-testable, so the move
-    // tool skipped them (Phase 5 "param for parametric" hit-testing).
     const doc = makeDoc([shapeLayer('s', { x: 0, y: 0, width: 50, height: 50 })], 's');
     const h = createHarness(doc);
     const tool = createMoveTool();
@@ -339,8 +330,7 @@ describe('move tool: drag', () => {
   });
 
   it('moves the SELECTED layer even when another layer covers the press point', () => {
-    // 'top' is composited over the press point, but 'bottom' is what the panel
-    // selected — the panel wins, and no selection dispatch is emitted.
+    // Panel selection wins over visible top pixels, without a selection dispatch.
     const doc = makeDoc(
       [imageLayer('top', { width: 50, height: 50 }), imageLayer('bottom', { width: 50, height: 50 })],
       'bottom'

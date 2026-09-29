@@ -113,10 +113,6 @@ export const QueueCluster = () => {
             variant={tone === 'idle' ? 'outline' : 'subtle'}
             onClick={handleOpenQueue}
           >
-            {/* No background fill here any more: the top bar's progress rail is
-                twenty pixels below this button and says the same thing at
-                viewport width, where a 35%-opacity wash behind a number never
-                really did. The count and the tooltip are this control's job. */}
             <Icon as={isPaused ? PauseIcon : ListOrderedIcon} position="relative" zIndex="1" />
             <chakra.span fontVariantNumeric="tabular-nums" position="relative" textAlign="center" zIndex="1">
               {remaining}

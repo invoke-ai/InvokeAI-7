@@ -190,13 +190,8 @@ const isSameExtents = (a: TextExtents | null, b: TextExtents): boolean =>
   a !== null && a.labelEnd === b.labelEnd && a.valueStart === b.valueStart && a.width === b.width;
 
 /**
- * One-row numeric parameter: label left, value right, the whole frame is the
- * track. Pointer down anywhere but the value scrubs (Shift: fine, Alt: stops
- * only); the value is a button that swaps in a text editor; arrows step
- * (Shift/PageUp/PageDown: ×10, Home/End: bounds); double-click or
- * Backspace/Delete restores `defaultValue`. Owns its label, hint, and help or
- * error line, so it replaces a `Field` + slider pairing outright. Debouncing
- * stays with the caller.
+ * Relative drag; Shift fine, Alt stops. Click the value to edit; arrows step, Shift/Page keys ×10, Home/End
+ * bounds. Double-click or Backspace/Delete resets. Caller owns debouncing.
  */
 export const ScrubberField = ({
   defaultValue,
@@ -230,8 +225,7 @@ export const ScrubberField = ({
 
   useMountEffect(() => () => pointerSessionRef.current?.abort());
 
-  // Stops hide under the text, so the label's and value's extents are tracked
-  // as they resize (value digits, localized labels, the editor swapping in).
+  // Track label/value bounds so stops stay hidden beneath changing text.
   const measureText = useCallback((root: HTMLElement) => {
     const next = readTextExtents(root);
 
@@ -314,8 +308,7 @@ export const ScrubberField = ({
     setEdit({ draft, selectAll });
   }, []);
 
-  // Enter and Escape hand focus back to the slider; a blur means focus already
-  // went where the user sent it, and pulling it back would break Tab and clicks.
+  // Restore slider focus on Enter/Escape, never blur: Tab and clicks already chose a destination.
   const finishEditing = useCallback(
     (commit: boolean, restoreFocus: boolean) => {
       const session = editSessionRef.current;
@@ -356,22 +349,18 @@ export const ScrubberField = ({
       const rect = root.getBoundingClientRect();
       const trackLeft = rect.left + TRACK_INSET_PX;
       const trackWidth = Math.max(1, rect.width - TRACK_INSET_PX * 2);
-      const valueAt = (clientX: number): number => min + clamp((clientX - trackLeft) / trackWidth, 0, 1) * range;
+      // Unclamped, so a press left of the thumb can still be dragged past the track's end to max.
+      const valueAt = (clientX: number): number => min + ((clientX - trackLeft) / trackWidth) * range;
       const session = new AbortController();
       let latest = value;
       let isPendingTouch = event.pointerType === 'touch';
-      // Once Shift enters a gesture it stays relative (re-anchored on each ratio
-      // change), so neither pressing nor releasing Shift mid-drag jumps.
-      let anchor: { clientX: number; ratio: number; value: number } | null = event.shiftKey
-        ? { clientX: event.clientX, ratio: FINE_DRAG_RATIO, value }
-        : null;
+      // Re-anchor on sensitivity changes so toggling Shift mid-drag does not jump.
+      let anchor = { clientX: event.clientX, ratio: event.shiftKey ? FINE_DRAG_RATIO : 1, value };
 
       pointerSessionRef.current = session;
       setIsDragging(true);
 
-      // Keeps hover states elsewhere quiet and the resize cursor stable while
-      // the pointer roams. Throws for an already-released pointer; the window
-      // listeners still carry the gesture.
+      // Pointer capture preserves drag cursor/hover isolation; window listeners cover capture failure.
       try {
         root.setPointerCapture(event.pointerId);
       } catch {
@@ -380,24 +369,17 @@ export const ScrubberField = ({
 
       type PointerSample = { altKey: boolean; clientX: number; pointerId: number; shiftKey: boolean };
       const resolve = (pointer: PointerSample): number => {
-        let raw: number;
+        const ratio = pointer.shiftKey ? FINE_DRAG_RATIO : 1;
 
-        if (pointer.shiftKey || anchor) {
-          const ratio = pointer.shiftKey ? FINE_DRAG_RATIO : 1;
-
-          if (anchor?.ratio !== ratio) {
-            anchor = { clientX: pointer.clientX, ratio, value: latest };
-          }
-
-          raw = anchor.value + (valueAt(pointer.clientX) - valueAt(anchor.clientX)) * ratio;
-        } else {
-          raw = valueAt(pointer.clientX);
+        if (anchor.ratio !== ratio) {
+          anchor = { clientX: pointer.clientX, ratio, value: latest };
         }
+
+        const raw = anchor.value + (valueAt(pointer.clientX) - valueAt(anchor.clientX)) * ratio;
 
         return pointer.altKey && markValues?.length ? nearestMark(raw, markValues) : snapToStep(raw);
       };
-      // The gesture belongs to the pointer that started it; a second finger or
-      // pen contact neither moves the value nor ends the drag.
+      // Only the initiating pointer may move or end this gesture.
       const apply = (pointer: PointerSample) => {
         if (pointer.pointerId !== event.pointerId) {
           return;
@@ -428,11 +410,6 @@ export const ScrubberField = ({
         setIsDragging(false);
       };
 
-      // A fine gesture starts from the current value, never from the press position.
-      if (!event.shiftKey) {
-        apply(event);
-      }
-
       window.addEventListener('pointermove', apply, { signal: session.signal });
       window.addEventListener('pointerup', end, { signal: session.signal });
       window.addEventListener('pointercancel', end, { signal: session.signal });
@@ -449,9 +426,7 @@ export const ScrubberField = ({
     [defaultValue, disabled, emit]
   );
 
-  // Every key the slider acts on is consumed outright: the window-level hotkey
-  // runtime only exempts editable elements, so a digit that opens the editor
-  // must not also fire the shortcut bound to that digit.
+  // Consume handled keys so the window hotkey runtime cannot also treat editor-opening digits as commands.
   const handleSliderKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
       if (disabled || event.ctrlKey || event.metaKey) {
@@ -543,8 +518,7 @@ export const ScrubberField = ({
     },
     [observeText, selectAll]
   );
-  // No `relatedTarget` means nothing else took focus (the window deactivated,
-  // or a click landed on nothing focusable), so the slider keeps the tab stop.
+  // With no relatedTarget, retain the slider tab stop.
   const handleInputBlur = useCallback(
     (event: FocusEvent<HTMLInputElement>) => finishEditing(true, event.relatedTarget === null),
     [finishEditing]

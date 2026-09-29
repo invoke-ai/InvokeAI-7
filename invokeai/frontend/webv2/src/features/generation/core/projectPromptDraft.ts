@@ -35,10 +35,7 @@ export const applyProjectPromptDraft = (
 const hasPromptContent = (draft: ProjectPromptDraft): boolean =>
   draft.positivePrompt.trim().length > 0 || draft.negativePrompt.trim().length > 0;
 
-/**
- * Generate owns the project prompt draft. Older projects may have prompt text stored only in
- * Upscale, so seed Generate from it when Generate has no prompt content of its own.
- */
+/** Seed Generate from Upscale only when Generate has no prompt. */
 export const migrateProjectPromptDraft = (
   generateValues: Record<string, unknown>,
   legacyUpscaleValues: Record<string, unknown>

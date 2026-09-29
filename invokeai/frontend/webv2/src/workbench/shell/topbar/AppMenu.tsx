@@ -2,11 +2,11 @@ import { Badge, Box, chakra, HStack, Icon, Menu, Portal, Text } from '@chakra-ui
 import { AccountMenuSection, useCapabilities, useHasAccountSection } from '@features/identity';
 import { getQueueSummary } from '@features/queue/contracts';
 import { APP_VERSION } from '@platform/runtime/appMetadata';
-import { DiscordIcon } from '@platform/ui/BrandIcon';
 import { IconButton } from '@platform/ui/Button';
 import { InvokeMark } from '@platform/ui/InvokeMark';
 import { MenuContent } from '@platform/ui/Menu';
 import { Tooltip } from '@platform/ui/Tooltip';
+import { DiscordIcon } from '@platform/ui/VendoredIcon';
 import { useNavigate } from '@tanstack/react-router';
 import { OPEN_COMMAND_PALETTE_HOTKEY } from '@workbench/hotkeys/catalog';
 import { openCommandPalette } from '@workbench/palette/paletteStore';
@@ -22,6 +22,7 @@ import {
   ListOrderedIcon,
   SearchIcon,
   SettingsIcon,
+  TypeIcon,
   type LucideIcon,
 } from 'lucide-react';
 import { useCallback, type ElementType } from 'react';
@@ -50,6 +51,9 @@ export const AppMenu = () => {
   }, [navigate, projectId]);
   const openNodes = useCallback(() => {
     void navigate({ to: '/nodes' });
+  }, [navigate]);
+  const openFonts = useCallback(() => {
+    void navigate({ to: '/fonts' });
   }, [navigate]);
   const openQueue = useCallback(() => openWorkbenchWidget('queue'), [openWorkbenchWidget]);
   const openSettings = useCallback(() => openWorkbenchSettings(), []);
@@ -93,6 +97,10 @@ export const AppMenu = () => {
                   <Menu.ItemText>{t('nodes.manager')}</Menu.ItemText>
                 </Menu.Item>
               ) : null}
+              <Menu.Item value="fonts" onClick={openFonts}>
+                <Icon as={TypeIcon} boxSize="3.5" />
+                <Menu.ItemText>{t('launchpad.sections.fonts')}</Menu.ItemText>
+              </Menu.Item>
               <Menu.Item value="queue" onClick={openQueue}>
                 <Icon as={ListOrderedIcon} boxSize="3.5" />
                 <Menu.ItemText>{t('widgets.labels.queue')}</Menu.ItemText>
@@ -148,8 +156,6 @@ const AppMenuGlyph = () => (
 
 const SearchMenuAction = () => {
   const { t } = useTranslation();
-  // Same formatter as every other shortcut hint in the top bar, so the two
-  // hinted actions in this row read alike (and macOS gets ⌘K, not "cmd+k").
   const shortcut = useTopbarShortcut(OPEN_COMMAND_PALETTE_HOTKEY.commandId);
   const label = shortcut ? t('commandPalette.buttonTooltip', { hotkey: shortcut }) : t('commandPalette.buttonLabel');
 
@@ -166,8 +172,6 @@ const SettingsMenuAction = ({ onClick }: { onClick: () => void }) => {
   return <AppMenuAction icon={SettingsIcon} label={label} value="settings" onClick={onClick} />;
 };
 
-// Sized like the 2xs icon buttons in widget headers; menu items default to a
-// much roomier padding than an icon-only action needs.
 const FOOTER_ITEM_PROPS = {
   alignItems: 'center',
   flex: '0 0 auto',

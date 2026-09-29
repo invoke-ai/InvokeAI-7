@@ -141,6 +141,8 @@ class ForInvocationOutput(BaseInvocationOutput):
 
 @invocation("for", version="1.3.1")
 class ForInvocation(BaseInvocation):
+    execution_effects_enabled = True
+
     collection: list[Any] = InputField(
         description="The list of items to iterate over",
         default=[],
@@ -162,7 +164,7 @@ class ForInvocation(BaseInvocation):
             raise NotImplementedError("For loop nodes must be executed as part of a workflow graph")
 
         state = self.state or LoopState()
-        return ForInvocationOutput(
+        output = ForInvocationOutput(
             loop_linkage=LOOP_LINKAGE_FIELD,
             item=self.collection[self.index],
             index=self.index,
@@ -171,6 +173,17 @@ class ForInvocation(BaseInvocation):
             output_collection=[],
             final_state=state,
         )
+        execution = getattr(context, "execution", None)
+        if execution is not None and hasattr(execution, "start_continuation"):
+            execution.start_continuation(
+                "for",
+                payload={
+                    "index": self.index,
+                    "total": len(self.collection),
+                    "state": state.model_dump(mode="json"),
+                },
+            )
+        return output
 
 
 @invocation_output("for_return_output")
@@ -192,6 +205,8 @@ class ForReturnInvocationOutput(BaseInvocationOutput):
 
 @invocation("for_return", version="1.3.2")
 class ForReturnInvocation(BaseInvocation):
+    execution_effects_enabled = True
+
     loop_linkage: Optional[Any] = InputField(
         default=None,
         description="The loop linkage from the matching For",
@@ -213,4 +228,15 @@ class ForReturnInvocation(BaseInvocation):
     )
 
     def invoke(self, context: InvocationContext) -> ForReturnInvocationOutput:
-        return ForReturnInvocationOutput(output=self.output, state=self.state)
+        output = ForReturnInvocationOutput(output=self.output, state=self.state)
+        execution = getattr(context, "execution", None)
+        if execution is not None and hasattr(execution, "complete_continuation"):
+            execution.complete_continuation(
+                "for",
+                payload={
+                    "output": self.output,
+                    "state": self.state.model_dump(mode="json") if self.state is not None else None,
+                    "continue_condition": self.continue_condition,
+                },
+            )
+        return output

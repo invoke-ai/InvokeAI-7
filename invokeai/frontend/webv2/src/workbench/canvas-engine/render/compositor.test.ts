@@ -265,8 +265,7 @@ describe('compositeDocument', () => {
     expect(patternCalls[0]!.args[0]).toBe(tile.canvas);
     expect(patternCalls[0]!.args[1]).toBe('repeat');
 
-    // The whole 200x200 target is filled with the pattern — NOT clipped to the
-    // 100x100 doc rect (the document is no longer a visual boundary).
+    // Checkerboard fills the 200x200 viewport beyond the 100x100 document.
     const fills = target.callLog.filter((e) => e.op === 'fillRect');
     expect(fills).toHaveLength(1);
     expect(fills[0]!.args).toEqual([0, 0, 200, 200]);
@@ -311,8 +310,7 @@ describe('compositeDocument', () => {
     const caches = createLayerCacheStore(backend);
 
     const solidTarget = backend.createSurface(200, 200);
-    // The `background` field no longer renders: a color-background doc with the
-    // checkerboard on still fills the whole viewport with the pattern, not a flat color.
+    // Document background no longer renders; checkerboard still fills the viewport.
     compositeDocument(solidTarget, makeDoc([], { background: { color: '#123456' } }), caches, VIEW, {
       checkerboardTile: createCheckerboardTile(backend),
     });
@@ -363,8 +361,7 @@ describe('compositeDocument', () => {
 
     compositeDocument(target, makeDoc([maskLayer('rg')]), caches, VIEW, { backend });
 
-    // The colorize happens on a NEW intermediate surface (not the target, not the
-    // mask cache): it blits the stencil then fills source-in with the fill colour.
+    // Colorize the stencil on a separate intermediate surface using source-in.
     const colorized = created.find(
       (s) =>
         s !== target &&
@@ -535,13 +532,9 @@ describe('compositeDocument', () => {
     const doc = makeDoc([rasterLayer('raster'), maskLayer('mask')]);
     compositeDocument(target, doc, caches, VIEW, { backend });
 
-    // The mask's source-in colorize marks its draw pass; it must come AFTER the
-    // last raster blit. Find the first source-in op (mask pass) and assert every
-    // non-mask blit already ran — i.e. the mask pass draws last.
+    // Every raster blit must precede the first mask source-in pass.
     const firstDrawImage = target.callLog.findIndex((e) => e.op === 'drawImage');
     expect(firstDrawImage).toBeGreaterThanOrEqual(0);
-    // Two draws land on the target: the raster blit, then the colorized mask blit;
-    // the mask blit is the LAST drawImage.
     const drawIdxs = target.callLog.map((e, i) => (e.op === 'drawImage' ? i : -1)).filter((i) => i >= 0);
     expect(drawIdxs.length).toBeGreaterThanOrEqual(2);
   });
@@ -586,8 +579,6 @@ describe('compositeDocument', () => {
     const target = backend.createSurface(200, 200);
 
     compositeDocument(target, makeDoc([rasterLayer('a')]), caches, VIEW, { imageSmoothing: false });
-    // The smoothing flag is set exactly once, to false, so every layer/staged
-    // blit up-scales nearest-neighbor (crisp + cheap) rather than bilinear.
     expect(findSet(target.callLog, 'imageSmoothingEnabled')).toEqual([false]);
   });
 
@@ -684,8 +675,7 @@ describe('shouldSmoothAtZoom', () => {
     expect(shouldSmoothAtZoom(0.1)).toBe(true);
     expect(shouldSmoothAtZoom(0.5)).toBe(true);
     expect(shouldSmoothAtZoom(0.99)).toBe(true);
-    // At or above 1× the document is magnified: keep pixels crisp and skip the
-    // per-frame bilinear up-scale whose cost grows with zoom.
+    // At zoom >=1, disable smoothing for crisp magnification without bilinear upscaling.
     expect(shouldSmoothAtZoom(1)).toBe(false);
     expect(shouldSmoothAtZoom(4)).toBe(false);
     expect(shouldSmoothAtZoom(20)).toBe(false);
@@ -761,9 +751,7 @@ describe('compositeDocument — floating selection', () => {
 });
 
 describe('compositeDocument — hidden layers', () => {
-  // Typed to the guidance member: `isHidden` exists only on the three overlay
-  // contracts, so a bare spread of the union does not accept it — which is the
-  // invariant this design is built on.
+  // Only overlay contracts carry display-only `isHidden`; narrow to guidance before setting it.
   const hiddenMask = (id: string): CanvasLayerContract => ({
     ...(maskLayer(id) as CanvasRegionalGuidanceLayerContract),
     isHidden: true,

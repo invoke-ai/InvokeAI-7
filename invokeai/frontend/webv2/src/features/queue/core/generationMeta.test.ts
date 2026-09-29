@@ -22,10 +22,8 @@ describe('extractGenerationMeta', () => {
   });
 
   it('keeps an empty positive prompt empty instead of promoting the negative', () => {
-    // A video submitted in first-frame mode may legitimately carry no positive
-    // prompt: the image drives the clip. Reading by order would drop the blank
-    // and slide 'blurry, low quality' into the positive slot, so recalling it
-    // would put the negative text in the Video panel's subject box.
+    // Preserve empty named positive prompts; positional scanning must not misread negative text as the video
+    // subject.
     const meta = extractGenerationMeta(
       item([field('seed', 7), field('positive_prompt', ''), field('negative_prompt', 'blurry, low quality')])
     );

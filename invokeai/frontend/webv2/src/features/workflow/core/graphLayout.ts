@@ -1,9 +1,4 @@
-/**
- * Generic node/edge layout helpers shared by the graph preview flow renderer
- * (`ui/graph-preview/GraphPreviewFlow.tsx`) and, eventually, Task 7's project
- * graph → preview converter. Deliberately xyflow-free and contract-free —
- * callers adapt their own node/edge shapes to the minimal shapes below.
- */
+/** Keep layout helpers independent of xyflow and UI contracts; callers adapt minimal node/edge shapes. */
 
 export interface LayoutGraphNode {
   id: string;

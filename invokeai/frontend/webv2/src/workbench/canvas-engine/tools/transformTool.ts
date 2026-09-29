@@ -1,38 +1,12 @@
 /**
- * The transform tool: an interactive scale/rotate/move SESSION on a single layer.
+ * Transform sessions frame the selected eligible layer without retargeting and span multiple gestures/numeric
+ * edits. Handles scale about opposite anchors (Alt center, Shift uniform); rotate zones use Shift 15-degree snap;
+ * interior moves with axis lock.
  *
- * Interaction contract (CANVAS_PLAN Phase 5):
- * - **Session**: selecting the tool with an eligible layer selected (or pressing
- *   the canvas with no session open) captures the SELECTED layer's committed
- *   transform and opens a session on it. A press never re-targets which layer is
- *   active — that is the layers panel's job. The live preview
- *   flows through the engine's transform-override channel; a `transformSession`
- *   store exposes the layer id + live transform so the numeric options bar can
- *   render and edit it. The session survives multiple gestures — drag handles,
- *   drag to rotate/move, adjust numerics — until **Apply** or **Cancel**.
- * - **Gestures** (each a fresh pointer drag on the session's frame): a scale
- *   handle scales about the opposite handle (alt = center, shift = uniform on
- *   corners); a corner rotate zone rotates about the center (shift = 15° snap);
- *   the interior moves (shift = axis constrain). Pointer-move only updates the
- *   session preview — it never dispatches.
- * - **Snap**: with the snap-to-grid setting on, a LAYER gesture lands its origin
- *   (move) or the dragged handle (scale) on the model grid. Alt bypasses the snap
- *   on a move; on a scale handle it does not, because alt already means
- *   scale-about-center there. Float gestures never snap — their transform is
- *   layer-local, so a document-space grid would skew rotated/scaled layers.
- * - **Apply** (`enter` / options button): the engine commits — a param edit for
- *   image layers, a pixel bake for paint layers — as ONE undoable entry.
- * - **Cancel** (`esc` / options button / a REAL tool switch): drops the
- *   preview, no dispatch. A mid-gesture pointercancel reverts just that drag,
- *   keeping the session; Escape aborts the whole session. A TEMPORARY tool
- *   switch (space/alt modifier-hold) is not a cancel — the session and its
- *   preview survive the hold and resume when it ends (see `onActivate`/
- *   `onDeactivate`'s `opts.temporary`). If the session's layer is deleted
- *   while held, the engine's layer-change teardown cancels it regardless of
- *   which tool is active.
- *
- * Locked/hidden layers get no session (same guard as the move tool). Zero React,
- * zero import-time side effects.
+ * Layer origins/handles snap to the model grid; Alt bypasses move snapping but retains center-scale meaning.
+ * Local-space floats never snap. Apply makes one parameter edit or paint bake. Pointercancel reverts only its
+ * drag; Escape/real switches cancel the session. Temporary switches preserve edits, and deletion always tears them
+ * down.
  */
 
 import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
@@ -89,12 +63,8 @@ const cursorForTarget = (transform: LayerTransform, target: TransformTarget): st
 };
 
 /**
- * What a transform gesture acts on. A layer works in DOCUMENT space; a floating
- * selection works in its layer's LOCAL space (that is where its pixels and its
- * transform live). The gesture math is space-agnostic as long as `rect`,
- * `transform`, and the pointer are all expressed in the same space — `toDocument`
- * / `fromDocument` bridge that space to the viewport, so both cases run through
- * exactly the same handle hit-testing and scale/rotate/move code.
+ * Layer gestures use document space; floats use layer-local space. Convert pointers through to/fromDocument so
+ * bounds, transforms and gesture math share one coordinate system.
  */
 interface TransformSubject {
   readonly kind: 'layer' | 'float';
@@ -118,19 +88,13 @@ export const createTransformTool = (): Tool => {
   let hoverCursor: string | null = null;
 
   const isEligible = (layer: CanvasLayerContract, doc: NonNullable<ReturnType<ToolContext['getDocument']>>): boolean =>
-    // Masks are MOVE-able (legacy parity) but not transform-able in this phase:
-    // `applyTransform` has no mask bake path, so a transform session on a mask
-    // would preview then no-op on Apply. Exclude them until that lands (Phase 7+).
+    // Masks lack an applyTransform bake path, so reject sessions that would preview but fail to apply.
     isLeafEditable(lookupDocumentLeaf(doc, layer.id)) &&
     layer.type !== 'inpaint_mask' &&
     layer.type !== 'regional_guidance' &&
     hittableLayerRect(layer, doc) !== null;
 
-  /**
-   * What the tool currently acts on: a live floating selection takes precedence
-   * over the layer session — the pixels are already detached, so the frame must
-   * wrap them, not the layer they came from.
-   */
+  /** Live floats take precedence over layer sessions so the frame follows detached pixels. */
   const subjectOf = (ctx: ToolContext): TransformSubject | null => {
     const doc = ctx.getDocument();
     if (!doc) {
@@ -195,8 +159,6 @@ export const createTransformTool = (): Tool => {
     });
 
   const nextTransform = (ctx: ToolContext, state: GestureState, input: PointerInput): LayerTransform => {
-    // The pointer arrives in document space; the gesture math runs in the
-    // subject's space, so convert before doing anything with it.
     const pointer = state.fromDocument(input.documentPoint);
     const delta: Vec2 = {
       x: pointer.x - state.startPointerDoc.x,
@@ -245,17 +207,11 @@ export const createTransformTool = (): Tool => {
     id: 'transform',
     onActivate: (ctx, opts) => {
       if (opts?.temporary) {
-        // Resuming from a modifier-hold switch (space→view, alt→colorPicker):
-        // `onDeactivate` preserved the session (and its preview override)
-        // across the hold, so there is nothing to (re)open here. Re-opening
-        // from the current selection would stomp the live preview with the
-        // layer's committed transform, discarding accumulated drags/numeric
-        // edits. If the session's layer vanished mid-hold, the engine's
-        // layer-change teardown already cancelled it — leave that alone too.
+        // Temporary reactivation preserves existing edits and does not reopen from committed transforms. If
+        // deletion cancelled the session mid-hold, leave it closed.
         return;
       }
-      // A live float IS the session — entering the tool frames the pixels in
-      // flight, so no layer session is opened over the top of them.
+      // A live float already owns the session; do not open a layer session over it.
       if (ctx.getFloatingSelection?.()) {
         return;
       }
@@ -270,12 +226,8 @@ export const createTransformTool = (): Tool => {
     onDeactivate: (ctx, opts) => {
       hoverCursor = null;
       if (opts?.temporary) {
-        // A modifier-hold switch (space/alt) must not discard an in-progress
-        // session: the pipeline already suppresses temp switches mid-gesture,
-        // so `gesture` is guaranteed null here — this only clears the idle
-        // hover cursor. The session + preview override are left for
-        // `onActivate` to resume when the hold ends. A REAL tool switch (below)
-        // still cancels.
+        // Temporary switches occur only between gestures and clear hover state while preserving session/preview.
+        // Real switches cancel.
         endGesture();
         return;
       }
@@ -287,15 +239,9 @@ export const createTransformTool = (): Tool => {
     },
     onKeyCommand: (ctx, command) => {
       if (gesture) {
-        // A live drag holds pointer capture (its own pointerup/pointercancel
-        // will end it); applying or cancelling now would tear the gesture down
-        // out from under the still-open pointer session, freezing the preview
-        // mid-drag. No-op instead — mirrors `applyTransform`'s own mid-gesture
-        // guard (`pipeline.isGestureActive()`) for the same reason.
+        // Ignore apply/cancel during captured drags to avoid tearing down the still-active pointer session.
         return;
       }
-      // A float owns Apply/Cancel while it is in flight: baking it is what
-      // "apply" means, and abandoning it is what "cancel" means.
       if (ctx.getFloatingSelection?.()) {
         if (command === 'apply') {
           ctx.commitFloatingSelection?.();
@@ -333,8 +279,6 @@ export const createTransformTool = (): Tool => {
       if (!doc) {
         return;
       }
-      // 1) A framed subject (a float, or an open layer session): a press on its
-      //    frame starts a scale/rotate/move gesture.
       const subject = subjectOf(ctx);
       if (subject) {
         const target = targetAt(ctx, subject, input.screenPoint);
@@ -356,9 +300,7 @@ export const createTransformTool = (): Tool => {
         return;
       }
 
-      // 2) Nothing framed yet: open a session on the SELECTED layer (the layers
-      //    panel is the sole authority on which layer is active — a press never
-      //    re-targets it) and start a move gesture.
+      // Open an unframed session on panel selection and begin movement without retargeting.
       const selectedId = doc.selectedLayerId;
       const selected = selectedId ? getDocumentLayer(doc, selectedId) : undefined;
       if (!selected || !isEligible(selected, doc)) {

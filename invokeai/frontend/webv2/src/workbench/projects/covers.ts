@@ -11,20 +11,8 @@ import { absolutizeApiUrl } from '@platform/transport/http';
 import { getClientStateValue, setClientStateValue } from './api';
 
 /**
- * Which image stands for each project, as an index in the per-user client-state KV.
- *
- * The document is the source of truth, but the library grid lists projects from `GET /projects`,
- * which returns summaries with no document. So the answer is written down once, on save or import.
- * Being an index, it is allowed to be stale: a project with no entry shows the folder glyph.
- *
- * ### The whole index is one value, so a write must not precede a read
- *
- * The KV holds one blob and `setClientStateValue` replaces it outright, so writing from a store
- * that has not loaded would delete every entry but the one being written. Not hypothetical:
- * autosave reaches {@link recordProjectCover} from the editor, which loads the index only when the
- * switcher or Open dialog opens. Records made before the load wait in {@link pendingCoverNames}.
- *
- * A read that *fails* is not a read — merging onto a blank answer is the same destructive write.
+ * The cover index is nonauthoritative. Load it before replacing the whole blob; failed reads must not unlock
+ * writes.
  */
 
 export const PROJECT_COVERS_KEY = 'webv2:project-covers';
@@ -100,8 +88,7 @@ const enqueuePersist = (coverImageNames: Record<string, string>, owner: AccountS
     try {
       await setClientStateValue(PROJECT_COVERS_KEY, value, owner.signal);
     } catch {
-      // Losing the write costs a glyph until the next save. Keeping the snapshot dirty is what
-      // lets that save retry the complete blob.
+      // Retain dirty cover state after a failed write for retry.
       return;
     }
 
@@ -113,10 +100,7 @@ const enqueuePersist = (coverImageNames: Record<string, string>, owner: AccountS
   });
 };
 
-/**
- * Trim to the cap, oldest first. Insertion order is recency order because
- * {@link recordProjectCover} re-inserts what it touches, so the entry being written is never evicted.
- */
+/** Insertion order records recency because updates reinsert entries. */
 const boundCovers = (coverImageNames: Record<string, string>): Record<string, string> => {
   const entries = Object.entries(coverImageNames);
 
@@ -139,8 +123,7 @@ export const loadProjectCovers = (): Promise<void> => {
     try {
       raw = await getClientStateValue(PROJECT_COVERS_KEY, owner.signal);
     } catch {
-      // Not "no covers yet": a failed read leaves the store unloaded so nothing writes over an
-      // index we could not see. Pending records wait for the next refresh.
+      // Failed reads leave the index unloaded so pending covers cannot overwrite unseen entries.
       return;
     }
 
@@ -199,8 +182,7 @@ export const recordProjectCover = (
 
   const next = { ...coverImageNames };
 
-  // Deleted before it is set, so the project moves to the end and survives the insertion-order
-  // eviction below.
+  // Reinsert updated covers at the newest eviction position.
   delete next[projectId];
 
   if (coverImageName !== null) {
@@ -212,8 +194,7 @@ export const recordProjectCover = (
   store.setSnapshot({ coverImageNames: bounded, isDirty: true, isLoaded });
 
   if (!isLoaded) {
-    // The grid can show this immediately, but the KV cannot receive it until we
-    // know what else is in there. See the module docblock.
+    // Display local covers immediately; durable writes must await index loading.
     pendingCoverNames.set(projectId, coverImageName);
     void loadProjectCovers();
 

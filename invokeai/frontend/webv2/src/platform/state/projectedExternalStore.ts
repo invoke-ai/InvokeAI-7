@@ -12,11 +12,7 @@ interface ProjectedExternalStoreOptions<Source, Snapshot> {
   isEqual?: EqualityFn<Snapshot>;
 }
 
-/**
- * Projects a broad external store into a referentially stable read-only store.
- * The source subscription is shared lazily and unrelated source changes remain
- * silent when the projected snapshot is equal.
- */
+/** Share the source subscription lazily and preserve snapshot identity when the projection is equal. */
 export const createProjectedExternalStore = <Source, Snapshot>({
   isEqual = Object.is,
   select,

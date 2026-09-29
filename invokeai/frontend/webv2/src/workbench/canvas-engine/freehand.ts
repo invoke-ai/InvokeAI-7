@@ -1,47 +1,9 @@
 /**
- * A thin wrapper over `perfect-freehand`, turning a pressure-sampled point path
- * into the filled outline polygon of a variable-width stroke.
- *
- * The polygon math ({@link strokeOutlinePolygon}) is pure and DOM-free, so it is
- * fully unit-testable in node. `Path2D` does not exist in node, so building the
- * fillable path is split out into {@link strokeToPath}, which takes an injected
- * `createPath2D` factory (the engine passes `() => new Path2D()`; tests pass a
- * recording stub). This keeps the interesting geometry testable without a DOM.
- *
- * ## Why this isn't a bare `getStroke` call
- *
- * `perfect-freehand` is tuned for pen-sized strokes; driven naively it degrades
- * badly as the brush diameter grows, in three independent ways. Each is
- * corrected here, and each correction is a no-op at small sizes:
- *
- * 1. **Input decimation** ({@link decimateSamples}). The library flags any turn
- *    sharper than 90° between consecutive point vectors as a corner and splices
- *    a cap of the CURRENT RADIUS into the outline. Nothing upstream decimates
- *    pointer input, so once the pointer advances less than ~0.5 document units
- *    per sample — a slow drag, a high-rate pen, or any zoom above ~2×, since
- *    document units per screen pixel shrink with zoom — sub-pixel jitter
- *    dominates the direction vector and fires those reversals constantly. At a
- *    10px brush the spurious caps are invisible; at a 1000px brush each one is a
- *    500px-radius lump. Distance-gating the samples removes them outright.
- *
- * 2. **Size-relative smoothing** ({@link outlineSmoothing}). `smoothing` feeds
- *    exactly one thing in the library: the `(size * smoothing)²` outline-vertex
- *    cull. Left at a constant, vertex spacing scales with the brush, so a large
- *    brush traces a smooth arc with edges hundreds of units long. Pinning the
- *    PRODUCT instead holds spacing near {@link TARGET_VERTEX_SPACING}.
- *
- * 3. **A decoupled start gate** ({@link START_GATE_SIZE}). `getStrokePoints`
- *    drops every intermediate point until the running length reaches `size`, to
- *    suppress start-of-stroke noise. Since `size` is the brush diameter, a 400px
- *    brush renders the first 400 document units as one straight capsule. Running
- *    the two library stages separately lets that gate keep its small absolute
- *    value while the outline stage gets the real diameter.
- *
- * Finally, the outline is traced as quadratic curves
- * ({@link traceSmoothPolygon}) rather than the straight segments the lasso
- * wants, so whatever facets remain read as curves.
- *
- * Zero React, zero import-time side effects.
+ * Pressure-sampled strokes use pure outline geometry and an injected Path2D factory. Large brushes need three
+ * corrections to perfect-freehand: decimate subpixel direction jitter that creates radius-sized corner caps; keep
+ * size*smoothing near {@link TARGET_VERTEX_SPACING}; and use {@link START_GATE_SIZE} independently of brush
+ * diameter to retain early pressure samples. {@link traceSmoothPolygon} uses quadratic curves for remaining
+ * outline facets.
  */
 
 import type { Rect, Vec2 } from '@workbench/canvas-engine/types';
@@ -81,14 +43,8 @@ const DEFAULT_STREAMLINE = 0.5;
 const DEFAULT_THINNING = 0.5;
 
 /**
- * Target spacing (document units) between adjacent outline vertices, held
- * roughly constant across brush sizes by {@link outlineSmoothing}.
- *
- * Chosen against the QUADRATIC curve, not straight segments: at this spacing the
- * rendered curve strays from the true offset curve by under 0.2 document pixels
- * even where the stroke turns on a 60px radius. Going finer only multiplies
- * vertices — the outline is re-tessellated and re-filled on every pointer batch,
- * so vertex count is squarely on the hot path.
+ * Size-independent outline spacing via {@link outlineSmoothing}, chosen for quadratic tracing. Finer spacing
+ * increases per-pointer-batch tessellation and fill work.
  */
 export const TARGET_VERTEX_SPACING = 24;
 
@@ -122,26 +78,13 @@ const dist2 = (a: StrokeSamplePoint, b: StrokeSamplePoint): number => {
 export const sampleSpacing = (size: number): number =>
   Math.min(MAX_SAMPLE_SPACING, Math.max(MIN_SAMPLE_SPACING, size * SAMPLE_SPACING_RATIO));
 
-/**
- * The `smoothing` value that holds outline vertex spacing near
- * {@link TARGET_VERTEX_SPACING} for a stroke of diameter `size`. Falls back to
- * the library's own {@link DEFAULT_SMOOTHING} for brushes small enough that it
- * already yields tight enough spacing.
- */
+/** Holds vertex spacing near {@link TARGET_VERTEX_SPACING}; small brushes retain {@link DEFAULT_SMOOTHING}. */
 export const outlineSmoothing = (size: number): number =>
   Math.min(DEFAULT_SMOOTHING, TARGET_VERTEX_SPACING / Math.max(size, 1));
 
 /**
- * Drops input samples closer together than `spacing` (document units) so
- * sub-pixel pointer jitter can't masquerade as a direction reversal — see the
- * module docs.
- *
- * The scan is greedy left-to-right, so the samples retained for a prefix of
- * `points` are themselves a prefix of those retained for the whole array: as new
- * samples arrive mid-gesture, already-drawn geometry never shifts. The one
- * exception is the final sample, which is retained only once `last` is set, so
- * the completed stroke ends exactly under the pointer. Mid-gesture the head
- * therefore trails by at most `spacing` (≤ {@link MAX_SAMPLE_SPACING}).
+ * Distance-gates jitter with a greedy, prefix-stable scan so existing geometry stays fixed. Retain the exact final
+ * sample only when `last`; live heads trail by at most spacing, bounded by {@link MAX_SAMPLE_SPACING}.
  */
 export const decimateSamples = (
   points: readonly StrokeSamplePoint[],
@@ -171,13 +114,8 @@ export const decimateSamples = (
 };
 
 /**
- * Computes the filled outline polygon (a closed ring of document-space points)
- * of a variable-width stroke through `points`. Pure and DOM-free.
- *
- * The two `perfect-freehand` stages are driven separately so the start-of-stroke
- * noise gate (which `getStrokePoints` derives from `size`) can keep a small
- * absolute value while the outline is built at the real brush diameter. Passing
- * the same `size` to both is exactly equivalent to calling `getStroke`.
+ * Pure document-space stroke outline. Separate perfect-freehand stages keep the start gate small while using the
+ * real diameter for outline width.
  */
 export const strokeOutlinePolygon = (points: readonly StrokeSamplePoint[], opts: FreehandOptions): Vec2[] => {
   if (points.length === 0) {
@@ -223,24 +161,9 @@ export const polygonToSvgPath = (polygon: readonly Vec2[]): string => {
 };
 
 /**
- * Traces an outline polygon onto `path` as a smooth closed curve, treating each
- * vertex as the control point of a quadratic segment running between the
- * midpoints of its two edges.
- *
- * The curve stays inside the convex hull of the polygon, so
- * {@link polygonBounds} of the polygon bounds the rendered shape — which is what
- * the dirty-rect accounting in the stroke session relies on. Collinear runs are
- * reproduced exactly, so this only differs from {@link polygonToSvgPath} where
- * the outline actually turns.
- *
- * Drawn with direct path calls rather than by building an SVG string for the
- * browser to re-parse. A stroke's outline is re-traced on every pointer batch
- * and runs to thousands of vertices, and at that size the round trip through a
- * string costs an order of magnitude more than the drawing does — 3.31ms versus
- * 0.18ms at 6000 samples — while describing exactly the same curve.
- *
- * Polygons with fewer than three vertices have no meaningful curvature and fall
- * back to straight segments.
+ * Trace quadratic segments between edge midpoints using vertices as controls. The curve stays inside the polygon
+ * hull, preserving dirty bounds and collinear runs. Direct path calls avoid SVG parsing on each batch; fewer than
+ * three vertices use lines.
  */
 export const traceSmoothPolygon = (path: Path2D, polygon: readonly Vec2[]): void => {
   const n = polygon.length;
@@ -295,15 +218,8 @@ export const polygonBounds = (polygon: readonly Vec2[]): Rect => {
 };
 
 /**
- * Builds a fillable `Path2D` for the stroke through `points`, using the injected
- * `createPath2D` factory (so callers in node can stub it). Returns the built
- * path and the polygon's document-space {@link Rect} bounds so the caller can
- * derive the dirty region without recomputing the outline.
- *
- * The path is the smooth ({@link traceSmoothPolygon}) form — the outline is a
- * coarse sampling of a curve, so joining its vertices with straight lines would
- * show as facets at large brush sizes. The returned bounds still come from the
- * polygon, which encloses the curve.
+ * Builds the smooth stroke path through an injected Path2D factory and returns enclosing polygon bounds, avoiding
+ * duplicate outline computation.
  */
 export const strokeToPath = (
   points: readonly StrokeSamplePoint[],

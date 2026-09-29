@@ -6,8 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { composeProviders } from './composeProviders';
 
-// Three probe contexts. Each provider chains off the previous context's value,
-// so the probe output encodes the exact nesting order.
+// Chain context values so the probe detects provider order.
 const FirstContext = createContext('missing-first');
 const SecondContext = createContext('missing-second');
 const ThirdContext = createContext('missing-third');
@@ -59,8 +58,7 @@ describe('composeProviders', () => {
       );
     expect(renderOnce()).toBe(renderOnce());
 
-    // A second call creates a distinct component: composing inside render would
-    // change element type each render and remount the subtree. Module scope only.
+    // Render-time composition creates a new type and remounts the subtree.
     expect(composeProviders([FirstProvider, SecondProvider, ThirdProvider])).not.toBe(Composed);
   });
 });

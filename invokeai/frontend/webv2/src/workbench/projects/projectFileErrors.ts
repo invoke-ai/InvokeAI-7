@@ -1,17 +1,7 @@
 import { InvkFormatError } from './invk/format';
 import { ProjectFlushError } from './projectFlush';
 
-/**
- * Turn a failed project-file read or write into something worth showing. `InvkFormatError` carries
- * a `reason` rather than a message so the wording lives in the catalog and differs per failure: the
- * fix for a legacy canvas project is not the fix for a corrupt archive.
- *
- * `direction` matters for the two reasons both halves raise. Telling someone their project "is too
- * large to open" while they were exporting it names the wrong operation and the wrong file.
- *
- * `ProjectFlushError` is not a bad file but a project whose newest content never reached the
- * server. Anything else already carries a message meant for people and passes through.
- */
+/** Localize failure reason and direction; flush errors are distinct from archive corruption. */
 export type ProjectFileDirection = 'read' | 'write';
 
 export const describeProjectFileError = (

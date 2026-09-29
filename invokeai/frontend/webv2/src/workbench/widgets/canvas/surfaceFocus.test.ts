@@ -2,12 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { INLINE_EDIT_SELECTOR, shouldFocusCanvasSurface } from './surfaceFocus';
 
-/**
- * Minimal DOM stand-in for node-env: `contains` walks the parent chain,
- * `closest` reports whether this element (or an ancestor) matches the
- * inline-edit selector. Mirrors the FakeElement approach in
- * `hotkeys/targetWidget.test.ts`.
- */
+/** Model contains and inline-editor closest with a minimal parent-chain DOM stand-in. */
 class FakeElement {
   parent: FakeElement | null = null;
 

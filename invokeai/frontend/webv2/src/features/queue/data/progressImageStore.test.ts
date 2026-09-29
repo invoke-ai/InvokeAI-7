@@ -45,9 +45,7 @@ describe('progressImageStore held frames', () => {
   });
 
   it('bridges only to the last selected output of a multi-output workflow', () => {
-    // Item 3 of a batch finishing must not put its denoise frame over item 1's
-    // image when the user clicks that one, nor over anything before routing
-    // has said which images the frame belongs to.
+    // Only routed output names may use a held frame; another item in the same batch must not inherit it.
     progressImageStore.set(frame('third'), target('queue-1', 3));
     progressImageStore.hold(target('queue-1', 3));
 

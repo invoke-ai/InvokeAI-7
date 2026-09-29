@@ -41,10 +41,12 @@ PiD needs two extra models, both available in **Model Manager → Starter Models
 2. The **Gemma 2 2B (PiD caption encoder)** — PiD uses it to condition the decode on your prompt. It installs automatically as a dependency of any PiD decoder, and is shared across all of them.
 </Steps>
 
-Each PiD decoder is roughly 5 GB and the shared Gemma-2 encoder is roughly 5 GB.
+A first-generation PiD decoder download is roughly 5 GB, a PiD 1.5 decoder download roughly 2.8 GB (1.6 GB for its int8 build), and the shared Gemma-2 encoder is roughly 5 GB. Once loaded, a decoder runs in full precision and takes about 5.6 GB in either generation; the PiD 1.5 int8 build keeps its transformer layers in int8 and takes about 2 GB.
 
 <Aside type="note">
-The Starter Models install NVIDIA's **legacy** PiD checkpoints, which are spread over both the `checkpoints/` and the `checkpoints_deprecated/` folder of the `nvidia/PiD` repository depending on the backbone and preset. NVIDIA's newer **v1.5** decoders use a different network and are not yet supported — installing one is rejected during model identification rather than failing at decode time.
+Most Starter Models install NVIDIA's first-generation PiD checkpoints, which are spread over both the `checkpoints/` and the `checkpoints_deprecated/` folder of the `nvidia/PiD` repository depending on the backbone and preset. NVIDIA's second generation, **PiD 1.5**, exists for FLUX.1, FLUX.2 and Qwen-Image in the *2K-to-4K* preset. *PiD 1.5 Decoder Qwen-Image* is a Starter Model; the FLUX.1 and FLUX.2 decoders install from Comfy-Org's single files by URL, e.g. `https://huggingface.co/Comfy-Org/PixelDiT/resolve/main/diffusion_models/pid_1.5_flux2_1024_to_4096_4step_bf16.safetensors`. Both generations decode through the same nodes.
+
+Only the `_4step` builds work: the files without it are NVIDIA's undistilled teacher decoders, which need a different sampler, and are rejected during model identification. The `_4step_int8_convrot` builds (*PiD 1.5 Decoder Qwen-Image (2K to 4K, int8)* is a Starter Model) keep the decoder's transformer layers in int8: about 2 GB once loaded instead of 5.6 GB, with output practically identical to the full-precision build.
 </Aside>
 
 The Gemma-2 caption encoder can also be a single-file **GGUF** (e.g. `gemma-2-2b-it-Q4_K_M.gguf`) that you install manually: InvokeAI loads it natively, keeping the large projection weights quantized instead of expanding them in memory, which cuts the encoder's footprint noticeably. Only Gemma-2-**2b** GGUFs are accepted — PiD's caption projection is fixed to their 2304-dim hidden state.

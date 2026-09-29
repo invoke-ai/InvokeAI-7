@@ -13,27 +13,8 @@ export type CanvasSurfaceEngine = Pick<
 >;
 
 /**
- * Give the canvas widget hotkey focus on a pointerdown on the surface, so tool
- * hotkeys (`b`/`e`/`r`/…) work immediately after clicking the canvas.
- *
- * The two `<canvas>` targets aren't focusable, so a plain click never moves DOM
- * focus — it stays on whatever was last focused (e.g. a layers-panel button in a
- * *different* widget), and the hotkey runtime's `getHotkeyTargetWidget` keeps
- * resolving to that widget, so canvas hotkeys don't fire. Focusing this
- * `tabIndex={-1}` container (a descendant of the canvas widget's
- * `data-hotkey-widget-instance-id` element) moves focus into the canvas subtree
- * so hotkeys resolve to the canvas. Focus-from-pointer doesn't match
- * `:focus-visible`, so there's no focus ring.
- *
- * When focus is ALREADY inside the surface — critically, the text tool's
- * contenteditable — this must NOT refocus: doing so in the capture phase would
- * blur-commit the open text session before the engine's own (bubble-phase)
- * pointerdown could run its commit-and-swallow, regressing "click away to
- * commit" into "commit + open a stray new session at the click point". The full
- * decision lives in the node-tested {@link shouldFocusCanvasSurface}.
- *
- * Runs in the capture phase so it fires before the engine's overlay pointerdown
- * listener (which may `stopPropagation`).
+ * Focus the canvas container in capture before engine handlers so hotkeys resolve here. Preserve focus already
+ * inside, especially text editing, to avoid blur-commit before the engine's commit-and-swallow path.
  */
 const focusCanvasSurface = (event: ReactPointerEvent<HTMLDivElement>) => {
   if (shouldFocusCanvasSurface(event.currentTarget, event.target, document.activeElement)) {
@@ -42,17 +23,8 @@ const focusCanvasSurface = (event: ReactPointerEvent<HTMLDivElement>) => {
 };
 
 /**
- * The engine-rendered canvas surface: two stacked `<canvas>` targets (the
- * composited document below, the interaction overlay on top) bound to the
- * shared {@link CanvasEngine}.
- *
- * Binding is done through the container's **ref callback** (React 19: the
- * returned function is the cleanup), never a `useEffect` — the callback wires
- * `attach` + a `ResizeObserver` and tears both down on unmount or engine swap.
- * Because the callback closes over `engine`, a project switch (new engine
- * instance) re-runs it: detach the old, attach the new. Pointer/wheel/key input
- * is owned entirely by the engine via the overlay, so this component never
- * re-renders on interaction.
+ * Bind document/overlay canvases and ResizeObserver through an engine-keyed ref callback with cleanup. The engine
+ * owns input without React interaction renders.
  */
 export const CanvasSurface = ({ engine }: { engine: CanvasSurfaceEngine }) => {
   const screenRef = useRef<HTMLCanvasElement>(null);
@@ -101,12 +73,7 @@ export const CanvasSurface = ({ engine }: { engine: CanvasSurfaceEngine }) => {
     >
       <canvas ref={screenRef} style={CANVAS_STYLE} />
       <canvas ref={overlayRef} style={OVERLAY_STYLE} />
-      {/*
-       * The text-editing portal: a positioned contenteditable that overlays the
-       * canvas whenever a text-edit session is active. It lives inside this
-       * relatively-positioned container so its `documentToScreen`-derived
-       * absolute offsets share the same origin as the canvas targets.
-       */}
+      {/* Position text editing inside the canvas container so documentToScreen offsets share the canvas origin. */}
       <TextEditPortal engine={engine} />
     </Box>
   );

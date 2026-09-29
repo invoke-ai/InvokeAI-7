@@ -12,14 +12,8 @@ import { useCallback, useRef, useState, type MouseEvent, type PointerEvent as Re
 import { capturePointer, releasePointer, trackPointerDown } from './loupeGestures';
 
 /**
- * Shared zoom/pan for the side-by-side comparison panes: one transform, kept
- * in image-fraction space (scale is unitless; translation is a fraction of the
- * pane's rendered size), applied imperatively to every registered pane. Zoom
- * into the left eye and the right pane's left eye follows. Gated by the caller
- * to matching-dimension pairs, where fraction space is exact.
- *
- * On a touch screen two fingers pinch — zooming and panning in one gesture,
- * against the pane they landed on — and one finger pans an already-zoomed pair.
+ * Apply one imperative fraction-space transform to matching-size comparison panes. Pinch zooms/pans together; one
+ * finger pans an already-zoomed pair.
  */
 
 const MAX_ACTUAL_ZOOM = 8;
@@ -36,11 +30,7 @@ interface PaneElements {
   image: HTMLImageElement | null;
 }
 
-/**
- * A live two-finger pinch. Like the transform it drives, the gesture is
- * measured in the fraction space of the pane it started on, all of it captured
- * up front so each move resolves to one transition from where it began.
- */
+/** Capture pinch origins in pane-fraction space so moves derive from the start rather than compounding deltas. */
 interface PinchGesture {
   paneIndex: 0 | 1;
   pointerIds: [number, number];
@@ -181,13 +171,7 @@ export const useCompareLoupe = ({
 
   // One stable set of callbacks per pane index; wheel listeners need manual
   // attachment (`passive: false`) so ref callbacks with cleanup own them.
-  /**
-   * The pane a two-finger gesture belongs to: the one containing its midpoint,
-   * so a pinch spanning both panes is measured in the pane it is centred on
-   * rather than in whichever pane the second finger happened to land on (which
-   * would anchor the zoom on that pane's edge, and differently depending on the
-   * order the fingers touched down).
-   */
+  /** Choose the pane containing the pinch midpoint, independent of finger arrival order. */
   const getGesturePane = useCallback((center: PanZoomPoint, fallback: 0 | 1): 0 | 1 => {
     for (const index of [0, 1] as const) {
       const rect = panesRef.current[index].frame?.getBoundingClientRect();
@@ -289,10 +273,7 @@ export const useCompareLoupe = ({
         }
 
         const onWheel = (event: WheelEvent): void => handleWheel(node, event);
-        // A finger only reports to the pane while it is over it (or captured by
-        // it), so the document is what keeps the tracked set honest: it sees a
-        // finger that crosses to the other pane or lifts off both, either of
-        // which would otherwise leave a phantom entry to pinch against.
+        // Track document-level pointers across panes and outside releases to avoid phantom pinch entries.
         const handleDocumentPointerMove = (event: PointerEvent): void => {
           const pointers = pointersRef.current;
 
@@ -336,12 +317,8 @@ export const useCompareLoupe = ({
     };
 
     /**
-     * Arms a pinch on two down pointers, measured in the fraction space of the
-     * pane the gesture is centred on (`fallbackPane` decides only when the
-     * midpoint is over neither). Returns null — leaving no gesture — if that
-     * pane cannot be measured or the fingers landed on the same spot. Both
-     * fingers are captured for the whole gesture, so one that strays off the
-     * pane keeps driving it instead of silently sticking.
+     * Measure/capture both fingers in the midpoint pane, using fallback only outside both. Reject unmeasurable or
+     * coincident-pointer gestures.
      */
     const beginPinch = (fallbackPane: 0 | 1, pointerIds: [number, number]): PinchGesture | null => {
       const first = pointersRef.current.get(pointerIds[0]);

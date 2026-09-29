@@ -33,8 +33,7 @@ describe('classifySystemPrompts', () => {
   });
 
   it('treats everything as personal in single-user mode', () => {
-    // The backend seeds built-ins under the user id `system`, which is also the synthetic id
-    // every single-user request carries — so ownership must not be decided by comparing to it.
+    // The synthetic system identity also owns ordinary single-user records.
     const seeded = record('a', 'system', true);
     const created = record('b', 'system', false);
 
@@ -84,8 +83,7 @@ describe('resolveSelectedSystemPromptId', () => {
   });
 
   it('falls back when the stored id no longer exists', () => {
-    // Deleted in another tab, or a shared prompt whose owner unshared it. Resolving on read
-    // means no corrective write is needed to recover.
+    // Recover selection at read time after deletion/unsharing without corrective persistence.
     expect(resolveSelectedSystemPromptId(prompts, 'deleted')).toBe('a');
   });
 
@@ -132,8 +130,7 @@ describe('canEditSystemPrompt', () => {
   });
 
   it('never lets a manager edit another user’s private prompt', () => {
-    // The REST layer does allow an admin to write this one. Offering it in the UI would turn a
-    // moderation capability into an everyday button, so the client refuses regardless of rights.
+    // Private-prompt moderation rights do not grant everyday editing controls.
     const privateOfOther = record('c', 'someone', false);
 
     expect(canEditSystemPrompt(privateOfOther, MANAGER)).toBe(false);

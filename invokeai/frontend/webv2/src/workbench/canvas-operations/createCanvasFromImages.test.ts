@@ -57,8 +57,7 @@ describe('createCanvasFromImages', () => {
     expect(result.status).toBe('imported');
     expect(result.projectId).not.toBe(before);
     expect(store.getState().activeProjectId).toBe(result.projectId);
-    // The sizing mutations route the fresh project to the canvas, which is what
-    // keeps the generate dimensions following the frame.
+    // Routing to Canvas makes Generate dimensions follow the new frame.
     expect(store.getProject(result.projectId!)!.invocation.sourceId).toBe('canvas');
     const { document } = store.getProject(result.projectId!)!.canvas;
     expect({ height: document.height, width: document.width }).toEqual({ height: 900, width: 640 });

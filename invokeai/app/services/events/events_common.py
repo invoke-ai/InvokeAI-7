@@ -4,6 +4,9 @@ from fastapi_events.handlers.local import local_handler
 from fastapi_events.registry.payload_schema import registry as payload_schema
 from pydantic import BaseModel, ConfigDict, Field
 
+from invokeai.app.services.board_records.board_records_common import BoardVisibility
+from invokeai.app.services.image_records.image_records_common import ImageCategory
+from invokeai.app.services.intermediates.intermediates_common import IntermediatesOperation
 from invokeai.app.services.model_install.model_install_common import ModelInstallJob, ModelSource
 from invokeai.app.services.session_processor.session_processor_common import ProgressImage
 from invokeai.app.services.session_queue.session_queue_common import (
@@ -110,6 +113,23 @@ class InvocationEventBase(QueueItemEventBase):
     session_id: str = Field(description="The ID of the session (aka graph execution state)")
     invocation: AnyInvocation = Field(description="The ID of the invocation")
     invocation_source_id: str = Field(description="The ID of the prepared invocation's source node")
+    parent_item_id: int | None = Field(
+        default=None, description="The parent queue item id when this item is a called-workflow child"
+    )
+    root_item_id: int | None = Field(
+        default=None, description="The root queue item id for this called-workflow chain, if any"
+    )
+    workflow_call_parent_source_id: str | None = Field(
+        default=None,
+        description="The visible parent Call Saved Workflow source node for a called-workflow child event",
+    )
+
+
+def _get_workflow_call_parent_source_id(queue_item: SessionQueueItem) -> str | None:
+    """Return the root visible call node for a nested workflow-call event."""
+    if queue_item.session.workflow_call_stack:
+        return queue_item.session.workflow_call_stack[0].source_call_node_id
+    return None
 
 
 @payload_schema.register
@@ -127,9 +147,12 @@ class InvocationStartedEvent(InvocationEventBase):
             origin=queue_item.origin,
             destination=queue_item.destination,
             user_id=queue_item.user_id,
+            parent_item_id=queue_item.parent_item_id,
+            root_item_id=queue_item.root_item_id,
             session_id=queue_item.session_id,
             invocation=invocation,
             invocation_source_id=queue_item.session.prepared_source_mapping[invocation.id],
+            workflow_call_parent_source_id=_get_workflow_call_parent_source_id(queue_item),
         )
 
 
@@ -193,9 +216,12 @@ class InvocationProgressEvent(InvocationEventBase):
             origin=queue_item.origin,
             destination=queue_item.destination,
             user_id=queue_item.user_id,
+            parent_item_id=queue_item.parent_item_id,
+            root_item_id=queue_item.root_item_id,
             session_id=queue_item.session_id,
             invocation=invocation,
             invocation_source_id=queue_item.session.prepared_source_mapping[invocation.id],
+            workflow_call_parent_source_id=_get_workflow_call_parent_source_id(queue_item),
             percentage=percentage,
             image=image,
             message=message,
@@ -223,9 +249,12 @@ class InvocationCompleteEvent(InvocationEventBase):
             origin=queue_item.origin,
             destination=queue_item.destination,
             user_id=queue_item.user_id,
+            parent_item_id=queue_item.parent_item_id,
+            root_item_id=queue_item.root_item_id,
             session_id=queue_item.session_id,
             invocation=invocation,
             invocation_source_id=queue_item.session.prepared_source_mapping[invocation.id],
+            workflow_call_parent_source_id=_get_workflow_call_parent_source_id(queue_item),
             result=result,
         )
 
@@ -256,9 +285,12 @@ class InvocationErrorEvent(InvocationEventBase):
             origin=queue_item.origin,
             destination=queue_item.destination,
             user_id=queue_item.user_id,
+            parent_item_id=queue_item.parent_item_id,
+            root_item_id=queue_item.root_item_id,
             session_id=queue_item.session_id,
             invocation=invocation,
             invocation_source_id=queue_item.session.prepared_source_mapping[invocation.id],
+            workflow_call_parent_source_id=_get_workflow_call_parent_source_id(queue_item),
             error_type=error_type,
             error_message=error_message,
             error_traceback=error_traceback,
@@ -893,6 +925,67 @@ class RecallParametersUpdatedEvent(QueueEventBase):
         return cls(queue_id=queue_id, user_id=user_id, parameters=parameters)
 
 
+VideoRecallAction: TypeAlias = Literal["parameters", "initial_video", "reference_video"]
+VideoRecallMode: TypeAlias = Literal["recall", "remix"]
+
+
+class VideoRecallVideo(BaseModel):
+    """The gallery video a video recall places into the Video panel."""
+
+    video_name: str = Field(description="The name of the gallery video")
+    width: int = Field(description="The video's width in pixels")
+    height: int = Field(description="The video's height in pixels")
+    duration: float = Field(description="The video's duration in seconds")
+    fps: Optional[float] = Field(default=None, description="The video's frame rate, when known")
+    media_origin: Optional[str] = Field(
+        default=None, description="How the video entered the gallery, e.g. `audio_upload` for wrapped audio"
+    )
+
+
+@payload_schema.register
+class VideoRecallRequestedEvent(QueueEventBase):
+    """Event model for video_recall_requested"""
+
+    __event_name__ = "video_recall_requested"
+
+    user_id: str = Field(description="The ID of the user whose Video panel the recall targets")
+    action: VideoRecallAction = Field(description="What the frontend should do with the payload")
+    mode: Optional[VideoRecallMode] = Field(
+        default=None, description="For `parameters`: `remix` applies everything except the seed"
+    )
+    strict: bool = Field(
+        default=False,
+        description="For `parameters`: treat the payload as a whole generation record, clearing omitted LoRAs and media",
+    )
+    parameters: Optional[dict[str, Any]] = Field(
+        default=None, description="For `parameters`: recall fields, keyed like the video metadata record"
+    )
+    video: Optional[VideoRecallVideo] = Field(
+        default=None, description="For `initial_video` and `reference_video`: the video to place"
+    )
+
+    @classmethod
+    def build(
+        cls,
+        queue_id: str,
+        user_id: str,
+        action: VideoRecallAction,
+        mode: Optional[VideoRecallMode] = None,
+        strict: bool = False,
+        parameters: Optional[dict[str, Any]] = None,
+        video: Optional[VideoRecallVideo] = None,
+    ) -> "VideoRecallRequestedEvent":
+        return cls(
+            queue_id=queue_id,
+            user_id=user_id,
+            action=action,
+            mode=mode,
+            strict=strict,
+            parameters=parameters,
+            video=video,
+        )
+
+
 class ImageIndexEventBase(EventBase):
     """Base class for image index events"""
 
@@ -951,6 +1044,112 @@ class ImageMapProjectionReadyEvent(ImageIndexEventBase):
     @classmethod
     def build(cls, user_id: str, point_count: int) -> "ImageMapProjectionReadyEvent":
         return cls(user_id=user_id, point_count=point_count)
+
+
+class MediaUploadedEventBase(EventBase):
+    """Base class for media upload events.
+
+    Tells clients that gallery content appeared through the upload API, which no queue event
+    announces. Emitted for gallery-visible uploads only: intermediates and canvas-owned OTHER
+    category images never show in the gallery, and canvas editing uploads both constantly.
+    """
+
+    user_id: str = Field(description="The user who uploaded the media")
+    board_id: Optional[str] = Field(default=None, description="The board the media was added to, if any")
+    board_owner_id: Optional[str] = Field(
+        default=None, description="The owner of that board, who may differ from the uploader; None for no board"
+    )
+    board_visibility: Optional[BoardVisibility] = Field(
+        default=None, description="The visibility of that board; None when the media landed on no board"
+    )
+    shared_user_ids: list[str] = Field(
+        default_factory=list,
+        description="Users a private board is explicitly shared with, who can see this media too",
+    )
+
+
+@payload_schema.register
+class ImageUploadedEvent(MediaUploadedEventBase):
+    """Event model for image_uploaded"""
+
+    __event_name__ = "image_uploaded"
+
+    image_name: str = Field(description="The name of the uploaded image")
+    image_category: ImageCategory = Field(description="The category of the uploaded image")
+
+    @classmethod
+    def build(
+        cls,
+        image_name: str,
+        image_category: ImageCategory,
+        user_id: str,
+        board_id: Optional[str],
+        board_owner_id: Optional[str],
+        board_visibility: Optional[BoardVisibility],
+        shared_user_ids: list[str],
+    ) -> "ImageUploadedEvent":
+        return cls(
+            image_name=image_name,
+            image_category=image_category,
+            user_id=user_id,
+            board_id=board_id,
+            board_owner_id=board_owner_id,
+            board_visibility=board_visibility,
+            shared_user_ids=shared_user_ids,
+        )
+
+
+@payload_schema.register
+class VideoUploadedEvent(MediaUploadedEventBase):
+    """Event model for video_uploaded"""
+
+    __event_name__ = "video_uploaded"
+
+    video_name: str = Field(description="The name of the uploaded video")
+    video_category: ImageCategory = Field(description="The category of the uploaded video")
+
+    @classmethod
+    def build(
+        cls,
+        video_name: str,
+        video_category: ImageCategory,
+        user_id: str,
+        board_id: Optional[str],
+        board_owner_id: Optional[str],
+        board_visibility: Optional[BoardVisibility],
+        shared_user_ids: list[str],
+    ) -> "VideoUploadedEvent":
+        return cls(
+            video_name=video_name,
+            video_category=video_category,
+            user_id=user_id,
+            board_id=board_id,
+            board_owner_id=board_owner_id,
+            board_visibility=board_visibility,
+            shared_user_ids=shared_user_ids,
+        )
+
+
+class IntermediatesEventBase(EventBase):
+    """Base class for intermediates cleanup events"""
+
+
+@payload_schema.register
+class IntermediatesOperationChangedEvent(IntermediatesEventBase):
+    """Event model for intermediates_operation_changed.
+
+    Routed to the confirming account's room and to admins: the operation's progress is that
+    account's business, and admins see every cleanup so open managers refresh their counts.
+    """
+
+    __event_name__ = "intermediates_operation_changed"
+
+    user_id: str = Field(description="The account that confirmed the operation")
+    operation: IntermediatesOperation = Field(description="The operation's current state")
+
+    @classmethod
+    def build(cls, operation: "IntermediatesOperation") -> "IntermediatesOperationChangedEvent":
+        return cls(user_id=operation.user_id, operation=operation)
 
 
 class UserAccessChangedEvent(EventBase):

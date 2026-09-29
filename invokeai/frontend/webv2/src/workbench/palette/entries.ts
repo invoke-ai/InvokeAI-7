@@ -11,11 +11,8 @@ import fuzzysort from 'fuzzysort';
 import { getPaletteContributionKey } from './contributionKey';
 
 /**
- * Palette content model: every source (catalog commands, extension palette
- * contributions, settings, navigation) normalizes into `PaletteEntry`, and
- * `searchPaletteRows` turns the aggregate into the rendered row list. Ranking
- * is fuzzy (fuzzysort) *within* a section; section order itself is fixed so
- * the list reads spatially — commands above settings, always.
+ * Normalize sources to PaletteEntry; rank fuzzily within fixed sections so command/settings placement remains
+ * stable.
  */
 
 export interface PaletteStageOption {
@@ -148,14 +145,7 @@ const groupRank = (group: string): number => {
   return index === -1 ? PALETTE_GROUP_ORDER.length : index;
 };
 
-// ---------------------------------------------------------------------------
-// Commands source (hotkey catalog)
-// ---------------------------------------------------------------------------
-
-/**
- * Hotkey-only interactions that would be pure noise as palette rows: arrow
- * navigation, caret-relative nudges, and the palette's own toggle.
- */
+/** Omit navigation, caret nudges, and the palette toggle from searchable rows. */
 const PALETTE_HIDDEN_COMMANDS = new Set([
   'app.openCommandPalette',
   // Both palettes already ship `buildOpenSettingsEntry` under this id, and it
@@ -281,10 +271,6 @@ export const buildCatalogCommandEntries = ({
       };
     });
 
-// ---------------------------------------------------------------------------
-// Settings source
-// ---------------------------------------------------------------------------
-
 export interface SettingsEntryDeps {
   openSettingsSection: (destination: SettingsSectionId | SettingsDestination) => void;
   patchPreferences: (patch: Partial<WorkbenchPreferences>) => unknown;
@@ -296,11 +282,7 @@ export interface SettingsEntryDeps {
   themes: ReadonlyArray<{ id: WorkbenchPreferences['themeId']; label: string }>;
 }
 
-/**
- * The "Open Settings" entry shared verbatim by both palette hosts. `keys` is
- * the resolved `app.openSettings` shortcut, which only the editor binds — the
- * Launchpad has no hotkey catalog, so it omits the hint.
- */
+/** Share Open Settings across hosts; only the editor supplies its resolved hotkey hint. */
 export const buildOpenSettingsEntry = (t: TFunction, openSettings: () => void, keys?: string[]): PaletteEntry => ({
   group: 'App',
   groupLabel: t('commandPalette.groups.app'),
@@ -433,10 +415,6 @@ export const buildSettingsEntries = (
   return [...preferenceEntries, themeEntry, ...sections, ...fields];
 };
 
-// ---------------------------------------------------------------------------
-// Search / row assembly
-// ---------------------------------------------------------------------------
-
 interface RankedEntry {
   entry: PaletteEntry;
   matchIndexes?: readonly number[];
@@ -502,11 +480,8 @@ const buildEmptyStateRows = (
 };
 
 /**
- * The full query pipeline: empty query renders the launcher state (recents +
- * navigation); otherwise fuzzysort ranks every entry over title/keywords/
- * subtitle (subtitle down-weighted so value text like "On" cannot dominate),
- * grouped into the fixed section order, ranked within each section by score,
- * then recency, then title.
+ * Empty queries show recents/navigation. Otherwise rank title/keywords/down-weighted subtitle within fixed
+ * sections, breaking ties by recency then title.
  */
 export const searchPaletteRows = (
   entries: readonly PaletteEntry[],
@@ -573,10 +548,6 @@ export const searchPaletteRows = (
 
   return toGroupedRows(groups);
 };
-
-// ---------------------------------------------------------------------------
-// Stage / provider row assembly
-// ---------------------------------------------------------------------------
 
 /** Row-id prefix for stage options; the dialog strips it to recover the option id. */
 export const STAGE_ENTRY_ID_PREFIX = 'stage:';
@@ -664,11 +635,7 @@ export const buildProviderSectionRows = (
   return rows;
 };
 
-/**
- * Trailing escape hatches into scoped mode, one per provider, under a shared
- * "Search in" header. An empty query means a pure date filter is active — the
- * scope searches "by date".
- */
+/** Offer one scoped-search escape per provider; an empty query represents date-only filtering. */
 export const buildScopeRows = (
   providers: ReadonlyArray<Pick<PaletteSearchProvider, 'providerKey' | 'label'>>,
   query: string,

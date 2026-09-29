@@ -1,27 +1,8 @@
 /**
- * The gradient tool: drag to place a gradient. A linear ramp runs from the
- * press point (stop 0) to the release point (stop 1); a radial one is centered
- * on the press point with the drag length as its radius.
- *
- * Interaction contract (CANVAS_PLAN Phase 6.1):
- * - **Pointer-down** (primary button) starts a gesture at the press point.
- * - **Pointer-move** (past a small threshold) updates a transient overlay
- *   preview (`stores.gradientPreview`, the drag vector) — it never dispatches.
- * - **Commit** (pointer-up after a real drag): exactly ONE commit.
- *   - A gradient layer is selected (unlocked + visible) → one `commitStructural`
- *     with `updateCanvasLayerSource` (new angle/center/span; kind + stops and
- *     the extent preserved). The drag is read in the layer's local space, so a
- *     moved/rotated/scaled gradient still lands where the pointer went.
- *   - Otherwise → create a new bbox-sized gradient layer (placement from the
- *     drag, kind + stops from the tool options, extent = the generation frame)
- *     via `addCanvasLayer`.
- *   - A selected gradient layer that is locked/hidden is a no-op (don't silently
- *     spawn a new layer over it), mirroring the paint tool's locked-target rule.
- * - **Cancel** (Esc / pointercancel): drops the preview, no dispatch.
- *
- * The selection mask does NOT constrain gradient layers (parametric, not pixels).
- *
- * Zero React, zero import-time side effects.
+ * Gradient drag defines linear start/end or radial center/radius. Editable selected gradients update placement in
+ * layer-local space while preserving kind/stops/extent; locked or hidden gradients refuse. Otherwise create a
+ * bbox-sized gradient from options. Preview/cancel never dispatch; one real drag makes one commit. Selection masks
+ * do not clip parametric gradients.
  */
 
 import type {
@@ -181,9 +162,7 @@ export const createGradientTool = (): Tool => {
         return;
       }
 
-      // Create a new bbox-sized gradient layer: the extent is the bbox size,
-      // positioned at the bbox origin via the layer transform, so the drag maps
-      // to layer space by that offset alone.
+      // New gradients use bbox size and origin; subtract that origin to map drag coordinates locally.
       const options = ctx.stores.gradientOptions.get();
       // The built-in FG→BG preset resolves the pair now; custom stops are
       // explicit and independent of later pair edits.

@@ -17,6 +17,16 @@ class ProgressPreviewDTO(BaseModel):
     item_id: int = Field(description="The ID of the queue item")
     session_id: str = Field(description="The ID of the session (aka graph execution state)")
     invocation_source_id: str = Field(description="The ID of the prepared invocation's source node")
+    parent_item_id: int | None = Field(
+        default=None, description="The parent queue item id when this item is a called-workflow child"
+    )
+    root_item_id: int | None = Field(
+        default=None, description="The root queue item id for this called-workflow chain, if any"
+    )
+    workflow_call_parent_source_id: str | None = Field(
+        default=None,
+        description="The visible parent Call Saved Workflow source node for a called-workflow child event",
+    )
     revision: int | None = Field(description="Monotonic per queue item and session; see InvocationProgressEvent")
     message: str = Field(description="A message to display")
     percentage: float | None = Field(description="The percentage of the progress, or null if indeterminate")
@@ -29,6 +39,9 @@ class ProgressPreviewDTO(BaseModel):
             item_id=event.item_id,
             session_id=event.session_id,
             invocation_source_id=event.invocation_source_id,
+            parent_item_id=event.parent_item_id,
+            root_item_id=event.root_item_id,
+            workflow_call_parent_source_id=event.workflow_call_parent_source_id,
             revision=event.revision,
             message=event.message,
             percentage=event.percentage,

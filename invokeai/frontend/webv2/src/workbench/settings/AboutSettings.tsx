@@ -1,8 +1,8 @@
 import { HStack, Icon, Link, Spinner, Stack, Text } from '@chakra-ui/react';
 import { useCapabilities } from '@features/identity';
 import { useMountEffect } from '@platform/react/useMountEffect';
-import { DiscordIcon, GithubIcon } from '@platform/ui/BrandIcon';
 import { JsonPreview } from '@platform/ui/JsonPreview';
+import { DiscordIcon, GithubIcon } from '@platform/ui/VendoredIcon';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -11,12 +11,6 @@ import { refreshAboutInfo, useAboutInfo } from './aboutInfoStore';
 const GITHUB_URL = 'https://github.com/invoke-ai/InvokeAI';
 const DISCORD_URL = 'https://discord.gg/ZmtBAhwWhy';
 
-/**
- * The legacy About modal's content as a settings section: the server's
- * version, the community links, and the full system-information blob
- * (installed dependency versions plus, for admins, the redacted runtime
- * config) as copyable JSON.
- */
 export const AboutSettings = () => {
   const { t } = useTranslation();
   const { canManageAppConfig } = useCapabilities();

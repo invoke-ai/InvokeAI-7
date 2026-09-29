@@ -6,6 +6,7 @@ import type { AccountScope } from '@platform/state/accountLifecycle';
 import { parseWorkflowTags, sortTagCounts } from '@features/workflow/core/libraryTags';
 import { extractWorkflowModelRequirements } from '@features/workflow/core/modelRequirements';
 import { parseWorkflowJson } from '@features/workflow/core/workflowJson';
+import { createLogger } from '@platform/logging/logger';
 import {
   captureAccountScope,
   isAccountScopeCurrent,
@@ -22,14 +23,11 @@ import { getAllWorkflowTags, getWorkflowTagCounts, listLibraryWorkflows } from '
 import { getLibraryWorkflowCached, onWorkflowLibraryCacheInvalidated } from './libraryCache';
 import { getInvocationTemplatesSnapshot, refreshInvocationTemplates } from './templates';
 
+const libraryLogger = createLogger({ area: 'library', namespace: 'workflows' });
+
 /**
- * Browse state for the workflow library dialog. The library is backend-owned
- * and can hold thousands of records, so filtering and pagination are server
- * side: every filter change is one page-0 request, infinite scroll appends the
- * next page, and nothing is filtered locally. What the list endpoint cannot
- * answer — node count and model requirements — is enriched in the background
- * from the cached workflow payloads, per entry, so cards fill in as they load
- * without blocking the grid.
+ * Filter and paginate server-side; asynchronously enrich cached payloads per row so node/model details cannot
+ * block the grid.
  */
 
 export type { WorkflowTagCount } from '@features/workflow/core/libraryTags';
@@ -93,14 +91,7 @@ const store = createExternalStore<WorkflowLibraryBrowseSnapshot>(INITIAL_SNAPSHO
 const initialLoadFlight = createTrailingSingleFlight();
 const refreshFlight = createTrailingSingleFlight();
 
-/**
- * Bumped only when the filter (or the account) changes. A response tagged with
- * an older generation was requested for a view the user has moved on from, so
- * it is discarded. Two requests for the *same* filter — a cache-invalidation
- * refresh racing an infinite-scroll append — are both current, and both
- * publish: keying staleness to the request order instead would let the append
- * silently swallow the refresh that removed a deleted row.
- */
+/** Fence responses by filter/account generation, not request order; same-view append and refresh must both publish. */
 let filterGeneration = 0;
 
 const isFilterCurrent = (generation: number, owner: AccountScope): boolean =>
@@ -114,12 +105,7 @@ const toEntry = (item: WorkflowLibraryListItem): WorkflowLibraryEntry => ({
   tags: parseWorkflowTags(item.tags),
 });
 
-/**
- * Rebuilds the entry list from a server response while keeping the identity —
- * and the completed enrichment — of every row the server reports unchanged.
- * Selectors and memoized cards depend on those identities holding across
- * refreshes.
- */
+/** Preserve unchanged row identity and enrichment across refreshes for selectors and memoized cards. */
 const mergeEntries = (
   previous: readonly WorkflowLibraryEntry[],
   items: readonly WorkflowLibraryListItem[]
@@ -157,18 +143,9 @@ const publishPage = (result: WorkflowLibraryPage, mode: 'append' | 'replace'): v
   pumpEnrichment();
 };
 
-// #endregion
-
-// #region Enrichment
-
 /**
- * Templates are needed to know which inputs are model fields. They are a
- * session-lived, shared load, so enrichment waits for one shared attempt
- * instead of parsing the schema per entry. A failed attempt is remembered:
- * `refreshInvocationTemplates` refetches and reparses the whole OpenAPI
- * document, so retrying it per entry would turn one outage into a fetch storm.
- * The memo is re-armed by an explicit refresh, a filter change, or an account
- * switch.
+ * Share one template-load attempt for enrichment and remember failure to prevent fetch storms; explicit
+ * refresh/filter/account changes rearm it.
  */
 let templatesFlight: Promise<void> | null = null;
 let hasTemplateLoadFailed = false;
@@ -246,6 +223,12 @@ const enrichEntry = async (workflowId: string, owner: AccountScope): Promise<voi
     );
   } catch (error) {
     // One unreadable workflow marks its own card and never fails the pool.
+    libraryLogger.warn({
+      context: { workflowId },
+      error,
+      message: 'Failed to read a library workflow',
+      name: 'workflows.library-read-failed',
+    });
     applyEnrichment(
       workflowId,
       { message: getApiErrorMessage(error, 'Failed to read this workflow.'), status: 'error' },
@@ -287,10 +270,6 @@ const pumpEnrichment = (): void => {
   }
 };
 
-// #endregion
-
-// #region Fetching
-
 const fetchPage = (
   filter: WorkflowLibraryBrowseFilter,
   page: number,
@@ -316,6 +295,11 @@ const loadFirstPage = async (filter: WorkflowLibraryBrowseFilter, owner: Account
     }
   } catch (error) {
     if (isFilterCurrent(generation, owner)) {
+      libraryLogger.warn({
+        error,
+        message: 'Failed to load workflows',
+        name: 'workflows.library-load-failed',
+      });
       store.patchSnapshot({ error: getApiErrorMessage(error, 'Failed to load workflows.'), status: 'error' });
     }
   }
@@ -332,6 +316,11 @@ const loadMorePages = async (filter: WorkflowLibraryBrowseFilter, page: number, 
     }
   } catch (error) {
     if (isFilterCurrent(generation, owner)) {
+      libraryLogger.warn({
+        error,
+        message: 'Failed to load more workflows',
+        name: 'workflows.library-load-failed',
+      });
       store.patchSnapshot({ error: getApiErrorMessage(error, 'Failed to load more workflows.'), status: 'error' });
     }
   }
@@ -357,11 +346,7 @@ const loadTagCounts = async (category: WorkflowLibraryCategory, owner: AccountSc
   }
 };
 
-/**
- * One-row probe of the user category. Task 6 auto-switches to the bundled
- * defaults on a fresh install, and this answers "does this account have any
- * workflows?" without loading the user list.
- */
+/** Probe one user workflow to decide whether fresh accounts should open bundled defaults. */
 const probeUserTotal = async (owner: AccountScope): Promise<void> => {
   if (store.getSnapshot().userTotal !== null) {
     return;
@@ -377,10 +362,6 @@ const probeUserTotal = async (owner: AccountScope): Promise<void> => {
     // Leaves `userTotal` null: the dialog simply keeps the category it opened on.
   }
 };
-
-// #endregion
-
-// #region Public API
 
 /** Applies a filter patch, resets the accumulated pages, and refetches page 0. */
 export const setWorkflowLibraryBrowseFilter = (patch: Partial<WorkflowLibraryBrowseFilter>): void => {
@@ -484,6 +465,11 @@ export const refreshWorkflowLibraryBrowse = (): Promise<void> =>
       }
     } catch (error) {
       if (isFilterCurrent(generation, owner)) {
+        libraryLogger.warn({
+          error,
+          message: 'Failed to refresh workflows',
+          name: 'workflows.library-load-failed',
+        });
         store.patchSnapshot({ error: getApiErrorMessage(error, 'Failed to refresh workflows.'), status: 'error' });
       }
     }
@@ -497,11 +483,7 @@ export const useWorkflowLibraryBrowseSelector = store.useSelector;
 
 // #endregion
 
-/**
- * Any local mutation (save, delete, thumbnail) invalidates the library cache
- * and shifts ordering, so the visible pages are refetched. A burst of
- * invalidations from one action collapses into a single refresh.
- */
+/** Coalesce mutation invalidations into one visible-page refresh because local changes can shift ordering. */
 let isRefreshScheduled = false;
 
 onWorkflowLibraryCacheInvalidated(() => {

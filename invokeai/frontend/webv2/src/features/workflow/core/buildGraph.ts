@@ -11,8 +11,18 @@ import type {
   WorkflowSeedFieldAdvance,
 } from './types';
 
+import {
+  getWorkflowBatchCollectionField,
+  isWorkflowBatchNodeType,
+  isWorkflowGeneratorNodeType,
+  planWorkflowBatch,
+  WORKFLOW_BATCH_MAX_ITEMS,
+  type WorkflowBatchDatum,
+  type WorkflowGeneratorResolutions,
+} from './batch';
+import { CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX } from './callSavedWorkflow';
 import { createWorkflowId } from './document';
-import { getWorkflowFieldInvalidReason, isDirectInputField } from './fields';
+import { getWorkflowFieldInvalidReason, isDirectInputField, isWorkflowCollectionItemValid } from './fields';
 import {
   createForLoopValidationReason,
   ForLoopGraphValidationError,
@@ -24,28 +34,17 @@ import { isInvocationNode } from './types';
 import { hasAnyCycle } from './validation';
 
 /**
- * Compiles the project graph document into the immutable, queue-facing
- * `GraphContract`. Ported from the legacy `buildNodesGraph`, with connector
- * resolution and without batch handling (batch/generator nodes are rejected by
- * readiness until batching lands).
+ * Compile documents to immutable queue GraphContract with connector resolution. Batch and generator nodes never
+ * reach the backend graph: the batch planner turns them into queue batch groups instead.
  */
 
-/** Client-resolved batch/generator nodes from the legacy editor; executing them server-side is meaningless. */
-const UNSUPPORTED_NODE_TYPES = new Set([
-  'float_batch',
-  'float_generator',
-  'image_batch',
-  'image_generator',
-  'integer_batch',
-  'integer_generator',
-  'string_batch',
-  'string_generator',
-]);
-
-export const isExecutableInvocationType = (type: string): boolean => !UNSUPPORTED_NODE_TYPES.has(type);
+export const isExecutableInvocationType = (type: string): boolean =>
+  !isWorkflowBatchNodeType(type) && !isWorkflowGeneratorNodeType(type);
 
 const getExecutableNodes = (document: ProjectGraphState): WorkflowInvocationNode[] =>
-  document.nodes.filter(isInvocationNode);
+  document.nodes.filter(
+    (node): node is WorkflowInvocationNode => isInvocationNode(node) && isExecutableInvocationType(node.data.type)
+  );
 
 const isMissingValue = (value: unknown): boolean => value === undefined || value === null;
 
@@ -55,12 +54,13 @@ const isEmptyValue = (value: unknown): boolean =>
 const getNodeDisplayName = (node: WorkflowInvocationNode, templates: InvocationTemplates): string =>
   node.data.label || templates[node.data.type]?.title || node.data.type;
 
-/**
- * Translates a board field value to the backend shape: `auto` and `none`
- * sentinels are omitted so the backend applies its default board behavior.
- */
+const getNodeInputTemplates = (
+  node: WorkflowInvocationNode,
+  template: InvocationTemplates[string]
+): FieldInputTemplate[] => Object.values({ ...template.inputs, ...node.data.dynamicInputTemplates });
+
 const toBoardGraphValue = (value: unknown): unknown => {
-  if (value === 'auto' || value === 'none' || isEmptyValue(value)) {
+  if (isEmptyValue(value) || value === 'auto' || value === 'none') {
     return undefined;
   }
 
@@ -70,12 +70,22 @@ const toBoardGraphValue = (value: unknown): unknown => {
 export interface ProjectGraphReadiness {
   canInvoke: boolean;
   reasons: Array<string | ForLoopValidationReason>;
+  /** Sessions one run produces through batch nodes; size is null while an async generator is unresolved. */
+  batch: { size: number | null } | null;
 }
 
 export interface ProjectGraphReadinessOptions {
   /** Required connection inputs supplied by an ephemeral caller after document compilation. */
   externallySatisfiedInputs?: ReadonlySet<string>;
+  /** Runs the submission would make; with batch nodes the product must fit the queue. */
+  batchCount?: number;
 }
+
+/** The reason a batch of `sessions` sessions cannot be queued, or null while it fits. */
+export const getWorkflowBatchCapReason = (sessions: number): string | null =>
+  sessions > WORKFLOW_BATCH_MAX_ITEMS
+    ? `This batch would queue ${sessions.toLocaleString('en-US')} sessions; the queue accepts at most ${WORKFLOW_BATCH_MAX_ITEMS.toLocaleString('en-US')}.`
+    : null;
 
 export const getProjectGraphReadiness = (
   document: ProjectGraphState,
@@ -83,29 +93,31 @@ export const getProjectGraphReadiness = (
   options: ProjectGraphReadinessOptions = {}
 ): ProjectGraphReadiness => {
   if (templatesSnapshot.status === 'error') {
-    return { canInvoke: false, reasons: ['Node definitions failed to load from the backend.'] };
+    return { batch: null, canInvoke: false, reasons: ['Node definitions failed to load from the backend.'] };
   }
 
   if (templatesSnapshot.status !== 'loaded') {
-    return { canInvoke: false, reasons: ['Node definitions are still loading.'] };
+    return { batch: null, canInvoke: false, reasons: ['Node definitions are still loading.'] };
   }
 
   const templates = templatesSnapshot.templates;
-  const executableNodes = getExecutableNodes(document);
+  const invocationNodes = document.nodes.filter(isInvocationNode);
   const canonicalEdges = getCanonicalWorkflowEdges(document);
 
-  if (executableNodes.length === 0) {
-    return { canInvoke: false, reasons: ['The project graph has no nodes. Add nodes in the Workflow view.'] };
+  if (getExecutableNodes(document).length === 0) {
+    return {
+      batch: null,
+      canInvoke: false,
+      reasons: ['The project graph has no nodes. Add nodes in the Workflow view.'],
+    };
   }
 
   const reasons: Array<string | ForLoopValidationReason> = [];
   const connectedInputs = new Set(
-    canonicalEdges
-      .filter((edge) => executableNodes.some((node) => node.id === edge.destination.node_id))
-      .map((edge) => `${edge.destination.node_id}:${edge.destination.field}`)
+    canonicalEdges.map((edge) => `${edge.destination.node_id}:${edge.destination.field}`)
   );
 
-  for (const node of executableNodes) {
+  for (const node of invocationNodes) {
     const template = templates[node.data.type];
 
     if (!template) {
@@ -113,13 +125,41 @@ export const getProjectGraphReadiness = (
       continue;
     }
 
-    if (!isExecutableInvocationType(node.data.type)) {
-      reasons.push(`Batch/generator node "${getNodeDisplayName(node, templates)}" is not supported yet.`);
-      continue;
+    // The batch planner judges a batch node's own list (size, connections); the field rules would only repeat it.
+    const batchCollectionField = getWorkflowBatchCollectionField(node.data.type);
+
+    if (node.data.type === 'call_saved_workflow') {
+      const workflowId = node.data.inputs.workflow_id?.value;
+
+      if (typeof workflowId !== 'string' || workflowId.trim() === '') {
+        reasons.push('Call Saved Workflow requires a saved workflow.');
+        continue;
+      }
+
+      if (node.data.callSavedWorkflowStatus === 'loading' || node.data.callSavedWorkflowStatus === undefined) {
+        reasons.push('Call Saved Workflow inputs are still loading.');
+        continue;
+      }
+
+      if (node.data.callSavedWorkflowStatus === 'error') {
+        reasons.push('The selected saved workflow is unavailable or incompatible.');
+        continue;
+      }
     }
 
-    for (const inputTemplate of Object.values(template.inputs)) {
+    for (const inputTemplate of getNodeInputTemplates(node, template)) {
       if (connectedInputs.has(`${node.id}:${inputTemplate.name}`)) {
+        continue;
+      }
+
+      // A batch node's own list: the planner judges its size, the item rules still judge each entry.
+      if (inputTemplate.name === batchCollectionField) {
+        const list = node.data.inputs[inputTemplate.name]?.value;
+
+        if (Array.isArray(list) && !list.every((item) => isWorkflowCollectionItemValid(inputTemplate, item))) {
+          reasons.push(`"${getNodeDisplayName(node, templates)}" has invalid input "${inputTemplate.title}".`);
+        }
+
         continue;
       }
 
@@ -168,12 +208,32 @@ export const getProjectGraphReadiness = (
     reasons.push(createForLoopValidationReason(forLoopError));
   }
 
-  return { canInvoke: reasons.length === 0, reasons };
+  const batchPlan = planWorkflowBatch(document, templates);
+
+  reasons.push(...batchPlan.reasons);
+
+  if (batchPlan.hasBatchNodes && batchPlan.batchSize !== null && options.batchCount !== undefined) {
+    const capReason = getWorkflowBatchCapReason(batchPlan.batchSize * options.batchCount);
+
+    if (capReason) {
+      reasons.push(capReason);
+    }
+  }
+
+  return {
+    batch: batchPlan.hasBatchNodes ? { size: batchPlan.batchSize } : null,
+    canInvoke: reasons.length === 0,
+    reasons,
+  };
 };
 
-const toGraphInputValue = (inputTemplate: FieldInputTemplate, value: unknown): unknown => {
+const toGraphInputValue = (
+  inputTemplate: FieldInputTemplate,
+  value: unknown,
+  options: { preserveBoardSentinel?: boolean } = {}
+): unknown => {
   if (inputTemplate.type.name === 'BoardField') {
-    return toBoardGraphValue(value);
+    return options.preserveBoardSentinel ? value : toBoardGraphValue(value);
   }
 
   return value;
@@ -204,18 +264,32 @@ export const compileProjectGraph = (
       use_cache: node.data.useCache,
     };
 
+    const workflowInputs: Record<string, unknown> = {};
+
     for (const instance of Object.values(node.data.inputs)) {
-      const inputTemplate = template.inputs[instance.name];
+      const inputTemplate = node.data.dynamicInputTemplates?.[instance.name] ?? template.inputs[instance.name];
 
       if (!inputTemplate || instance.value === undefined) {
         continue;
       }
 
-      const value = toGraphInputValue(inputTemplate, instance.value);
+      const isSavedWorkflowInput =
+        node.data.type === 'call_saved_workflow' && instance.name.startsWith(CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX);
+      const value = toGraphInputValue(inputTemplate, instance.value, {
+        preserveBoardSentinel: isSavedWorkflowInput,
+      });
 
       if (value !== undefined) {
-        graphNode[instance.name] = value;
+        if (isSavedWorkflowInput) {
+          workflowInputs[instance.name] = value;
+        } else {
+          graphNode[instance.name] = value;
+        }
       }
+    }
+
+    if (node.data.type === 'call_saved_workflow') {
+      graphNode.workflow_inputs = workflowInputs;
     }
 
     backendGraph.nodes[node.id] = graphNode as WorkflowBackendGraph['nodes'][string];
@@ -246,7 +320,18 @@ export const compileProjectGraph = (
     const targetNode = backendGraph.nodes[edge.destination.node_id];
 
     if (targetNode) {
-      delete targetNode[edge.destination.field];
+      if (
+        targetNode.type === 'call_saved_workflow' &&
+        edge.destination.field.startsWith(CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX)
+      ) {
+        const workflowInputs = targetNode.workflow_inputs;
+
+        if (workflowInputs && typeof workflowInputs === 'object') {
+          delete (workflowInputs as Record<string, unknown>)[edge.destination.field];
+        }
+      } else {
+        delete targetNode[edge.destination.field];
+      }
     }
   }
 
@@ -275,14 +360,8 @@ export const compileProjectGraph = (
 };
 
 /**
- * The inputs that carry a seed mode: the scalar integer a node declares as `seed`
- * over the full seed range. Read from the template alone, so an editable label
- * cannot turn an ordinary integer into a seed, and a provider's own-range `seed`
- * keeps its plain control instead of wrapping at a bound it never had.
- *
- * Seed policy lives here rather than in `fields.ts` because it is the one place
- * the workflow core depends on the platform seed arithmetic at runtime: the
- * shared field/document helpers stay in the lighter utility chunk every overlay loads.
+ * Seed modes require a template-declared scalar seed with the full range. Keep seed arithmetic here so shared
+ * field utilities remain lightweight.
  */
 export const isSeedInputField = (template: FieldInputTemplate): boolean =>
   template.name === 'seed' &&
@@ -291,10 +370,10 @@ export const isSeedInputField = (template: FieldInputTemplate): boolean =>
   // The modes walk and wrap over 0…SEED_MAX in steps of one, so the template has to
   // accept every value on that walk; a tighter range or step keeps its plain control.
   template.maximum === SEED_MAX &&
-  (template.minimum === null || template.minimum <= 0) &&
-  template.exclusiveMinimum === null &&
-  template.exclusiveMaximum === null &&
-  (template.multipleOf === null || template.multipleOf === 1) &&
+  ((template.minimum ?? null) === null || (template.minimum ?? 0) <= 0) &&
+  (template.exclusiveMinimum ?? null) === null &&
+  (template.exclusiveMaximum ?? null) === null &&
+  ((template.multipleOf ?? null) === null || template.multipleOf === 1) &&
   isDirectInputField(template);
 
 export const getWorkflowFieldSeedMode = (instance: Pick<WorkflowFieldInstance, 'seedMode'> | undefined): SeedMode =>
@@ -316,17 +395,14 @@ export interface WorkflowSeedPlan {
 }
 
 /**
- * Decides every seed input's start for a submission of `batchCount` runs. Seeds
- * vary per queued run, not per iteration of a loop inside a run. A random input
- * draws its start here and the runs step consecutively from it, like Generate's
- * random mode, while the entered seed stays in reserve; a stepping input counts
- * from the authored seed and reports where the field goes afterwards. Expansion
- * into per-run values happens at send time from these starts, never redrawing.
+ * Choose seed starts once per submission and expand runs deterministically at send time. Random preserves the
+ * entered seed; stepping reports the next authored value.
  */
 export const planWorkflowSeeds = (
   document: ProjectGraphState,
   templates: InvocationTemplates,
-  batchCount: number
+  batchCount: number,
+  batchSize = 1
 ): WorkflowSeedPlan => {
   const connectedInputs = new Set(
     getCanonicalWorkflowEdges(document).map((edge) => `${edge.destination.node_id}:${edge.destination.field}`)
@@ -341,7 +417,7 @@ export const planWorkflowSeeds = (
       continue;
     }
 
-    for (const inputTemplate of Object.values(template.inputs)) {
+    for (const inputTemplate of Object.values({ ...template.inputs, ...node.data.dynamicInputTemplates })) {
       if (!isSeedInputField(inputTemplate) || connectedInputs.has(`${node.id}:${inputTemplate.name}`)) {
         continue;
       }
@@ -360,10 +436,11 @@ export const planWorkflowSeeds = (
             ? inputTemplate.default
             : 0;
       const startSeed = seedMode === 'random' ? Math.floor(Math.random() * SEED_MAX) : wrapSeed(authoredSeed);
+      // Every session gets its own seed, as ComfyUI's per-execution advance does, so the walk spans the batch.
       const plan = planSeedSubmission({
         batchCount,
-        promptCount: 1,
-        seedBehaviour: 'per-iteration',
+        promptCount: batchSize,
+        seedBehaviour: 'per-image',
         seedMode,
         startSeed,
       });
@@ -414,25 +491,48 @@ export const applyWorkflowSeeds = (
 export interface WorkflowSubmissionPlan extends WorkflowSeedPlan {
   /** Runs the submission produces. */
   batchCount: number;
+  /** Batch-node groups, in the backend's product-of-zips shape; empty without batch nodes. */
+  batchData: WorkflowBatchDatum[][];
+  /** Sessions one run produces through batch nodes. */
+  batchSize: number;
   graph: CompiledWorkflowGraph;
 }
 
 export interface WorkflowSubmissionPlanOptions {
   /** Runs per submission; already sanitized to a positive integer by the caller. */
   batchCount: number;
+  /** Async generator outputs resolved by the submitter; the plan is null while any are still pending. */
+  generators?: WorkflowGeneratorResolutions;
+  random?: () => number;
 }
 
-/** Compiles the document with every planned first seed in place and reports the seeds that vary. */
+/**
+ * Compiles the document with every planned first seed in place and reports the seeds that vary. Returns null when
+ * the batch plan is not ready: an unresolved generator, a batch reason, or more sessions than the queue accepts.
+ */
 export const planWorkflowSubmission = (
   document: ProjectGraphState,
   templates: InvocationTemplates,
-  { batchCount }: WorkflowSubmissionPlanOptions
-): WorkflowSubmissionPlan => {
-  const seedPlan = planWorkflowSeeds(document, templates, batchCount);
+  { batchCount, generators, random }: WorkflowSubmissionPlanOptions
+): WorkflowSubmissionPlan | null => {
+  const batchPlan = planWorkflowBatch(document, templates, { generators, random });
+
+  if (
+    batchPlan.reasons.length > 0 ||
+    batchPlan.pendingGenerators.length > 0 ||
+    batchPlan.batchSize === null ||
+    batchPlan.batchSize * batchCount > WORKFLOW_BATCH_MAX_ITEMS
+  ) {
+    return null;
+  }
+
+  const seedPlan = planWorkflowSeeds(document, templates, batchCount, batchPlan.batchSize);
 
   return {
     ...seedPlan,
     batchCount,
+    batchData: batchPlan.groups,
+    batchSize: batchPlan.batchSize,
     graph: applyWorkflowSeeds(compileProjectGraph(document, templates), seedPlan.seeds),
   };
 };

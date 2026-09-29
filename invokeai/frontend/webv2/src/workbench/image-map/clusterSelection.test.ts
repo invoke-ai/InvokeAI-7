@@ -5,10 +5,18 @@ import { describe, expect, it } from 'vitest';
 
 import type { ImageMapPoint } from './api';
 
-import { collectClusterSelection } from './clusterSelection';
+import { getClusterColor } from './clusterPalette';
+import { collectClusterSelection, formatClusterSize } from './clusterSelection';
 import {
+  buildAllPointsTraces,
   buildClusterAnnotations,
+  buildClusterSelectionTraces,
   buildHighlightedPointsTrace,
+  dimAppearance,
+  getDominantCluster,
+  getTraceAppearance,
+  toBaseAppearanceRestyle,
+  toClusterSelectionRestyle,
   declutterAnnotations,
   HIGHLIGHTED_POINTS_TRACE,
   toHighlightRestyle,
@@ -59,9 +67,19 @@ describe('collectClusterSelection', () => {
     expect(collectClusterSelection(POINTS, 'image:clip.mp4')).toBeNull();
   });
 
-  it('caps oversized clusters, keeping the nearest members', () => {
-    const capped = collectClusterSelection(POINTS, 'image:a.png', 2);
-    expect(capped).toEqual(['image:a.png', 'image:c.png']);
+  it('selects every member of a cluster far larger than the old 5,000 cap', () => {
+    const members = Array.from({ length: 12_000 }, (_, index) => ({
+      cluster: 3,
+      item: { kind: 'image' as const, name: `m${index}.png` },
+      key: `image:m${index}.png` as const,
+      x: index,
+      y: 0,
+    }));
+    const selection = collectClusterSelection([...members, ...POINTS], 'image:m6000.png');
+
+    expect(selection).toHaveLength(12_000);
+    // Still walks outward from the click.
+    expect(selection?.slice(0, 3)).toEqual(['image:m6000.png', 'image:m5999.png', 'image:m6001.png']);
   });
 });
 
@@ -88,10 +106,7 @@ describe('buildHighlightedPointsTrace', () => {
 
 describe('toHighlightRestyle', () => {
   it('carries every per-point array the highlight trace holds', () => {
-    // plotly keeps whatever a restyle omits, so an array left behind is then
-    // indexed at the new point count — which crashes inside scattergl's own
-    // marker lookup, nowhere near the omission. Selecting a cluster is what
-    // resizes this trace, so the failure lands on an ordinary click.
+    // Plotly retains omitted restyle arrays; stale lengths crash scattergl when cluster clicks resize the trace.
     const trace = buildHighlightedPointsTrace(POINTS, new Set(['image:a.png' as const, 'video:clip.mp4' as const]));
     const payload = toHighlightRestyle(trace);
 
@@ -103,8 +118,7 @@ describe('toHighlightRestyle', () => {
     for (const key of [...perPointKeys, 'customdata', 'x', 'y']) {
       expect(Object.keys(payload)).toContain(key);
     }
-    // Every entry is wrapped for the one trace it restyles, and describes the
-    // same points.
+    // Wrap every property for one trace and keep point arrays aligned.
     for (const value of Object.values(payload)) {
       expect(value).toHaveLength(1);
       expect(value[0]).toHaveLength(trace.x.length);
@@ -119,8 +133,7 @@ describe('buildClusterAnnotations', () => {
 
     expect(annotations).toHaveLength(1);
     const landscapes = annotations[0];
-    // Centered on the cluster's x centroid, anchored above its topmost point
-    // with a pixel lift so the label never covers the points it names.
+    // Anchor at cluster x-centroid above its top point with fixed-pixel clearance.
     expect(landscapes?.x).toBeCloseTo(4 / 3);
     expect(landscapes?.y).toBeCloseTo(5);
     expect(landscapes?.yanchor).toBe('bottom');
@@ -151,9 +164,7 @@ describe('buildClusterAnnotations', () => {
 });
 
 describe('declutterAnnotations', () => {
-  // Cluster 0: three points near the origin; cluster 1: one point at (10, 0).
-  // The small cluster's point deliberately comes first, so these tests fail
-  // if the size-priority ordering in buildClusterAnnotations regresses.
+  // Place the smaller cluster first to prove size priority overrides input order.
   const clusters = [
     point('far.png', 10, 0, 1),
     point('a.png', 0, 0, 0),
@@ -190,10 +201,8 @@ describe('declutterAnnotations', () => {
   });
 
   it('drops labels covering the current-image marker, which draws beneath them', () => {
-    // Zoomed in, both labels normally survive (see the first case). Putting the
-    // marker on the 'portraits' anchor at (10, 0) evicts that label instead:
-    // the gold target is on the WebGL canvas under plotly's annotation layer,
-    // so it cannot be stacked over a pill it overlaps.
+    // Hide the label overlapping the gold target: SVG annotations sit above WebGL markers and cannot be reordered
+    // below them.
     const ranges = { x: [-0.5, 10.5] as [number, number], y: [-4, 4] as [number, number] };
     const kept = declutterAnnotations(annotations, ranges, view.widthPx, view.heightPx, { x: 10, y: 0 });
     expect(kept.map((annotation) => annotation.text)).toEqual(['landscapes']);
@@ -203,19 +212,14 @@ describe('declutterAnnotations', () => {
     const ranges = { x: [-0.5, 10.5] as [number, number], y: [-4, 4] as [number, number] };
     const kept = declutterAnnotations(annotations, ranges, view.widthPx, view.heightPx, { x: 5, y: -3.5 });
     expect(kept.map((annotation) => annotation.text)).toEqual(['landscapes', 'portraits']);
-    // A null marker (nothing selected, or the selection is off the map) is the
-    // same as passing none at all.
     expect(declutterAnnotations(annotations, ranges, view.widthPx, view.heightPx, null)).toEqual(
       declutterAnnotations(annotations, ranges, view.widthPx, view.heightPx)
     );
   });
 
   it('does not hand the space it clears to a lower-priority label', () => {
-    // 'portraits' (1 point) anchors ~55px from 'landscapes' (3 points): inside
-    // the bigger label's footprint, outside the marker's clearance. Without the
-    // marker, 'landscapes' wins the spot and 'portraits' is dropped. Parking
-    // the marker on 'landscapes' must not promote 'portraits' into the very
-    // patch of map the marker was supposed to clear.
+    // A marker hiding the larger winning label must not promote a smaller overlapping label into the cleared
+    // region.
     const crowded = [
       point('a.png', 0, 0, 0),
       point('b.png', 1, 0, 0),
@@ -236,12 +240,7 @@ describe('declutterAnnotations', () => {
   });
 
   it('leaves labels the marker does not cover exactly as they were', () => {
-    // Three labels 50px apart: 'bbb' loses its spot to 'aaa' and is invisible
-    // with or without a marker, while 'ccc' clears 'aaa' and survives. Parking
-    // the marker on 'bbb' — whose 11px rect reaches neither neighbour — must
-    // change nothing: a label that never won a spot cannot reserve one, or
-    // selecting an image under an already-suppressed label would silently take
-    // out the cluster next door.
+    // An already-suppressed label reserves no space; placing a marker there must not evict neighboring labels.
     const row = [
       point('a1.png', 0, 0, 0),
       point('a2.png', 0, 0, 0),
@@ -288,5 +287,88 @@ describe('declutterAnnotations', () => {
     expect(declutterAnnotations(annotations, ranges, view.widthPx, view.heightPx)).toEqual(annotations);
     const sane = { x: [-500, 500] as [number, number], y: [-375, 375] as [number, number] };
     expect(declutterAnnotations(annotations, sane, 0, view.heightPx)).toEqual(annotations);
+  });
+});
+
+describe('cluster selection drawing', () => {
+  const members = new Set(['image:a.png', 'image:b.png', 'image:c.png', 'video:clip.mp4'] as const);
+
+  it('redraws the members at their cluster colour, one scalar-styled trace per kind', () => {
+    const [images, videos] = buildClusterSelectionTraces(POINTS, members);
+
+    expect(images.customdata).toEqual(['image:a.png', 'image:b.png', 'image:c.png']);
+    expect(videos.customdata).toEqual(['video:clip.mp4']);
+    expect([images.marker.symbol, videos.marker.symbol]).toEqual(['circle', 'diamond']);
+    for (const trace of [images, videos]) {
+      // Scalar, never per point: that is what keeps a 100k-member cluster zooming like the base.
+      expect(trace.marker.color).toBe(getClusterColor(0));
+      expect(typeof trace.marker.opacity).toBe('number');
+      // Clicks and hovers fall through to the base point underneath.
+      expect(trace.hoverinfo).toBe('skip');
+    }
+    expect(toClusterSelectionRestyle([images, videos])).toEqual({
+      customdata: [images.customdata, videos.customdata],
+      'marker.color': [getClusterColor(0), getClusterColor(0)],
+      x: [images.x, videos.x],
+      y: [images.y, videos.y],
+    });
+  });
+
+  it('takes the colour of the cluster most members are in now, after a refresh renumbered them', () => {
+    const renumbered = POINTS.map((entry) => (entry.cluster === 0 ? { ...entry, cluster: 7 } : entry));
+    const moved = renumbered.map((entry) => (entry.key === 'image:c.png' ? { ...entry, cluster: 1 } : entry));
+
+    expect(getDominantCluster(moved, members)).toBe(7);
+    expect(buildClusterSelectionTraces(moved, members)[0].marker.color).toBe(getClusterColor(7));
+  });
+
+  it('draws nothing for an empty selection or members no longer on the map', () => {
+    for (const keys of [new Set<never>(), new Set(['image:gone.png'] as const)]) {
+      const traces = buildClusterSelectionTraces(POINTS, keys);
+
+      expect(traces.map((trace) => trace.x.length)).toEqual([0, 0]);
+      expect(getDominantCluster(POINTS, keys)).toBeNull();
+    }
+  });
+
+  it('dims every base trace with one greyer, fainter scalar each, and restores them exactly', () => {
+    const appearances = buildAllPointsTraces(POINTS).map(getTraceAppearance);
+    const dimmed = toBaseAppearanceRestyle(appearances, true);
+    const restored = toBaseAppearanceRestyle(appearances, false);
+
+    expect(dimmed['marker.color']).toHaveLength(appearances.length);
+    appearances.forEach((appearance, index) => {
+      const color = dimmed['marker.color']![index] as string;
+      const opacity = dimmed['marker.opacity']![index] as number;
+
+      expect(color).toMatch(/^#[0-9a-f]{6}$/);
+      expect(color).not.toBe(appearance.color.toLowerCase());
+      expect(opacity).toBeLessThan(appearance.opacity);
+    });
+    expect(restored).toEqual({
+      'marker.color': appearances.map((appearance) => appearance.color),
+      'marker.opacity': appearances.map((appearance) => appearance.opacity),
+    });
+  });
+
+  it('mutes colour toward grey rather than only fading it', () => {
+    // Pure red keeps a trace of its hue but loses most of its saturation.
+    const { color } = dimAppearance({ color: '#FF0000', opacity: 0.85 });
+    const [r, g, b] = [1, 3, 5].map((start) => parseInt(color.slice(start, start + 2), 16));
+
+    expect(r).toBeGreaterThan(g!);
+    expect(r! - g!).toBeLessThan(60);
+    expect(Math.abs(g! - b!)).toBeLessThan(10);
+  });
+
+  it('keeps noise fainter than clustered points once dimmed', () => {
+    expect(dimAppearance({ color: '#8A8A8A', opacity: 0.25 }).opacity).toBeLessThan(
+      dimAppearance({ color: '#4E79A7', opacity: 0.85 }).opacity
+    );
+  });
+
+  it('words the size with grouping and number', () => {
+    expect(formatClusterSize(1)).toBe('1 item');
+    expect(formatClusterSize(38112)).toBe('38,112 items');
   });
 });

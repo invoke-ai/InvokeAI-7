@@ -13,32 +13,28 @@ import type { ImageMapImageLabels } from './api';
 import { fetchImageMapImageLabels } from './api';
 
 /**
- * Item-key → vocabulary-labels cache for map hover cards. Labels derive from
- * the item's stored embedding, which never changes, and the labeling
- * vocabulary, which does: an admin can edit the supplementary term list. So
- * results (including "no labels for this item") are cached until a
- * vocabulary rebuild lands, at which point `clearImageLabels` drops them.
+ * Caches per-item vocabulary labels, including empty results, until vocabulary rebuild. Embeddings are stable;
+ * editable vocabulary determines invalidation.
  */
 const labels = new Map<string, ImageMapImageLabels | null>();
 const inflight = new Map<string, Promise<ImageMapImageLabels | null>>();
 
 /**
- * How long a server-wide failure suppresses further requests. Such a failure
- * is not about this image, so hovering across the map would otherwise fire one
- * doomed request per point — but it is not necessarily permanent either: the
- * vocabulary is built lazily by the index worker, and every call until that
- * build lands answers "still being prepared". A cooldown backs off without
- * giving up.
+ * Server-wide cooldowns prevent one failing request per hovered point or thumbnail while allowing recovery. A 409
+ * usually means the index worker is still building the vocabulary, which on a warm disk cache lands in about a
+ * second, so it backs off briefly; outages back off longer.
  */
-const UNAVAILABLE_COOLDOWN_MS = 60_000;
+const BUILDING_COOLDOWN_MS = 5_000;
+const OUTAGE_COOLDOWN_MS = 60_000;
 
 let unavailableUntil = 0;
+/** Bumped by every clear so requests issued before it cannot answer or seed the cache after it. */
+let generation = 0;
 
-// Labels are account-owned gallery data: drop them on login/logout so one
-// account's hovers can never serve another account's labels. The cooldown is
-// account state too — a different login may have a different backend.
+// Clear labels and cooldown on login/logout to prevent cross-account results or backend failure state.
 registerAccountOwnedResource({
   clear: () => {
+    generation += 1;
     labels.clear();
     inflight.clear();
     unavailableUntil = 0;
@@ -47,15 +43,13 @@ registerAccountOwnedResource({
 });
 
 /**
- * Drop every cached label. Called when a supplementary-vocabulary rebuild
- * lands: the same phrases the cluster labels are re-fetched for also decide
- * these, and a card pairing freshly-fetched cluster tags with tags scored
- * against the previous vocabulary would be quietly inconsistent. Also clears
- * the cooldown, since a completed rebuild is exactly what a 409 was waiting
- * for.
+ * Vocabulary rebuild clears hover labels and cooldown so item tags agree with refreshed cluster labels and
+ * pending-build retries resume.
  */
 export const clearImageLabels = (): void => {
+  generation += 1;
   labels.clear();
+  inflight.clear();
   unavailableUntil = 0;
 };
 
@@ -80,41 +74,40 @@ export const getImageLabels = (item: GalleryItemRef): Promise<ImageMapImageLabel
   }
 
   const owner = captureAccountScope();
+  const issuedIn = generation;
+  // A resolution that raced an account switch or vocabulary rebuild answers for state that is gone: it must
+  // neither seed the cache nor reach the caller.
+  const isCurrent = () => issuedIn === generation && isAccountScopeCurrent(owner);
   const request = fetchImageMapImageLabels(item)
     .then((result): ImageMapImageLabels | null => {
-      // A resolution that raced an account switch must not seed the next
-      // account's cache.
-      if (isAccountScopeCurrent(owner)) {
-        labels.set(key, result);
-      }
-
-      return result;
-    })
-    .catch((error: unknown): null => {
-      if (!isAccountScopeCurrent(owner)) {
+      if (!isCurrent()) {
         return null;
       }
 
-      if (error instanceof ApiError && (error.status === 409 || error.status >= 500)) {
-        // Server-wide and possibly temporary: a 409 means the vocabulary may
-        // still be building, a 5xx that the backend is unwell. Back off rather
-        // than cache anything per item — but back off, because this is driven
-        // by pointer movement, and a deterministic failure would otherwise
-        // refire several times a second for the rest of the session.
-        unavailableUntil = Date.now() + UNAVAILABLE_COOLDOWN_MS;
+      labels.set(key, result);
+      return result;
+    })
+    .catch((error: unknown): null => {
+      if (!isCurrent()) {
+        return null;
+      }
+
+      if (error instanceof ApiError && error.status === 409) {
+        // Build in progress (or index/vocabulary unavailable): server-wide, not per item.
+        unavailableUntil = Date.now() + BUILDING_COOLDOWN_MS;
+      } else if (error instanceof ApiError && error.status >= 500) {
+        unavailableUntil = Date.now() + OUTAGE_COOLDOWN_MS;
       } else if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
-        // The only definitive per-item answers: not indexed, or not visible
-        // to this account. Nothing about this session can change either.
+        // Cache definitive item misses: not indexed or not visible to this account.
         labels.set(key, null);
       }
 
-      // Everything else (5xx, 429, a dropped connection) is transient and is
-      // deliberately not cached: the next hover of this item retries.
+      // Other transient failures remain uncached so later hover retries.
       return null;
     })
     .finally(() => {
-      // Release only this request's claim; an account switch already cleared
-      // the in-flight map.
+      // Release only this request's claim; a clear already emptied the
+      // in-flight map.
       if (inflight.get(key) === request) {
         inflight.delete(key);
       }

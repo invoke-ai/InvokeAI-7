@@ -1,12 +1,6 @@
 /**
- * The view tool: pan the canvas by dragging, zoom with the wheel. It is the
- * default tool and the one the engine temporarily swaps in while space is held.
- * All navigation flows through the viewport, so it never mutates the document
- * and never dispatches.
- *
- * Each engine builds its own instance via {@link createViewTool} so the private
- * drag state is per-engine (never module-global). Zero React, zero import-time
- * side effects.
+ * Per-engine view tool pans and zooms through viewport state without document dispatch; also used for temporary
+ * Space navigation.
  */
 
 import type { PointerInput, PointerModifiers, Vec2 } from '@workbench/canvas-engine/types';

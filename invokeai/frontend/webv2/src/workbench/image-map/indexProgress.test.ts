@@ -29,15 +29,13 @@ describe('index progress arithmetic', () => {
   });
 
   it('counts images given up on as finished so the bar reaches full', () => {
-    // They never drain. Leaving them out parks the bar short of full for a run
-    // that has in fact finished.
+    // Failed items are finished work; excluding them would keep a drained queue below 100%.
     expect(getIndexPercent(counts({ embedded: 94, failed: 5, pending: 1, total: 100 }))).toBe(99);
     expect(getIndexPercent(counts({ embedded: 95, failed: 5, pending: 0, total: 100 }))).toBe(100);
   });
 
   it('agrees with the counts line it is shown beside', () => {
-    // "300 of 1,000 images" next to "90%" is not something a user can
-    // reconcile; both are read off `pending`, so they cannot diverge.
+    // Derive completed counts and percent from pending so labels and progress agree.
     const description = describeIndexProgress(counts({ embedded: 300, failed: 600, pending: 100, total: 1000 }));
 
     expect(description.counts).toBe('900 of 1,000 images');
@@ -67,9 +65,7 @@ describe('hasProgressed', () => {
   });
 
   it('is not progress when only the gallery moved', () => {
-    // `total` shifts whenever anyone saves or deletes an image — including the
-    // very generation the indexer is waiting out. Counting that as progress
-    // would reset the "no progress" clock every time someone generates.
+    // Gallery total changes are not indexing progress and must not reset the stall clock.
     expect(hasProgressed(counts({ pending: 75, total: 100 }), counts({ pending: 76, total: 101 }))).toBe(false);
     expect(hasProgressed(counts(), counts())).toBe(false);
   });

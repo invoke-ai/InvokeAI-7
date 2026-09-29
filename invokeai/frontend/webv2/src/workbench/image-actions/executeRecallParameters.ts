@@ -63,12 +63,7 @@ const verifyRecalledReferenceImages = async (
   );
 };
 
-/**
- * Applies one `recall_parameters_updated` payload to a project's Generate
- * values. `getGenerateValues` returns null once the project is gone, which
- * ends the attempt quietly. Resolves to true when at least one field was
- * committed.
- */
+/** Apply one recall payload; stop quietly if the project disappears. Return true when at least one field commits. */
 export const executeRecallParameters = async ({
   commands,
   getGenerateValues,

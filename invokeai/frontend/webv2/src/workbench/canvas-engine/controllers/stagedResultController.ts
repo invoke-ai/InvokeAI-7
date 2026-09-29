@@ -15,6 +15,7 @@ import type { ProjectEvent } from '@workbench/projectContracts';
 import { getDocumentLayer, getDocumentLeaves, hasDocumentNode } from '@workbench/canvas-engine/document/documentIndex';
 import { insertNodesAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import { haveSameStructure } from '@workbench/canvas-engine/document/layerStacks';
+import { collectHistoryMediaRefs } from '@workbench/canvas-engine/history/history';
 import { getCanvasStagingCandidateFingerprint } from '@workbench/canvasStagingView';
 
 export interface StagedResultControllerOptions {
@@ -201,6 +202,7 @@ export class StagedResultController {
     };
     o.history.push({
       bytes: 256,
+      heldAssetRefs: collectHistoryMediaRefs(layer),
       label: continueStaging ? 'Save staged image as disabled layer' : 'Accept staged image',
       redo: () =>
         applyLayerStack(

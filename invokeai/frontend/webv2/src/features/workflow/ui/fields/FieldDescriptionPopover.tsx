@@ -8,10 +8,6 @@ import { useCallback } from 'react';
 
 const POPOVER_POSITIONING = { placement: 'bottom-end' } as const;
 
-/**
- * Small textarea popover overriding a field's template description ("field
- * notes"), shared by the editor's node field rows and the form builder.
- */
 export const FieldDescriptionPopover = ({
   description,
   fieldName,

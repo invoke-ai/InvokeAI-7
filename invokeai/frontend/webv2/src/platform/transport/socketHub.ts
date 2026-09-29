@@ -1,3 +1,4 @@
+import { createLogger } from '@platform/logging/logger';
 import { io } from 'socket.io-client';
 
 import type { BackendConnectionStatus } from './types';
@@ -5,9 +6,6 @@ import type { BackendConnectionStatus } from './types';
 import { setConnectionStatus } from './connectionStore';
 import { getBackendSocketPath, getBackendSocketUrl, getHttpAuthToken } from './http';
 
-/**
- * The minimal Socket.IO surface the hub uses; tests substitute a fake.
- */
 export interface BackendSocket {
   on(event: string, handler: (payload: never) => void): unknown;
   off(event: string, handler: (payload: never) => void): unknown;
@@ -18,11 +16,7 @@ export interface BackendSocket {
 
 export type ConnectionListener = (status: BackendConnectionStatus, error?: string) => void;
 
-/**
- * Owns the single backend socket for the whole authenticated app. It is only a
- * transport/status hub; feature runtimes attach their own listeners so admin
- * model code and editor queue code do not leak into the base Launchpad bundle.
- */
+/** Own one authenticated socket; feature listeners stay outside the hub to preserve Launchpad bundle boundaries. */
 export interface SocketHub {
   /** Idempotent: connects the single socket if one is not already live. */
   connect(): void;
@@ -38,8 +32,7 @@ export interface SocketHub {
 const createDefaultSocket = (): BackendSocket => {
   const token = getHttpAuthToken();
 
-  // Socket.IO's generic `off` overload does not structurally match our minimal
-  // facade; the socket satisfies the surface we actually use, so narrow it here.
+  // Narrow Socket.IO's generic off overload to the facade's supported calls.
   return io(getBackendSocketUrl(), {
     auth: token ? { token } : undefined,
     autoConnect: false,
@@ -48,6 +41,8 @@ const createDefaultSocket = (): BackendSocket => {
     timeout: 60000,
   }) as unknown as BackendSocket;
 };
+
+const socketLogger = createLogger({ area: 'socket', namespace: 'transport' });
 
 export const createSocketHub = (options: { createSocket?: () => BackendSocket } = {}): SocketHub => {
   const createSocket = options.createSocket ?? createDefaultSocket;
@@ -66,8 +61,25 @@ export const createSocketHub = (options: { createSocket?: () => BackendSocket } 
   const connectionListeners = new Set<ConnectionListener>();
 
   const publishStatus = (next: BackendConnectionStatus, error?: string): void => {
+    const previous = status;
+    const previousError = lastError;
+
     status = next;
     lastError = error;
+    if (next === 'disconnected') {
+      // Reconnect attempts repeat the same failure; keep one warning per outage and the retries as breadcrumbs.
+      const isRepeat = previous === 'disconnected' && previousError === error;
+
+      socketLogger[isRepeat ? 'debug' : 'warn']({
+        context: { previous, reason: error },
+        message: `Backend socket ${isRepeat ? 'reconnect failed' : 'disconnected'}${error ? `: ${error}` : ''}`,
+        name: isRepeat ? 'socket.reconnect-failed' : 'socket.disconnected',
+      });
+    } else if (next === 'connected') {
+      socketLogger.info({ context: { previous }, message: 'Backend socket connected', name: 'socket.connected' });
+    } else {
+      socketLogger.debug({ context: { previous }, message: 'Backend socket connecting', name: 'socket.connecting' });
+    }
     setConnectionStatus(next, error);
 
     for (const listener of connectionListeners) {

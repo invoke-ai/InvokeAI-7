@@ -10,6 +10,7 @@ from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocati
 from invokeai.app.invocations.fields import InputField, OutputField
 from invokeai.app.invocations.loops import ForInvocation, ForReturnInvocation
 from invokeai.app.services.events.events_common import QueueItemStatusChangedEvent
+from invokeai.app.services.invocation_cache.invocation_cache_memory import MemoryInvocationCache
 from invokeai.app.services.progress_previews.progress_previews_default import MemoryProgressPreviews
 from invokeai.app.services.session_processor.session_processor_default import (
     DefaultSessionProcessor,
@@ -21,6 +22,7 @@ from invokeai.app.services.session_queue.session_queue_common import (
     SessionQueueItemNotFoundError,
     SessionQueueStatus,
 )
+from invokeai.app.services.shared.execution_effects import ExecutionEffectsRecorder, ExecutionInterface
 from invokeai.app.services.shared.graph import Graph, GraphExecutionState
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from tests.test_nodes import create_edge, create_loop_linkage
@@ -238,7 +240,16 @@ def _build_processor(
 ) -> DefaultSessionProcessor:
     monkeypatch.setattr(
         "invokeai.app.services.session_processor.session_processor_default.build_invocation_context",
-        lambda data, services, is_canceled: None,
+        lambda data, services, is_canceled: (
+            effects := ExecutionEffectsRecorder(
+                source_node_id=data.invocation.id,
+                frame_path=data.execution_frame,
+                state_id=data.execution_state_id,
+                frame_id=data.execution_frame_id,
+                workflow_call_depth=data.execution_workflow_call_depth,
+            )
+        )
+        and SimpleNamespace(execution_effects=effects, execution=ExecutionInterface(effects)),
     )
     config = SimpleNamespace(
         generation_devices=[],
@@ -254,6 +265,7 @@ def _build_processor(
         performance_statistics=_Stats(),
         progress_previews=MemoryProgressPreviews(),
         session_queue=queue,
+        invocation_cache=MemoryInvocationCache(max_cache_size=0),
         image_moves=None,
     )
     runner = DefaultSessionRunner(

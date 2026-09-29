@@ -27,11 +27,8 @@ import {
 import { useVirtualizer } from 'react-hook-tanstack-virtual';
 
 /**
- * Command-palette-style node picker: a centered search dialog whose results
- * are grouped into collapsible categories (with counts), mirroring the legacy
- * editor's add-node menu. Beta nodes carry the hammer icon. The two UI-only
- * nodes (Notes, Current Image) lead as a "Utility" group. No result cap —
- * searching auto-expands every group; idle shows all categories collapsed.
+ * Searching expands all node groups without capping results; idle groups collapse and UI-only nodes lead in
+ * Utility.
  */
 
 const UTILITY_CATEGORY = 'Utility';
@@ -317,8 +314,6 @@ const AddNodeDialogContent = ({
   const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
 
   useMountEffect(() => registerModalHotkeyLayer('workflow-add-node'));
-  // While searching, every matching group is force-expanded regardless of the
-  // manual expand/collapse state, so results are never hidden behind a header.
   const isSearching = searchTerm.trim().length > 0;
 
   const close = useCallback(

@@ -14,7 +14,6 @@ import pytest
 import torch
 from PIL import Image
 
-from invokeai.backend.minimax_h3.audio_resample import resample_sinc
 from invokeai.backend.minimax_h3.keyframe_conditioning import vae_encode_autocast
 from invokeai.backend.minimax_h3.reference_conditioning import (
     normalize_reference_audio,
@@ -27,6 +26,7 @@ from invokeai.backend.minimax_h3.reference_conditioning import (
     snap_reference_num_frames,
 )
 from invokeai.backend.minimax_h3.text_conditioning import MiniMaxH3TextReference, build_ref2va_presentation
+from invokeai.backend.util.audio_resample import resample_sinc
 
 
 class TestFrameResample:

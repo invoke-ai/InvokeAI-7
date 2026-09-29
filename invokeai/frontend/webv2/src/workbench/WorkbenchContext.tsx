@@ -3,6 +3,7 @@ import type { Project } from '@workbench/projectContracts';
 import type { ProjectSettings } from '@workbench/settings/contracts';
 import type { WidgetInstanceId, WidgetTypeId } from '@workbench/widgetContracts';
 
+import { startIntermediatesHoldLease } from '@features/intermediates/holdLease';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { captureAccountScope } from '@platform/state/accountLifecycle';
 import { shallowEqual as selectorShallowEqual, useExternalStoreSelector } from '@platform/state/selectors';
@@ -17,6 +18,11 @@ import { createExtensionRegistry, type ExtensionRegistry } from './extensions/ex
 import { clearLayerPanelStates } from './layerPanelState';
 import { createWorkbenchPersistenceRuntime } from './persistenceRuntime';
 import { createOpenProjectBroker } from './projects/openProjectBroker';
+import {
+  createCanvasHeldMediaSources,
+  createOpenProjectsHeldMediaReader,
+  type CanvasHeldMediaSources,
+} from './projects/projectAssets';
 import { describeRefusedProjects } from './projects/projectLoadRefusal';
 import {
   createSyncedWorkbenchPersistence,
@@ -29,11 +35,7 @@ import { createWorkbenchStore, type WorkbenchSnapshot, type WorkbenchInternalSto
 
 interface WorkbenchContextValue {
   activeProject: Project;
-  /**
-   * True once the persisted snapshot has been loaded (or found absent). Side
-   * effects that read or mutate the queue must wait for this, or they race the
-   * async hydration and act on state that is about to be replaced.
-   */
+  /** Queue side effects must wait for hydration to avoid acting on state about to be replaced. */
   hasHydrated: boolean;
 }
 
@@ -43,6 +45,7 @@ type WorkbenchSelector<T> = (snapshot: WorkbenchSnapshot) => T;
 const WorkbenchStoreContext = createContext<WorkbenchInternalStore | null>(null);
 const WorkbenchPersistenceContext = createContext<SyncedWorkbenchPersistence | null>(null);
 const WorkbenchExtensionsContext = createContext<ExtensionRegistry | null>(null);
+const WorkbenchCanvasHeldMediaContext = createContext<CanvasHeldMediaSources | null>(null);
 const subscribeToNothing = (): (() => void) => () => {};
 const getNullSnapshot = (): null => null;
 
@@ -61,6 +64,7 @@ export const WorkbenchProvider = ({
   const { t } = useTranslation();
   const [persistence] = useState(() => createSyncedWorkbenchPersistence(owner));
   const [extensions] = useState(createExtensionRegistry);
+  const [canvasHeldMedia] = useState(createCanvasHeldMediaSources);
   const [loadUnavailable, setLoadUnavailable] = useState<{ message: string; retry(): void } | null>(null);
   const hasHydrated = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot).hasHydrated;
 
@@ -107,14 +111,10 @@ export const WorkbenchProvider = ({
       persistence,
       signal: owner.signal,
     });
-    // Published for the whole life of the mount, so a library surface rendered beside the editor
-    // mutates an open project through the sync engine rather than beside it.
+    // Publish throughout the mount so sibling library surfaces mutate open projects through the sync engine.
     const openProjectBroker = createOpenProjectBroker({
       closeProject: (projectId) => {
-        // The last tab is not this handle's business. `close` refuses it *and* raises "at least one
-        // project must remain open" — correct for someone closing a tab, wrong for a deletion,
-        // which is not asking to keep working here. Leaving the editor is the caller's job
-        // (`leaveEditorIfLast`), and it is already doing it.
+        // Skip close's last-tab refusal during deletion; leaveEditorIfLast owns leaving the editor.
         if (store.getSnapshot().projects.length > 1) {
           store.commands.projects.close(projectId);
         }
@@ -123,8 +123,7 @@ export const WorkbenchProvider = ({
       flushProject: (projectId) => {
         const project = store.getSnapshot().projects.find((candidate) => candidate.id === projectId);
 
-        // A project the editor no longer holds has nothing to push, and the id is by definition
-        // whatever the server last acknowledged for it.
+        // Unopened projects have no local edits; their ids reflect server acknowledgements.
         return project
           ? persistence.flushProjectToServer(project)
           : Promise.resolve<ProjectPushOutcome>({ documentJson: '', kind: 'acknowledged' });
@@ -143,8 +142,28 @@ export const WorkbenchProvider = ({
     });
 
     persistenceRuntime.start();
+    const releaseIntermediateHold = startIntermediatesHoldLease({
+      owner,
+      read: createOpenProjectsHeldMediaReader(() => store.getSnapshot().projects, canvasHeldMedia.read),
+      subscribe: (onChange) => {
+        let projects = store.getSnapshot().projects;
+        const unsubscribeProjects = store.subscribe(() => {
+          const next = store.getSnapshot().projects;
+          if (next !== projects) {
+            projects = next;
+            onChange();
+          }
+        });
+        const unsubscribeCanvas = canvasHeldMedia.subscribe(onChange);
+        return () => {
+          unsubscribeProjects();
+          unsubscribeCanvas();
+        };
+      },
+    });
 
     return () => {
+      releaseIntermediateHold();
       clearLayerPanelStates();
       openProjectBroker.dispose();
       persistenceRuntime.dispose();
@@ -154,21 +173,23 @@ export const WorkbenchProvider = ({
 
   return (
     <WorkbenchPersistenceContext value={persistence}>
-      <WorkbenchExtensionsContext value={extensions}>
-        <WorkbenchStoreContext value={store}>
-          {loadUnavailable ? (
-            <WorkbenchUnavailableScreen
-              message={loadUnavailable.message}
-              onRetry={loadUnavailable.retry}
-              persistence={persistence}
-            />
-          ) : hasHydrated ? (
-            children
-          ) : (
-            <WorkbenchSplashScreen messageKey="splash.openingProject" />
-          )}
-        </WorkbenchStoreContext>
-      </WorkbenchExtensionsContext>
+      <WorkbenchCanvasHeldMediaContext value={canvasHeldMedia}>
+        <WorkbenchExtensionsContext value={extensions}>
+          <WorkbenchStoreContext value={store}>
+            {loadUnavailable ? (
+              <WorkbenchUnavailableScreen
+                message={loadUnavailable.message}
+                onRetry={loadUnavailable.retry}
+                persistence={persistence}
+              />
+            ) : hasHydrated ? (
+              children
+            ) : (
+              <WorkbenchSplashScreen messageKey="splash.openingProject" />
+            )}
+          </WorkbenchStoreContext>
+        </WorkbenchExtensionsContext>
+      </WorkbenchCanvasHeldMediaContext>
     </WorkbenchPersistenceContext>
   );
 };
@@ -293,6 +314,15 @@ export const useWorkbenchPersistenceService = (): SyncedWorkbenchPersistence => 
 
 export const useOptionalWorkbenchPersistenceService = (): SyncedWorkbenchPersistence | null =>
   use(WorkbenchPersistenceContext);
+
+/** Where live Canvas engines register the undo state the hold lease must keep. */
+export const useWorkbenchCanvasHeldMedia = (): CanvasHeldMediaSources => {
+  const heldMedia = use(WorkbenchCanvasHeldMediaContext);
+  if (!heldMedia) {
+    throw new Error('useWorkbenchCanvasHeldMedia must be used within a WorkbenchProvider.');
+  }
+  return heldMedia;
+};
 
 export const useWorkbenchExtensions = (): ExtensionRegistry => {
   const extensions = use(WorkbenchExtensionsContext);

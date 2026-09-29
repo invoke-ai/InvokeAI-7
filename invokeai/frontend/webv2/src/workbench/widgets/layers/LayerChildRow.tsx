@@ -75,10 +75,8 @@ interface LayerChildRowProps {
 }
 
 /**
- * One projected child row: a modifier the layer above owns, on the tree's
- * roving tab stop. The dot toggles it, selecting it routes the Properties
- * pane to its editor, and Delete removes it; hide/lock do not apply. The row
- * registers a drop target so a layer drag over it lands below its owner.
+ * Modifier child rows share tree focus and route Properties; toggle/Delete edit them, while drops land below their
+ * owning layer.
  */
 const LayerChildRowComponent = ({
   ariaSetSize,

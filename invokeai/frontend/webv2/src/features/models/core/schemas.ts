@@ -1,12 +1,5 @@
 import { z } from 'zod';
 
-/**
- * Zod schemas for the model-manager forms with structured validation (edit,
- * default settings, trigger phrases). User input goes through these before
- * touching the API, so error states are consistent and the API layer can
- * assume well-formed values.
- */
-
 const trimmed = z.string().trim();
 
 export const modelEditSchema = z.object({
@@ -30,18 +23,12 @@ const optionalBoundedNumber = (min: number, max: number, label: string) =>
     .max(max, `${label} must be at most ${max}.`)
     .nullable();
 
-/**
- * Per-model generation defaults. Every field is nullable — null means "no
- * default, use the app-level setting" and maps to an unchecked toggle.
- */
+/** Null means inherit the app default and corresponds to an unchecked field toggle. */
 export const mainDefaultSettingsSchema = z.object({
   cfgRescaleMultiplier: optionalBoundedNumber(0, 0.99, 'CFG rescale multiplier'),
   cfgScale: optionalBoundedNumber(1, 200, 'CFG scale'),
-  // Mirrors `MainModelDefaultSettings.guidance` on the record, which is `ge=1` with no ceiling.
-  // The ceiling used to be 20, which is below a value the app itself stores: FLUX.1 Fill's
-  // declared default is 30, so opening such a model and saving any field was refused. The real
-  // per-architecture ceiling is served as `features.guidance_max` and belongs to the generation
-  // feature, not here -- this schema only guards against nonsense, like cfgScale's 200 above.
+  // Record validation permits guidance >=1 without an architecture ceiling; generation owns guidance_max. Accept
+  // FLUX Fill's stored default of 30.
   guidance: optionalBoundedNumber(1, 200, 'Guidance'),
   height: optionalBoundedNumber(64, 8192, 'Height').refine(
     (value) => value === null || value % 8 === 0,
@@ -61,9 +48,7 @@ export const mainDefaultSettingsSchema = z.object({
 
 export type MainDefaultSettingsFormValues = z.infer<typeof mainDefaultSettingsSchema>;
 
-// Mirrors the backend validator (configs/lora.py): the effective slider range
-// falls back to [-1, 2], min must stay below max, and an enabled weight must
-// sit inside the effective range — otherwise the save 409s.
+// Mirror backend LoRA validation: default range [-1, 2], min < max, and enabled weight within the effective range.
 export const loraDefaultSettingsSchema = z
   .object({
     weight: optionalBoundedNumber(-10, 10, 'Weight'),

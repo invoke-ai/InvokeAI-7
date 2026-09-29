@@ -18,6 +18,8 @@ import {
   buildConnectorNode,
   createWorkflowGraphIndex,
   createWorkflowId,
+  getNodeUpdateStatus,
+  getUpdatableNodeIds,
   getWorkflowSourceFieldType,
   getWorkflowTargetFieldType,
   LOOP_LINKAGE_FIELD,
@@ -104,10 +106,8 @@ const edgeTypes: EdgeTypes = {
 };
 
 /**
- * The workflow center view: an xyflow editor over the project graph document.
- * The document is the source of truth — flow state is rebuilt from it on every
- * document change (undo, import, field edits), while transient view state
- * (selection, in-flight drags, the active tool) lives in local component state.
+ * The graph document owns durable flow data; preserve transient selection, drags, and tool state separately when
+ * rebuilding it.
  */
 // 25px matches v6 so workflows aligned there stay on the grid here.
 const GRID_SIZE = 25;
@@ -132,8 +132,7 @@ const toDocumentEdge = (connection: Connection): WorkflowDocumentEdge | null =>
     : null;
 
 const DEFAULT_EDGE_OPTIONS = { style: { strokeWidth: 2 } };
-// A fresh graph starts clear of the floating toolbar in the left gutter, so
-// its first column's node controls are not covered before the user pans.
+// Offset fresh graphs so the floating left toolbar does not cover their first column.
 const DEFAULT_VIEWPORT = { x: 56, y: 0, zoom: 1 } as const;
 
 interface WorkflowFlowModel {
@@ -243,6 +242,7 @@ export const getInitialRenderFlowModel = (model: WorkflowFlowModel, viewport: Vi
 const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
   const projectGraph = useWorkflowProjectSelector((project) => project.projectGraph);
   const projectId = useWorkflowProjectSelector((project) => project.id);
+  const workflowId = useWorkflowProjectSelector((project) => project.activeWorkflowId);
   const ui = useWorkflowUi();
   const { mark: markWorkbenchPerf, measure: measureWorkbenchPerf, time: timeWorkbenchPerf } = ui.performance;
   const { editGraph, redo, undo } = useProjectGraphCommands();
@@ -277,20 +277,20 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
     nodeCount: projectGraph.nodes.length,
   });
   const viewportKey = useMemo(
-    () => getWorkflowViewportKey(projectId, runtime.instanceId),
-    [projectId, runtime.instanceId]
+    () => getWorkflowViewportKey(projectId, workflowId, runtime.instanceId),
+    [projectId, runtime.instanceId, workflowId]
   );
+  // XYFlow recreates its controller when React Activity reveals this view and reads this object on reconnect.
+  const defaultViewport = useMemo(() => getWorkflowViewport(viewportKey) ?? { ...DEFAULT_VIEWPORT }, [viewportKey]);
   const perfSource = useMemo<WorkflowPerfSource>(
     () => ({
-      instanceId: runtime.instanceId,
-      kind: 'widget',
+      area: 'editor',
+      namespace: 'workflows',
       projectId,
-      region: runtime.region,
-      typeId: runtime.typeId,
+      widget: { instanceId: runtime.instanceId, region: runtime.region, typeId: runtime.typeId },
     }),
     [projectId, runtime.instanceId, runtime.region, runtime.typeId]
   );
-  const defaultViewport = useMemo(() => getWorkflowViewport(viewportKey) ?? DEFAULT_VIEWPORT, [viewportKey]);
   const [flowModel, setFlowModel] = useState<WorkflowFlowModel | null>(() =>
     isLargeGraph
       ? null
@@ -892,6 +892,10 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
     event.preventDefault();
     setContextMenu({
       kind: 'node',
+      canUpdate:
+        node.type === 'invocation' &&
+        node.data.template !== null &&
+        getNodeUpdateStatus(node.data.documentNode, node.data.template.template) === 'updatable',
       isNodeOpen: node.type === 'invocation' ? node.data.documentNode.data.isOpen : null,
       nodeId: node.id,
       x: event.clientX,
@@ -913,6 +917,7 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
       ) {
         setContextMenu({
           kind: 'node',
+          canUpdate: false,
           isNodeOpen: null,
           x: event.clientX,
           y: event.clientY,
@@ -941,6 +946,7 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
         event.stopPropagation();
         setContextMenu({
           kind: 'node',
+          canUpdate: false,
           isNodeOpen: null,
           x: event.clientX,
           y: event.clientY,
@@ -1008,9 +1014,10 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
   }, []);
   const onMoveEnd = useCallback(
     (_: MouseEvent | TouchEvent | null, viewport: Viewport) => {
+      Object.assign(defaultViewport, viewport);
       setWorkflowViewport(viewportKey, viewport);
     },
-    [viewportKey]
+    [defaultViewport, viewportKey]
   );
   const onFlowInit = useCallback(
     (instance: WorkflowFlowInstance) => {
@@ -1103,6 +1110,19 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
 
     setContextMenu(null);
   }, [contextMenu, editGraph]);
+  const onContextMenuUpdate = useCallback(() => {
+    if (contextMenu?.kind === 'node' && contextMenu.nodeId) {
+      editGraph({ nodeIds: [contextMenu.nodeId], templates, type: 'updateNodes' });
+    }
+
+    setContextMenu(null);
+  }, [contextMenu, editGraph, templates]);
+  const updatableNodeCount = useMemo(
+    () => getUpdatableNodeIds(projectGraph, templates).length,
+    [projectGraph, templates]
+  );
+  // No id list: the reducer already skips every node that cannot move.
+  const onUpdateNodes = useCallback(() => editGraph({ templates, type: 'updateNodes' }), [editGraph, templates]);
 
   if (isPreparing) {
     return <WorkflowEditorPreparingState edgeCount={projectGraph.edges.length} nodeCount={projectGraph.nodes.length} />;
@@ -1170,8 +1190,10 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
         <EditorToolbar
           nodeOpacity={nodeOpacity}
           tool={tool}
+          updatableNodeCount={updatableNodeCount}
           onNodeOpacityChange={setNodeOpacity}
           onToolChange={setTool}
+          onUpdateNodes={onUpdateNodes}
         />
         {workflowShowMinimap && (!isLargeGraph || isMinimapReady) ? <FlowMiniMap /> : null}
       </ReactFlow>
@@ -1194,18 +1216,17 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
         onDuplicate={onContextMenuDuplicate}
         onPaste={onContextMenuPaste}
         onToggleOpen={onContextMenuToggleOpen}
+        onUpdate={onContextMenuUpdate}
       />
     </Box>
   );
 };
 
-// Graph readiness is reported on the Invoke control, which is where the user
-// acts on it. A second floating copy over the canvas said the same thing twice.
-
 export const WorkflowEditorView = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
+  // Each project workflow is its own editor mount: selection, viewport and deferred large-graph work stay with it.
   const flowIdentity = useWorkflowProjectSelector(
     (project) =>
-      `${project.id}:${isLargeWorkflowGraph({ edgeCount: project.projectGraph.edges.length, nodeCount: project.projectGraph.nodes.length }) ? 'large' : 'standard'}`
+      `${project.id}:${project.activeWorkflowId}:${isLargeWorkflowGraph({ edgeCount: project.projectGraph.edges.length, nodeCount: project.projectGraph.nodes.length }) ? 'large' : 'standard'}`
   );
 
   useEffect(() => {

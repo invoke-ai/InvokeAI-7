@@ -41,14 +41,7 @@ const render = async (nodeOpacity: number) => {
   });
 };
 
-/**
- * The painted pixels, not the serialized colour string.
- *
- * One of these buttons resolves its fill straight from a token and the other
- * through a `color-mix()`, so Chrome reports the same grey as `oklch(l 0 0)` for
- * one and `oklab(l 0 0)` for the other. Rasterising both settles the question
- * the assertion is actually asking: do they fill the same?
- */
+/** Compare rasterized fills because equivalent token/color-mix colors serialize into different color spaces. */
 const paintedFill = (element: Element): string => {
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d', { willReadFrequently: true })!;
@@ -75,19 +68,45 @@ afterEach(async () => {
 
 describe('editor toolbar', () => {
   it('keeps every button on one shared square toolbar box', async () => {
-    // The node-opacity button is hand-rolled rather than a ToolbarButton, so it
-    // never picked up the primitive's size. That is not a local defect: Toolbar
-    // is a column Stack, and its default stretch alignment let one `sm` button
-    // widen every sibling while they kept their height, turning the whole
-    // strip into rectangles wider than the canvas one.
+    // Match custom control sizing; one wider child stretches every button in the column toolbar.
     await render(1);
 
     expect(new Set(buttonBoxes())).toEqual(new Set(['28x28']));
   });
 
+  it('offers to update outdated nodes only while there are some, without breaking the toolbar grid', async () => {
+    await render(1);
+    expect(host!.querySelector('button[aria-label="nodes.updateAllNodes"]')).toBeNull();
+
+    const onUpdateNodes = vi.fn();
+
+    await settle(() => {
+      root?.render(
+        <ChakraProvider value={system}>
+          <EditorToolbar
+            nodeOpacity={1}
+            tool="pan"
+            updatableNodeCount={2}
+            onNodeOpacityChange={vi.fn()}
+            onToolChange={vi.fn()}
+            onUpdateNodes={onUpdateNodes}
+          />
+        </ChakraProvider>
+      );
+    });
+
+    const update = host!.querySelector<HTMLButtonElement>('button[aria-label="nodes.updateAllNodes"]')!;
+
+    expect(update).not.toBeNull();
+    expect(new Set(buttonBoxes())).toEqual(new Set(['28x28']));
+    update.focus();
+    await settle(() => update.click());
+    expect(onUpdateNodes).toHaveBeenCalledOnce();
+    // The button leaves with the last outdated node; focus is already on its neighbour.
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Fit view');
+  });
+
   it('states node opacity the way the tool buttons state themselves', async () => {
-    // Its "on" used to be a bespoke accent icon colour, while every other
-    // button in the strip fills. One control type, one vocabulary.
     await render(0.5);
     const opacity = host!.querySelector<HTMLButtonElement>('button[aria-label="Node opacity"]')!;
     const activeTool = host!.querySelector<HTMLButtonElement>(

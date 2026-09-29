@@ -1,14 +1,7 @@
 /**
- * The shape React's `use()` inspects before deciding to suspend. A bare promise
- * — even an already-resolved one — always costs a suspension on first read,
- * because `use()` cannot read a native promise synchronously; it has to attach a
- * callback, throw, and retry on the ping. Settling these fields as soon as the
- * load completes lets `use()` return the value on the very first render instead.
- *
- * That distinction is worth real time. Suspending shows a fallback, and once a
- * fallback has been shown React withholds the resolved tree for
- * `FALLBACK_THROTTLE_MS` (300ms) to avoid a flash — which measured as the whole
- * cost of switching layout, long after the chunk had finished downloading.
+ * Set React use() settlement fields when loading completes so the first read can return synchronously. Native
+ * promises otherwise suspend on first read, potentially triggering fallback throttling after the chunk is already
+ * available.
  */
 interface TrackedThenable<T> extends Promise<T> {
   reason?: unknown;

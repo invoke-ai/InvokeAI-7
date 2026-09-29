@@ -23,11 +23,7 @@ export interface GalleryTileFrameProps extends Omit<BoxProps, 'children'> {
   ref?: Ref<HTMLDivElement>;
 }
 
-/**
- * The thumbnail shell shared by every gallery surface: square, accent border
- * when selected, hover-revealed dimensions badge, video duration badge.
- * Caller `css` composes on top; the shell's own props are invariants.
- */
+/** Caller CSS composes with shared tile styling; shell props remain invariant. */
 export const GalleryTileFrame = ({
   alwaysShowDimensions = false,
   children,

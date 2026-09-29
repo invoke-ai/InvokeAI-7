@@ -10,6 +10,7 @@ from invokeai.app.services.image_records.image_records_common import (
     ImageRecordChanges,
     ResourceOrigin,
 )
+from invokeai.app.services.shared.intermediate_delete import IntermediateDeleteGuard
 from invokeai.app.services.shared.pagination import OffsetPaginatedResults
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 from invokeai.app.services.virtual_boards.virtual_boards_common import VirtualSubBoardDTO
@@ -90,23 +91,20 @@ class ImageRecordStorageBase(ABC):
         pass
 
     @abstractmethod
-    def get_intermediates(self) -> list[tuple[str, str]]:
-        """Gets all intermediate image records as (image_name, image_subfolder) tuples, without deleting them."""
+    def get_subfolders(self, image_names: list[str]) -> dict[str, str]:
+        """Maps each existing named image to its on-disk subfolder; absent names are omitted."""
         pass
 
     @abstractmethod
-    def delete_intermediates_by_names(self, image_names: list[str]) -> list[str]:
+    def delete_intermediates_by_names(
+        self, image_names: list[str], guard: Optional[IntermediateDeleteGuard] = None
+    ) -> list[str]:
         """Deletes the named image records, skipping any that are no longer intermediates.
 
         Returns the names whose records this call actually removed. Names that were already gone, and
         names whose records survive because they are no longer intermediates, are both excluded, so a
         caller purges the files of exactly the returned names and touches nothing else.
         """
-        pass
-
-    @abstractmethod
-    def get_intermediates_count(self, user_id: Optional[str] = None) -> int:
-        """Gets a count of intermediate images. If user_id is provided, only counts that user's intermediates."""
         pass
 
     @abstractmethod
@@ -125,8 +123,19 @@ class ImageRecordStorageBase(ABC):
         metadata: Optional[str] = None,
         user_id: Optional[str] = None,
         image_subfolder: str = "",
+        project_id: Optional[str] = None,
     ) -> datetime:
         """Saves an image record."""
+        pass
+
+    @abstractmethod
+    def set_file_size_bytes(self, image_name: str, file_size_bytes: Optional[int]) -> None:
+        """Records the measured on-disk size of an image and its thumbnail; None marks it unmeasured."""
+        pass
+
+    @abstractmethod
+    def set_file_sizes_bytes(self, sizes: dict[str, int]) -> None:
+        """Records many measured sizes in one transaction, leaving rows that already have a size."""
         pass
 
     @abstractmethod

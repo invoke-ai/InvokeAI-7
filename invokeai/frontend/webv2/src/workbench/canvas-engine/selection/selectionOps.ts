@@ -1,22 +1,7 @@
 /**
- * Selection-constrained raster primitives: fill and erase a layer's pixels
- * within the selection mask.
- *
- * These are the pure pixel ops behind the engine's `fillSelection` /
- * `eraseSelection` (the engine owns the layer-eligibility guards, dirty-rect
- * before/after capture, undo history, and persistence around them). Each op
- * composites through a scratch surface so the write lands ONLY where the mask is
- * opaque — pixels outside the selection are never touched — and flows entirely
- * through the {@link RasterBackend} `ctx` seam, so it runs on the node stub.
- *
- * Coordinate spaces: both the layer cache and the selection mask are content-
- * sized (placed) surfaces with their own origins. `rect` is the edit region in
- * document (= layer-local) space; `targetOrigin` / `maskOrigin` are the target
- * cache surface's and the mask surface's document-space origins, so a document
- * coordinate `d` maps to target-surface `d - targetOrigin` and mask-surface
- * `d - maskOrigin`.
- *
- * Zero React, zero import-time side effects.
+ * Masked fill/erase primitives; engine callers own guards, history and persistence. Scratch compositing confines
+ * edits to selection coverage. Rect coordinates are document=layer-local here; subtract target/mask origins to
+ * address each content-sized surface.
  */
 
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
@@ -38,14 +23,8 @@ export interface MaskedEditParams {
 }
 
 /**
- * Fills `color` into `target` wherever `mask` is opaque, within `rect`. Builds a
- * `color`-filled scratch (region-local), intersects it with the mask
- * (`destination-in`), then draws the masked color over the target.
- *
- * `composite` is the final blit's op: `source-over` (default) fills every masked
- * pixel; `source-atop` honours a transparency lock — colour lands ONLY where the
- * target is already opaque, never into transparent space (mirrors the
- * transparency-locked brush in `paintTool.ts`).
+ * Fill a region-local scratch, intersect the mask, then composite onto target. Default source-over fills coverage;
+ * source-atop preserves transparency lock.
  */
 export const fillMaskedRegion = ({
   backend,
@@ -67,8 +46,6 @@ export const fillMaskedRegion = ({
   sctx.globalAlpha = 1;
   sctx.fillStyle = color;
   sctx.fillRect(0, 0, rect.width, rect.height);
-  // Keep the color only where the mask is opaque (mask drawn at its offset within
-  // the region-local scratch).
   sctx.globalCompositeOperation = 'destination-in';
   sctx.drawImage(mask.canvas, maskOrigin.x - rect.x, maskOrigin.y - rect.y);
 
@@ -81,11 +58,6 @@ export const fillMaskedRegion = ({
   ctx.restore();
 };
 
-/**
- * Erases (`destination-out`) `target`'s pixels wherever `mask` is opaque, within
- * `rect`. The mask shape is copied into a region-local scratch and composited out
- * of the target.
- */
 export const eraseMaskedRegion = ({
   backend,
   mask,

@@ -2,6 +2,8 @@ import { Tooltip as ChakraTooltip, Portal } from '@chakra-ui/react';
 import {
   cloneElement,
   isValidElement,
+  useId,
+  useMemo,
   type ComponentProps,
   type ReactElement,
   type ReactNode,
@@ -76,22 +78,19 @@ export interface TooltipProps extends ChakraTooltip.RootProps {
   content: ReactNode;
   contentRef?: Ref<HTMLDivElement>;
   contentProps?: ChakraTooltip.ContentProps;
-  /**
-   * Which trigger edge the tooltip sits on, centered against it — `top`/
-   * `bottom` center horizontally, `left`/`right` center vertically; `-start`/
-   * `-end` suffixes align to an edge instead. Shorthand for
-   * `positioning.placement` (an explicit `positioning.placement` wins).
-   */
+  /** Shorthand for positioning.placement; an explicit positioning.placement wins. */
   placement?: TooltipPlacement;
   ref?: Ref<HTMLButtonElement>;
   triggerProps?: TooltipTriggerProps;
 }
 
-/**
- * Workbench tooltip. Chrome comes from the `tooltip` slot-recipe override in
- * `theme/recipes.ts`, so this wrapper only provides the trigger/portal
- * structure and the `content` convenience API.
- */
+/** Pass the same ids to Menu/Popover and Tooltip; competing trigger IDs leave the popup without an anchor. */
+export const useTooltipTriggerIds = (): { trigger: string } => {
+  const trigger = useId();
+
+  return useMemo(() => ({ trigger }), [trigger]);
+};
+
 export const Tooltip = (props: TooltipProps) => {
   const {
     showArrow = true,

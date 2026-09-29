@@ -1,3 +1,4 @@
+import { NO_HELD_ASSET_REFS } from '@workbench/canvas-engine/history/history';
 import { describe, expect, it, vi } from 'vitest';
 
 import { HistoryController } from './historyController';
@@ -5,8 +6,20 @@ import { HistoryController } from './historyController';
 describe('HistoryController', () => {
   it('owns history and trims it to the inactive byte budget', () => {
     const controller = new HistoryController({ activeByteBudget: 1_000, inactiveByteBudget: 100 });
-    controller.history.push({ bytes: 60, label: 'old', redo: () => undefined, undo: () => undefined });
-    controller.history.push({ bytes: 70, label: 'new', redo: () => undefined, undo: () => undefined });
+    controller.history.push({
+      bytes: 60,
+      heldAssetRefs: NO_HELD_ASSET_REFS,
+      label: 'old',
+      redo: () => undefined,
+      undo: () => undefined,
+    });
+    controller.history.push({
+      bytes: 70,
+      heldAssetRefs: NO_HELD_ASSET_REFS,
+      label: 'new',
+      redo: () => undefined,
+      undo: () => undefined,
+    });
 
     controller.cooldown();
 
@@ -32,7 +45,7 @@ describe('HistoryController', () => {
     });
     const undo = vi.fn();
     const redo = vi.fn();
-    controller.history.push({ bytes: 1, label: 'edit', redo, undo });
+    controller.history.push({ bytes: 1, heldAssetRefs: NO_HELD_ASSET_REFS, label: 'edit', redo, undo });
 
     controller.undo();
     expect(undo).toHaveBeenCalledOnce();
@@ -64,7 +77,13 @@ describe('HistoryController', () => {
     const controller = new HistoryController({ canRedoStore: canRedo, canUndoStore: canUndo });
 
     expect(() =>
-      controller.history.push({ bytes: 1, label: 'edit', redo: () => undefined, undo: () => undefined })
+      controller.history.push({
+        bytes: 1,
+        heldAssetRefs: NO_HELD_ASSET_REFS,
+        label: 'edit',
+        redo: () => undefined,
+        undo: () => undefined,
+      })
     ).not.toThrow();
     expect(canRedo.set).toHaveBeenCalled();
     controller.dispose();

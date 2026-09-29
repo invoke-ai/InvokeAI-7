@@ -66,13 +66,7 @@ describe('writeArchive / readArchive', () => {
     });
   });
 
-  /**
-   * `unzip` reports the damage this version happens to produce through its callback, which is
-   * wrapped. It is not contractually bound to: a throw out of its own walk would bypass that wrap
-   * and reach the caller as an fflate message, so the two ways a file can be unreadable would stop
-   * looking the same from outside. Forced rather than provoked, because provoking it means relying
-   * on which corruptions a given fflate release chooses to raise rather than report.
-   */
+  /** Force the synchronous unzip failure to cover both error channels deterministically. */
   it('reports damage fflate raises synchronously as not a project too', async () => {
     vi.resetModules();
     vi.doMock('fflate', () => ({
@@ -85,8 +79,7 @@ describe('writeArchive / readArchive', () => {
     try {
       const { readArchive: readWithThrowingUnzip } = await import('./archive');
 
-      // Matched by shape, not by class: resetting the registry gives this import its own copy of
-      // `./format`, so `InvkFormatError` here is a different constructor than the one above.
+      // Match errors structurally: reset module instances have different constructors.
       await expect(readWithThrowingUnzip(new Uint8Array([1, 2, 3]))).rejects.toMatchObject({
         name: 'InvkFormatError',
         reason: 'not-a-project',
@@ -124,13 +117,7 @@ describe('writeArchive / readArchive', () => {
   });
 });
 
-/**
- * The point of this guard is *when* it fires. `unzip` is fully buffered, so a
- * total measured over its result describes a bomb that has already landed; the
- * budget is what fflate consults per entry before inflating it. Testing it
- * directly is how the sizes involved stay expressible — proving the same thing
- * through `readArchive` would mean actually building a multi-gigabyte archive.
- */
+/** Exercise the pre-inflation budget without allocating multi-gigabyte fixtures. */
 describe('createExpansionBudget', () => {
   const entry = (name: string, originalSize: number, size = originalSize, compression = 8) => ({
     compression,

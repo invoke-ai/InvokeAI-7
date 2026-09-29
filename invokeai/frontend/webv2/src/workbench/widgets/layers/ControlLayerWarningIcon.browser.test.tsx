@@ -97,8 +97,7 @@ afterEach(async () => {
 
 describe('ControlLayerWarningIcon and the capability table', () => {
   it('flags nothing about a valid adapter while the table is still loading', async () => {
-    // Without the table every adapter kind reads as unsupported, which used to be shown as exactly
-    // that -- a warning on a healthy SD-1 ControlNet layer.
+    // Missing capabilities must not label a valid adapter unsupported.
     await render();
 
     expect(warning()).toBeNull();

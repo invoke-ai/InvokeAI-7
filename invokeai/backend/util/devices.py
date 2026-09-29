@@ -469,23 +469,33 @@ class TorchDevice:
         This is useful for models that require bfloat16 precision (e.g., Z-Image, Flux)
         but need to run on hardware that may not support bfloat16.
 
+        Asking costs no device memory. A device that cannot be reached at all still raises, as
+        it did before: that is a broken device, not a verdict on dtypes, and it belongs to the
+        caller.
+
         Args:
             device: The target device. If None, uses choose_torch_device().
 
         Returns:
-            torch.bfloat16 if supported, torch.float16 for CUDA without bfloat16 support,
-            or torch.float32 for CPU/MPS.
+            torch.bfloat16 if supported, torch.float16 for CUDA that rejects bfloat16, or
+            torch.float32 for any other device that rejects it (CPU, MPS, XPU).
         """
         device = device or cls.choose_torch_device()
         try:
-            # Test if bfloat16 is supported on this device
-            torch.tensor([1.0], dtype=torch.bfloat16, device=device)
-            return torch.bfloat16
+            # Zero elements, because this is a question about the dtype and not about memory. A
+            # backend rejects an unsupported dtype from a size-independent check it runs before
+            # it reaches its allocator, and an allocator is asked for nothing at all: torch's
+            # `empty_mps` gates bfloat16 on the macOS version above the allocate() call, and the
+            # MPS allocator skips the Metal buffer entirely for zero bytes. Probing with a real
+            # element instead put an allocation between a caller and its dtype -- 256 bytes that
+            # a full GPU can refuse, failing a run where no memory had been asked for yet.
+            torch.empty(0, dtype=torch.bfloat16, device=device)
         except TypeError:
             # bfloat16 not supported - fallback based on device type
             if device.type == "cuda":
                 return torch.float16
             return torch.float32
+        return torch.bfloat16
 
     @classmethod
     def choose_anima_inference_dtype(cls, device: Optional[torch.device] = None) -> torch.dtype:

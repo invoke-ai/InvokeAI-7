@@ -150,10 +150,8 @@ describe('mergeGalleryItemWindow', () => {
   });
 
   it('places an overlaid recent by its instant, not by timestamp shape, against backend items', () => {
-    // Backend rows carry SQLite `created_at` ("2026-08-29 13:01:20.649"); the
-    // overlay carries the queue's ISO `submittedAt`. The overlaid recent is
-    // older than every loaded backend row and absent from the window: with
-    // Newest first it must sort below them, not above them.
+    // SQLite and ISO timestamps must sort chronologically; an older recent cannot outrank newer backend rows by
+    // separator.
     const backendItems = [
       createBackendItem('newer.png', '2026-08-29 13:01:20.649'),
       createBackendItem('middle.png', '2026-08-29 12:00:00.000'),
@@ -182,8 +180,7 @@ describe('mergeGalleryItemWindow', () => {
   });
 
   it('places a completed batch image by its creation time, not the batch submission time', () => {
-    // Overlaid recents must sort by creation time, or each fresh completion
-    // lands below its already-listed siblings until the refetch catches up.
+    // Sort overlaid completions by creation time while awaiting backend refetch.
     const backendItems = [
       createBackendItem('batch-2.png', '2026-08-29 13:05:00.000'),
       createBackendItem('batch-1.png', '2026-08-29 13:04:00.000'),

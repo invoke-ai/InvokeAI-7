@@ -11,12 +11,6 @@ import { useTranslation } from 'react-i18next';
 import { areVideoValuesEqual } from './videoComparators';
 import { useVideoUi } from './VideoUiContext';
 
-/**
- * Widget-header action: reset every default-bearing setting (frames, fps,
- * target resolution, steps, CFG, accelerator state, aspect ratio, component
- * selections) back to the selected model's defaults. Prompts and conditioning
- * media are left untouched.
- */
 const sortLorasByKey = <T extends { model: { key: string } }>(loras: readonly T[]): T[] =>
   [...loras].sort((a, b) => a.model.key.localeCompare(b.model.key));
 
@@ -24,13 +18,9 @@ export const VideoHeaderActions = () => {
   const { t } = useTranslation();
   const { patchValues, rawValues } = useVideoUi();
   const models = useModelsSelector((snapshot) => snapshot.models);
-  // Defaults computed from an unloaded catalog would claim the accelerator
-  // pair is "not a default" and strip it as the reset — stay disabled until
-  // the catalog is authoritative.
+  // Wait for authoritative catalog data so reset cannot remove a valid accelerator pair.
   const modelsLoaded = useModelsSelector((snapshot) => snapshot.status) === 'loaded';
-  // Sync against the catalog exactly like the panel view does: computing from
-  // the raw store would judge (and reset to!) a phantom model the view no
-  // longer shows — e.g. one uninstalled while the panel was open.
+  // Match the panel's reconciled model; raw state may still reference an uninstalled model.
   const normalized = normalizeVideoWidgetValues(rawValues);
   const values = normalized && modelsLoaded ? syncVideoWidgetValuesWithModels(normalized, models) : normalized;
   const model = values?.model ?? null;

@@ -31,6 +31,7 @@ const setup = (layers: CanvasNodeContract[], selectedLayerId: string) => {
     type: 'replaceCanvasDocument',
   });
   const engine = createCanvasEngine({
+    ensureProjectOnServer: () => Promise.resolve(),
     backend: createTestStubRasterBackend(),
     imageResolver: () => Promise.resolve(new Blob()),
     mutationPort: createCanvasProjectMutationPort(store, projectId),

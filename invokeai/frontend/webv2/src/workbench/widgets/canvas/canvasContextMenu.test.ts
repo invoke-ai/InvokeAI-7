@@ -34,8 +34,6 @@ describe('resolveCanvasContextMenu', () => {
   });
 
   it('targets the selected layer regardless of where the pointer is', () => {
-    // The canvas never hit-tests for the menu: the layers panel is the sole
-    // authority on which layer is active, so the pointer position is irrelevant.
     const overOneCorner = resolveCanvasContextMenu({ ...baseOptions, selectedLayerId: 'layer-7' });
     const overAnother = resolveCanvasContextMenu({
       ...baseOptions,

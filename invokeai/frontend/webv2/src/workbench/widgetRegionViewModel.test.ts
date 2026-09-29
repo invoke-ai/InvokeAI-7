@@ -60,6 +60,53 @@ describe('widget region view model', () => {
     expect(getWidgetRegionItems(viewModel).map((item) => item.label)).toEqual(['Alpha', 'Beta']);
   });
 
+  it('keeps a floated widget in the rail at the slot it docks back to, outside the sortable list', () => {
+    const widgets = [createWidget({ id: 'a', label: 'A' }), createWidget({ id: 'b', label: 'B' })];
+    const widgetInstances = { 'a:1': createInstance('a:1', 'a'), 'b:1': createInstance('b:1', 'b') };
+    const viewModel = createWidgetRegionViewModel({
+      activeInstanceId: 'b:1',
+      floatingWidgets: {
+        'a:1': { returnIndex: 0, returnRegion: 'left' },
+        'b:1': { returnIndex: 0, returnRegion: 'right' },
+      },
+      instanceIds: ['b:1'],
+      region: 'left',
+      widgetInstances,
+      widgets,
+    });
+
+    expect(viewModel.placedItems.map((item) => [item.id, item.isFloating ?? false])).toEqual([
+      ['a:1', true],
+      ['b:1', false],
+    ]);
+    expect(viewModel.sortableInstanceIds).toEqual(['b:1']);
+    expect(viewModel.availableItems.map((item) => item.typeId)).toEqual([]);
+  });
+
+  it('orders floating slots by their return index and clamps indices the rail no longer has', () => {
+    const widgets = ['a', 'b', 'c', 'd', 'e'].map((id) => createWidget({ id, label: id.toUpperCase() }));
+    const widgetInstances = Object.fromEntries(
+      widgets.map((widget) => [widget.manifest.id, createInstance(widget.manifest.id, widget.manifest.id)])
+    );
+    const viewModel = createWidgetRegionViewModel({
+      floatingWidgets: {
+        // Later-sorted insertions must not displace earlier ones.
+        d: { returnIndex: 2, returnRegion: 'left' },
+        a: { returnIndex: 0, returnRegion: 'left' },
+        // Beyond the rail: appended, as docking would.
+        e: { returnIndex: 99, returnRegion: 'left' },
+        c: { returnRegion: 'left' },
+      },
+      instanceIds: ['b'],
+      region: 'left',
+      widgetInstances,
+      widgets,
+    });
+
+    expect(viewModel.placedItems.map((item) => item.id)).toEqual(['a', 'b', 'd', 'e', 'c']);
+    expect(viewModel.sortableInstanceIds).toEqual(['b']);
+  });
+
   it('filters already placed singleton widget types from available items', () => {
     const viewModel = createWidgetRegionViewModel({
       instanceIds: ['alpha'],

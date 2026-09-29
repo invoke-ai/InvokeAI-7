@@ -12,10 +12,8 @@ export interface StarterModelInstallSourceOptions {
 }
 
 /**
- * The curated metadata a starter carries: passed as the install `config` so the
- * model is registered with its known name/base/type instead of relying purely on
- * server-side probing (matches the legacy install path). Built per-model, so a
- * dependency gets its own metadata rather than the parent's.
+ * Pass each starter dependency's own curated config so installation preserves known identity instead of relying
+ * entirely on probing.
  */
 const buildStarterConfig = (model: StarterModel | Omit<StarterModel, 'dependencies'>): ModelRecordChanges => ({
   base: model.base,

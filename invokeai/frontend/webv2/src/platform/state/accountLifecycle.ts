@@ -1,9 +1,5 @@
 export interface AccountScope {
-  /**
-   * Stable backend identity for this authenticated lifetime. `null` represents
-   * the boot/login lifetime, which is still epoch-scoped so its async work can
-   * be invalidated before an account becomes active.
-   */
+  /** Identity is stable for this epoch; null boot/login lifetimes are also fenced against later account activation. */
   readonly accountId: string | null;
   /** Monotonically increasing identity lifetime, including same-user logins. */
   readonly epoch: number;
@@ -48,10 +44,8 @@ const createScope = (
 ): AccountScope => Object.freeze({ accountId, epoch, signal, storageSuffix });
 
 /**
- * Owns identity epochs and the account-resource registry behind one small
- * interface. Identity decides *when* a transition happens; the App composition
- * root supplies this lifecycle, and feature caches register independently so
- * lazy editor modules do not enter the Launchpad's eager dependency graph.
+ * Identity triggers transitions; App supplies lifecycle ownership and lazy features register cleanup without
+ * entering eager bundles.
  */
 export const createAccountLifecycle = (): AccountLifecycle => {
   let controller = new AbortController();
@@ -64,8 +58,7 @@ export const createAccountLifecycle = (): AccountLifecycle => {
       try {
         resource.clear();
       } catch {
-        // Privacy cleanup is fail-safe: one defective resource must not leave
-        // every later cache live. Resource-specific tests own diagnostics.
+        // Continue privacy cleanup after one resource fails so later caches cannot remain live.
       }
     }
   };
@@ -81,8 +74,7 @@ export const createAccountLifecycle = (): AccountLifecycle => {
   };
 
   const invalidate = (): AccountScope => {
-    // Rotate first. Any completion racing a clear observes a stale epoch and
-    // must become a no-op even if its transport cannot be aborted.
+    // Rotate the epoch before clearing resources so racing, non-abortable completions are already stale.
     rotateScope(null, '');
     clearResources();
 

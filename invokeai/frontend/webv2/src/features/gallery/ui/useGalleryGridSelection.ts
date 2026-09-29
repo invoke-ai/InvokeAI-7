@@ -35,14 +35,8 @@ const getGalleryItemRange = (
 };
 
 /**
- * Click semantics for grid tiles — plain select, shift-range, ctrl/cmd-toggle,
- * alt-compare — plus the context-menu target.
- *
- * Range selection can span beyond the loaded window, so it fetches the full
- * ordered name list. That is asynchronous, and the user can keep interacting
- * while it is in flight, hence the captured-context guard: a range only applies
- * if the account, the query filter, and the anchor are all still what they were
- * when the click happened.
+ * Async range selection fetches beyond the loaded window; apply only if account, filter, and anchor still match
+ * the captured context.
  */
 export const useGalleryGridSelection = () => {
   // `loadedItems` includes the strip, whose starred items the listing window

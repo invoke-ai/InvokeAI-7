@@ -7,15 +7,13 @@ import { system } from '@theme/system';
 import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { userEvent } from 'vitest/browser';
 
 import { AddModelsView } from './AddModelsView';
 
 /**
- * The Add Models box is local state seeded once from the models UI store, so a
- * requirement link elsewhere in the app can open this view already searching —
- * without that search outliving the view the way account-scoped store state
- * would. This suite owns exactly that handover; everything else the view does
- * is stubbed out.
+ * Verify one-shot external search handover into local input state; the seed must not become account-lived
+ * filtering.
  */
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
@@ -63,8 +61,10 @@ vi.mock('@features/models/data/api', async (importOriginal) => ({
   scanFolderForModels: vi.fn(),
 }));
 
+const installActions = vi.hoisted(() => ({ install: vi.fn(), installMany: vi.fn() }));
+
 vi.mock('./useInstallActions', () => ({
-  useInstallActions: () => ({ install: vi.fn(), installMany: vi.fn(), pendingSources: new Set() }),
+  useInstallActions: () => ({ ...installActions, pendingSources: new Set() }),
 }));
 
 vi.mock('@features/models/ui/useModelsNotify', () => ({
@@ -128,8 +128,7 @@ describe('AddModelsView search seed', () => {
     await unmount();
     await mount();
 
-    // A tab switch used to reset the box, and still does: the seed was
-    // one-shot, not account-lived state that keeps filtering hours later.
+    // Unmount resets local search; consumed seeds must not reappear on later visits.
     expect(searchBox()?.value).toBe('');
 
     await unmount();
@@ -140,6 +139,81 @@ describe('AddModelsView search seed', () => {
 
     expect(searchBox()?.value).toBe('');
 
+    await unmount();
+  });
+
+  it('sends FP8 storage with a pulled file only while it is ticked', async () => {
+    installActions.install.mockReset();
+    await mount();
+
+    const source = '/models/qwen_image.safetensors';
+    const pull = () => [...document.querySelectorAll('button')].find((button) => button.textContent === 'models.pull');
+
+    await act(() => userEvent.fill(searchBox()!, source));
+    await act(() => userEvent.click(pull()!));
+
+    // Unticked sends nothing, so identification can still turn FP8 storage on for an FP8 checkpoint.
+    expect(installActions.install).toHaveBeenLastCalledWith(
+      expect.objectContaining({ config: undefined, inplace: true, source })
+    );
+
+    const fp8Storage = [...document.querySelectorAll('label')].find(
+      (label) => label.textContent === 'models.installFp8Storage'
+    );
+    await act(() => userEvent.click(fp8Storage!));
+    await act(() => userEvent.click(pull()!));
+
+    expect(installActions.install).toHaveBeenLastCalledWith(
+      expect.objectContaining({ config: { default_settings: { fp8_storage: true } }, inplace: true, source })
+    );
+
+    await unmount();
+  });
+
+  it.each([
+    [
+      'folder scan results',
+      () =>
+        updateModelsUi({
+          scan: { path: '/models', results: [{ is_installed: false, path: '/models/qwen_image.safetensors' }] },
+        }),
+    ],
+    [
+      'a Hugging Face file list',
+      () =>
+        updateModelsUi({
+          hfLookup: {
+            repo: 'owner/repo',
+            urls: [
+              'https://huggingface.co/owner/repo/resolve/main/a.safetensors',
+              'https://huggingface.co/owner/repo/resolve/main/b.safetensors',
+            ],
+          },
+        }),
+    ],
+  ])('sends FP8 storage with every install from %s once it is ticked there', async (_source, openResults) => {
+    installActions.installMany.mockReset();
+    setModelsSnapshotForTests({ models: [], status: 'loaded' });
+    await mount();
+    await act(() => openResults());
+
+    // The results replace the hint row, so the option has to be on the results panel itself.
+    const fp8Storage = [...document.querySelectorAll('label')].find(
+      (label) => label.textContent === 'models.installFp8Storage'
+    );
+    await act(() => userEvent.click(fp8Storage!));
+    const installAll = [...document.querySelectorAll('button')].find(
+      (button) => button.textContent === 'models.installAllCount'
+    );
+    await act(() => userEvent.click(installAll!));
+
+    const [requests] = installActions.installMany.mock.lastCall as [{ config?: unknown }[]];
+    expect(requests.length).toBeGreaterThan(0);
+    for (const request of requests) {
+      expect(request.config).toEqual({ default_settings: { fp8_storage: true } });
+    }
+
+    await act(() => updateModelsUi({ hfLookup: null, scan: null }));
     await unmount();
   });
 

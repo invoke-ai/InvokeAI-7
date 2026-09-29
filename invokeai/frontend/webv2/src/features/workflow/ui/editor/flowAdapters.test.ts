@@ -337,7 +337,9 @@ describe('flowAdapters identity preservation', () => {
 
     expect(highlighted[0]?.animated).toBe(true);
     expect(highlighted[0]?.className).toBe('workflow-selected-node-edge');
-    expect(highlighted[0]?.zIndex).toBe(1000);
+    // Let xyflow elevate selected edges; extra z-index lets wide interaction paths intercept selected-node
+    // controls.
+    expect(highlighted[0]?.zIndex).toBeUndefined();
     expect(highlighted[0]?.style).toEqual({ strokeWidth: 2 });
     expect(toFlowEdges(doc, highlighted, 'default', new Set(['a']))[0]).toBe(highlighted[0]);
 
@@ -346,7 +348,6 @@ describe('flowAdapters identity preservation', () => {
     expect(cleared[0]).not.toBe(highlighted[0]);
     expect(cleared[0]?.animated).toBeUndefined();
     expect(cleared[0]?.className).toBeUndefined();
-    expect(cleared[0]?.zIndex).toBeUndefined();
     expect(cleared[0]?.style).toBeUndefined();
   });
 
@@ -356,7 +357,6 @@ describe('flowAdapters identity preservation', () => {
 
     expect(highlighted[0]?.animated).toBeUndefined();
     expect(highlighted[0]?.className).toBe('workflow-selected-node-edge');
-    expect(highlighted[0]?.zIndex).toBe(1000);
     expect(highlighted[0]?.style).toEqual({ strokeWidth: 2 });
   });
 });

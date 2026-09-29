@@ -47,8 +47,7 @@ const renderPair = async (size: '2xs' | 'xs' | 'sm'): Promise<{ button: HTMLElem
 };
 
 describe('segmentGroup slot recipe sizing', () => {
-  // Segment groups sit beside buttons in toolbars; a size name must mean the
-  // same outer height on both (Chakra's defaults run one size-name small).
+  // Same-size segment groups and buttons must have equal outer heights.
   (['2xs', 'xs', 'sm'] as const).forEach((size) => {
     it(`matches the ${size} button height`, async () => {
       const { button, segmentRoot } = await renderPair(size);

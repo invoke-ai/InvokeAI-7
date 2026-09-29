@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import type { InvocationTemplate } from './types';
+import type { FieldInputTemplate, InvocationTemplate, ProjectGraphState } from './types';
 
+import { compileProjectGraph } from './buildGraph';
 import {
   buildCurrentImageNode,
   buildConnectorNode,
@@ -11,7 +12,9 @@ import {
   getFormChildren,
   projectGraphReducer,
 } from './document';
-import { parseWorkflowJson, serializeWorkflowJson } from './workflowJson';
+import validForLoop from './fixtures/for-loop-valid.json';
+import { validateForLoopGraph } from './forLoops';
+import { parseWorkflowJson, serializeWorkflowJson, serializeWorkflowJsonForSubmission } from './workflowJson';
 
 const template: InvocationTemplate = {
   category: 'test',
@@ -98,6 +101,159 @@ describe('workflow JSON round-trip', () => {
     expect(serialized.meta).toEqual({ category: 'user', version: '3.0.0' });
     expect(serialized.exposedFields).toEqual([]);
     expect(serialized).toHaveProperty('form');
+  });
+
+  it('normalizes legacy cleared descriptions without changing other overrides during JSON reload', () => {
+    const cases = [
+      { description: undefined, descriptionOverride: true, expectedOverride: false },
+      { description: '', descriptionOverride: true, expectedOverride: false },
+      { description: 'Custom description', descriptionOverride: true, expectedOverride: true },
+      { description: 'Generated description', descriptionOverride: false, expectedOverride: false },
+    ] as const;
+
+    for (const { description, descriptionOverride, expectedOverride } of cases) {
+      const node = buildInvocationNode(template, { x: 0, y: 0 });
+      node.data.inputs.prompt = {
+        ...node.data.inputs.prompt!,
+        description,
+        descriptionOverride,
+      };
+      const document = projectGraphReducer(createProjectGraph('legacy-cleared-description'), {
+        node,
+        type: 'addNode',
+      });
+
+      const parsed = parseWorkflowJson(serializeWorkflowJson(document)).document;
+      const parsedNode = parsed.nodes[0];
+
+      expect(parsedNode?.type === 'invocation' && parsedNode.data.inputs.prompt).toMatchObject({
+        description,
+        descriptionOverride: expectedOverride,
+      });
+    }
+  });
+
+  it('persists dynamic input templates needed to preserve Call Saved Workflow values', () => {
+    const node = buildInvocationNode(template, { x: 0, y: 0 });
+    node.data.dynamicInputTemplates = { runtime: template.inputs.prompt! };
+    let doc = createProjectGraph('runtime-fields');
+    doc = projectGraphReducer(doc, { node, type: 'addNode' });
+
+    const serialized = serializeWorkflowJson(doc) as {
+      nodes: Array<{ data: Record<string, unknown> }>;
+    };
+
+    expect(serialized.nodes[0]?.data).toHaveProperty('dynamicInputTemplates');
+    expect(parseWorkflowJson(serialized).document.nodes[0]).toMatchObject({
+      data: { dynamicInputTemplates: { runtime: template.inputs.prompt } },
+    });
+  });
+
+  it('keeps Call Saved Workflow templates for image recall but strips other runtime templates', () => {
+    const node = buildInvocationNode(template, { x: 0, y: 0 });
+    node.data.dynamicInputTemplates = { runtime: template.inputs.prompt! };
+    const callNode = buildInvocationNode(template, { x: 1, y: 1 });
+    callNode.data = {
+      ...callNode.data,
+      dynamicInputTemplates: { runtime: template.inputs.prompt! },
+      type: 'call_saved_workflow',
+    };
+    let doc = createProjectGraph('submission-runtime-fields');
+    doc = projectGraphReducer(doc, { node, type: 'addNode' });
+    doc = projectGraphReducer(doc, { node: callNode, type: 'addNode' });
+
+    const serialized = serializeWorkflowJsonForSubmission(doc) as {
+      nodes: Array<{ data: Record<string, unknown> }>;
+    };
+
+    expect(
+      serialized.nodes.find((candidate) => candidate.data.type !== 'call_saved_workflow')?.data
+    ).not.toHaveProperty('dynamicInputTemplates');
+    expect(serialized.nodes.find((candidate) => candidate.data.type === 'call_saved_workflow')?.data).toHaveProperty(
+      'dynamicInputTemplates'
+    );
+  });
+
+  it('omits current-image nodes and their edges from embedded workflows', () => {
+    const invocation = buildInvocationNode(template, { x: 0, y: 0 });
+    const currentImage = buildCurrentImageNode({ x: 1, y: 1 });
+    let doc = createProjectGraph('submission-legacy-shape');
+    doc = projectGraphReducer(doc, { node: invocation, type: 'addNode' });
+    doc = projectGraphReducer(doc, { node: currentImage, type: 'addNode' });
+    doc.edges = [
+      {
+        id: 'current-image-edge',
+        source: currentImage.id,
+        sourceHandle: 'image',
+        target: invocation.id,
+        targetHandle: 'prompt',
+        type: 'loop_linkage',
+      },
+    ];
+
+    const serialized = serializeWorkflowJsonForSubmission(doc) as {
+      edges: Array<Record<string, unknown>>;
+      nodes: Array<Record<string, unknown>>;
+    };
+
+    expect(serialized.nodes.some((node) => node.type === 'current_image')).toBe(false);
+    expect(serialized.edges).toEqual([]);
+  });
+
+  it('preserves direct loop linkage when embedding a workflow for image recall', () => {
+    const doc: ProjectGraphState = {
+      ...createProjectGraph('embedded-loop'),
+      nodes: validForLoop.nodes as ProjectGraphState['nodes'],
+      edges: validForLoop.edges as ProjectGraphState['edges'],
+    };
+    expect(validateForLoopGraph(doc)).toBeNull();
+
+    const recalled = parseWorkflowJson(serializeWorkflowJsonForSubmission(doc)).document;
+
+    expect(recalled.edges.find((edge) => edge.id === 'linkage')?.type).toBe('loop_linkage');
+    expect(validateForLoopGraph(recalled)).toBeNull();
+    const compiled = compileProjectGraph(recalled, {
+      for: { ...template, type: 'for' },
+      for_return: { ...template, type: 'for_return' },
+      integer: { ...template, type: 'integer' },
+      workflow_return: { ...template, type: 'workflow_return' },
+    });
+    expect(compiled.backendGraph.edges).toContainEqual({
+      destination: { field: 'loop_linkage', node_id: 'return' },
+      source: { field: 'loop_linkage', node_id: 'for' },
+      type: 'loop_linkage',
+    });
+  });
+
+  it('round-trips internal BoardField dynamic templates for legacy readers', () => {
+    const node = buildInvocationNode(template, { x: 0, y: 0 });
+    const boardTemplate: FieldInputTemplate = {
+      ...template.inputs.prompt!,
+      default: undefined,
+      fieldKind: 'internal',
+      name: 'board',
+      title: 'Board',
+      type: { batch: false, cardinality: 'SINGLE', name: 'BoardField' },
+    };
+    node.data.dynamicInputTemplates = { board: boardTemplate };
+    const document = projectGraphReducer(createProjectGraph('legacy-dynamic-board'), {
+      node,
+      type: 'addNode',
+    });
+
+    const serialized = serializeWorkflowJson(document) as {
+      nodes: Array<{ data: { dynamicInputTemplates: Record<string, Record<string, unknown>> } }>;
+    };
+    const persisted = serialized.nodes[0]?.data.dynamicInputTemplates.board;
+
+    expect(persisted).toMatchObject({
+      fieldKind: 'internal',
+      type: { name: 'BoardField' },
+      uiHidden: false,
+    });
+    expect(parseWorkflowJson(serialized).document.nodes[0]).toMatchObject({
+      data: { dynamicInputTemplates: { board: boardTemplate } },
+    });
   });
 
   it('round-trips notes, current_image, and connector UI nodes', () => {
@@ -208,6 +364,50 @@ describe('parseWorkflowJson tolerance', () => {
       fieldName: 'prompt',
       nodeId: 'n1',
     });
+  });
+
+  it('does not merge stale exposed fields into an existing stored form', () => {
+    const { document, warnings } = parseWorkflowJson({
+      edges: [],
+      exposedFields: [
+        { fieldName: 'prompt', nodeId: 'n1' },
+        { fieldName: 'other', nodeId: 'n1' },
+      ],
+      form: {
+        elements: {
+          root: { data: { children: ['f1'], layout: 'column' }, id: 'root', type: 'container' },
+          f1: {
+            data: { fieldIdentifier: { fieldName: 'prompt', nodeId: 'n1' } },
+            id: 'f1',
+            parentId: 'root',
+            type: 'node-field',
+          },
+        },
+        rootElementId: 'root',
+      },
+      nodes: [
+        {
+          data: {
+            id: 'n1',
+            inputs: {
+              other: { label: '', name: 'other', value: 'world' },
+              prompt: { label: '', name: 'prompt', value: 'hi' },
+            },
+            type: 'prompt',
+          },
+          id: 'n1',
+          position: { x: 0, y: 0 },
+          type: 'invocation',
+        },
+      ],
+    });
+
+    expect(warnings).toEqual([]);
+    expect(
+      getFormChildren(document.form).map(
+        (element) => element.type === 'node-field' && element.data.fieldIdentifier.fieldName
+      )
+    ).toEqual(['prompt']);
   });
 
   it('preserves connector nodes and edges', () => {
@@ -332,5 +532,79 @@ describe('seed modes in workflow JSON', () => {
     const degraded = parseWorkflowJson(serialized).document.nodes[0];
 
     expect(degraded?.type === 'invocation' && degraded.data.inputs.prompt).not.toHaveProperty('seedMode');
+  });
+});
+
+describe('field label overrides', () => {
+  // Round-trip labelOverride through explicit parsing as well as cloned serialization.
+  it('round-trips an explicit label override', () => {
+    const node = buildInvocationNode(template, { x: 0, y: 0 });
+    let doc = createProjectGraph('label-override');
+
+    doc = projectGraphReducer(doc, { node, type: 'addNode' });
+    doc = projectGraphReducer(doc, {
+      fieldName: 'prompt',
+      label: 'My label',
+      nodeId: node.id,
+      type: 'setFieldLabel',
+    });
+
+    const reloaded = parseWorkflowJson(serializeWorkflowJson(doc)).document.nodes[0];
+
+    expect(reloaded?.type === 'invocation' ? reloaded.data.inputs.prompt : undefined).toMatchObject({
+      label: 'My label',
+      labelOverride: true,
+    });
+  });
+});
+
+describe('batch and generator nodes', () => {
+  it('keeps legacy generator values and batch group ids verbatim through a load and save', () => {
+    const generator = {
+      count: 3,
+      max: 1,
+      min: 0,
+      seed: null,
+      type: 'float_generator_random_distribution_uniform',
+      values: [0.2, 0.4, 0.6],
+    };
+    const { document, warnings } = parseWorkflowJson({
+      edges: [],
+      name: 'Batch',
+      nodes: [
+        {
+          data: {
+            id: 'g',
+            inputs: { generator: { label: '', name: 'generator', value: generator } },
+            type: 'float_generator',
+          },
+          id: 'g',
+          position: { x: 0, y: 0 },
+          type: 'invocation',
+        },
+        {
+          data: {
+            id: 'b',
+            inputs: {
+              batch_group_id: { label: '', name: 'batch_group_id', value: 'Group 2' },
+              floats: { label: '', name: 'floats', value: [1, 2] },
+            },
+            type: 'float_batch',
+          },
+          id: 'b',
+          position: { x: 0, y: 0 },
+          type: 'invocation',
+        },
+      ],
+      version: '1.0.0',
+    });
+    const serialized = serializeWorkflowJson(document) as {
+      nodes: Array<{ data: { inputs: Record<string, { value: unknown }> } }>;
+    };
+
+    expect(warnings).toEqual([]);
+    expect(serialized.nodes[0]?.data.inputs.generator?.value).toEqual(generator);
+    expect(serialized.nodes[1]?.data.inputs.batch_group_id?.value).toBe('Group 2');
+    expect(serialized.nodes[1]?.data.inputs.floats?.value).toEqual([1, 2]);
   });
 });

@@ -11,9 +11,9 @@ The failure has at least three candidate mechanisms that ordinary logs cannot te
    denoise or the tensor transfer) — the VAE is innocent.
 2. The VAE's cached weights are corrupt (a bad RAM->VRAM move, or a corrupted canonical CPU
    copy) — every decode fails until the model cache entry is dropped and reloaded.
-3. The weights and latents are clean but the decode *compute* produces NaN — the
-   allocator-state-dependent MIOpen conv3d failure class already seen on gfx1100 (the
-   HIP 7.2 decomposition heisenbug), plausibly surfaced by the multi-GPU policy of skipping
+3. The weights and latents are clean but the decode *compute* produces NaN — an
+   allocator-state-dependent kernel failure of the kind already seen on gfx1100 (the ROCm
+   fused-SDPA head-dim defect), plausibly surfaced by the multi-GPU policy of skipping
    every ``empty_cache`` while a peer device is mid-session: during an hours-long video
    generation the image GPU's allocator runs in a never-emptied, maximally-grown state.
 

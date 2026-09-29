@@ -1,12 +1,4 @@
-/**
- * React bindings for the engine's transient stores.
- *
- * `canvas-engine/engineStores.ts` deliberately ships React-free
- * (`useSyncExternalStore`-compatible) channels so the engine stays node-safe.
- * These hooks are the widget-side adapter — the one place React subscribes to
- * that engine-owned interaction state. Keeping the React import here (under
- * `widgets/`) preserves the engine's zero-React boundary.
- */
+/** Adapt engine-owned external stores to React here, preserving the engine's React-free boundary. */
 
 import type {
   BboxToolOptions,
@@ -44,11 +36,8 @@ const useCanvasInteractionState = <K extends keyof CanvasInteractionState>(
 };
 
 /**
- * Subscribes to a single layer's thumbnail version on `engine`, re-rendering
- * only when that layer's cached pixels change (the engine bumps the version on
- * every repaint / rasterize). Tolerates a `null` engine — before the engine
- * mounts the hook simply reports `undefined` and never subscribes — so the
- * layers panel can render fallback thumbnails without an attached engine.
+ * Subscribe only to one layer's thumbnail version; null engines return undefined without subscribing for fallback
+ * rendering.
  */
 export const useLayerThumbnailVersion = (
   engine: CanvasCoreStoreCapability | null,
@@ -155,12 +144,7 @@ export const useCanvasRasterContentEpoch = (engine: CanvasCoreStoreCapability | 
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 };
 
-/**
- * The brush tool's current options (size / color / opacity / pressure). Write
- * through `engine.interaction.set('brushOptions', ...)` directly — there is no reducer
- * mirror to dispatch through, so the options bar reads and writes this one
- * store.
- */
+/** Read/write brush options directly through engine.interaction; no reducer mirror exists. */
 export const useBrushOptions = (engine: CanvasCoreStoreCapability): BrushOptions =>
   useCanvasInteractionState(engine, 'brushOptions');
 

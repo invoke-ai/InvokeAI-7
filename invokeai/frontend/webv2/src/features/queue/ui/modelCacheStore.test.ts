@@ -61,7 +61,7 @@ describe('model cache stats helpers', () => {
 
   it('reports whether clear cache actually cleared models', () => {
     expect(getModelCacheClearToast({ bytes_freed: 1024, models_cleared: 2 }, t)).toEqual({
-      description: 'Cleared 2 cached models and freed 1.0 KB.',
+      description: 'Cleared 2 cached models and freed 1.0\u00a0KiB.',
       status: 'success',
       title: 'Model cache cleared',
     });

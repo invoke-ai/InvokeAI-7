@@ -1,12 +1,4 @@
-/**
- * Test-only helper: resolve every semantic color token to its FINAL literal value
- * (following `var(--chakra-colors-…)` references) for each workbench theme, straight
- * from `system.getTokenCss()`. This mirrors what the browser computes for a given
- * `<html data-theme=… class="dark|light">`, so it is the ground truth used by the
- * legacy-value gate in `system.test.ts`.
- *
- * Not imported by any app entry — excluded from the production bundle.
- */
+/** Resolve semantic CSS-variable chains per theme for token tests; keep this helper out of production imports. */
 
 type Block = Record<string, string>;
 type Layer = Record<string, Block>;
@@ -25,9 +17,10 @@ const dataSel = (id: string): string => `&:root[data-theme=${id}]`;
 export const THEME_SELECTORS: Record<string, string[]> = {
   classic: [DARK_SEL, BASE_SEL], // default theme: no [data-theme=classic] rule
   light: [dataSel('light'), LIGHT_SEL, BASE_SEL],
-  osakaJade: [dataSel('osakaJade'), DARK_SEL, BASE_SEL],
-  mono: [dataSel('mono'), DARK_SEL, BASE_SEL],
   ultradark: [dataSel('ultradark'), DARK_SEL, BASE_SEL],
+  mono: [dataSel('mono'), DARK_SEL, BASE_SEL],
+  osakaJade: [dataSel('osakaJade'), DARK_SEL, BASE_SEL],
+  catppuccinMocha: [dataSel('catppuccinMocha'), DARK_SEL, BASE_SEL],
 };
 
 export const THEMES = Object.keys(THEME_SELECTORS);

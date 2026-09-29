@@ -1,12 +1,6 @@
 /**
- * Workflow domain types.
- *
- * The project graph is a *document*: an editable node-and-edge workflow plus a
- * form describing its Linear UI. It compiles into the queue-facing
- * `GraphContract` only at invocation time, so queued snapshots stay immutable
- * while the document keeps evolving. The serialized shape stays compatible
- * with the legacy WorkflowV3 format so workflows round-trip between the v6
- * editor, the workflow library backend, and this workbench.
+ * Editable legacy-compatible workflow documents compile only at invocation time so queued GraphContract snapshots
+ * remain immutable.
  */
 
 import type { SeedMode } from '@platform/core/seed';
@@ -27,11 +21,7 @@ export interface FieldInputTemplate {
   description: string;
   type: FieldType;
   required: boolean;
-  /**
-   * `internal` marks a field the backend provides rather than the node author declaring it
-   * (`metadata`). It is a real, connectable input, but it is not part of the node's authored
-   * signature, so heuristics that pick "the" input for a node must skip it.
-   */
+  /** Internal inputs are backend-provided but connectable; skip them when guessing an authored primary input. */
   fieldKind: 'input' | 'internal';
   /** How the field receives data: only via edge, only direct value, or either. */
   input: 'connection' | 'direct' | 'any';
@@ -40,13 +30,19 @@ export interface FieldInputTemplate {
   uiOrder: number | null;
   uiComponent: 'slider' | 'textarea' | 'video-frame-index' | null;
   uiChoiceLabels: Record<string, string> | null;
-  /** Enum choices when the field is an EnumField. */
-  options: string[] | null;
+  /** Enum choices when the field is an EnumField. Values retain backend types. */
+  options: unknown[] | null;
   minimum: number | null;
   maximum: number | null;
   exclusiveMinimum: number | null;
   exclusiveMaximum: number | null;
   multipleOf: number | null;
+  /** Item-count bounds of a collection; absent on templates built before lists were editable. */
+  minItems?: number | null;
+  maxItems?: number | null;
+  /** String length bounds, applied per item for string collections. */
+  minLength?: number | null;
+  maxLength?: number | null;
   uiModelBase: string[] | null;
   uiModelFormat: string[] | null;
   uiModelType: string[] | null;
@@ -87,13 +83,13 @@ export interface XYPosition {
 export interface WorkflowFieldInstance {
   name: string;
   label: string;
+  /** True when the label was explicitly changed by the user rather than generated from a template. */
+  labelOverride?: boolean;
   /** User override of the template's field description (shown in the Linear UI). */
   description?: string;
-  /**
-   * How a seed input (`isSeedInputField`) moves between queued runs. Absent means
-   * fixed: what every document authored before seed modes did, and what a legacy
-   * reader hands back after stripping the key.
-   */
+  /** True when the description was explicitly changed by the user, including clearing it. */
+  descriptionOverride?: boolean;
+  /** Absent seedMode means fixed, including older documents and legacy readers that strip it. */
   seedMode?: SeedMode;
   value?: unknown;
 }
@@ -118,6 +114,10 @@ export interface WorkflowInvocationNodeData {
   useCache: boolean;
   nodePack: string;
   inputs: Record<string, WorkflowFieldInstance>;
+  /** Persisted templates for fields exposed by the selected saved workflow. */
+  dynamicInputTemplates?: Record<string, FieldInputTemplate>;
+  /** Runtime reconciliation state for the selected saved workflow. */
+  callSavedWorkflowStatus?: 'loading' | 'ready' | 'error';
 }
 
 export interface WorkflowInvocationNode {
@@ -250,14 +250,38 @@ export interface WorkflowMetadata {
 
 /** The project-owned workflow document. `version: 2` distinguishes it from the Phase-1 placeholder graph. */
 export interface ProjectGraphState extends WorkflowMetadata {
+  /** Identifies this project copy; a library template id never becomes a document id. */
   id: string;
   version: 2;
-  /** Backend workflow-library binding when the document was loaded from or saved to the library. */
-  libraryWorkflowId?: string;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
   form: WorkflowForm;
   updatedAt: string;
+}
+
+/**
+ * The library template a project workflow was opened from or last explicitly saved to. Kept beside the document,
+ * outside its edit history, so undoing an edit never undoes a save or restores an obsolete write target.
+ */
+export interface ProjectWorkflowSource {
+  libraryWorkflowId: string;
+  /** The template content revision loaded or last written; null when unknown (documents migrated from older schemas). */
+  revision: number | null;
+}
+
+/** The newest successful run's final output, owned by the project workflow that submitted it. */
+export interface ProjectWorkflowRunPreview {
+  imageName: string;
+  /** Submission instant; a newer submission wins over an older run that finishes later. */
+  submittedAt: string;
+  completedAt: string;
+}
+
+/** One workflow a project owns: its editable document plus metadata that is not part of graph editing. */
+export interface ProjectWorkflowEntry {
+  document: ProjectGraphState;
+  source?: ProjectWorkflowSource;
+  lastRun?: ProjectWorkflowRunPreview;
 }
 
 export interface InvocationTemplatesSnapshot {

@@ -1,11 +1,7 @@
 import type { QueueItemStatus, TerminalQueueItemStatus } from '@features/queue/core/types';
 import type { QueueStatusCountsDTO } from '@features/queue/data/serverTypes';
 
-/**
- * Typed contracts for the backend Socket.IO events webv2 consumes. Payload
- * shapes mirror the pydantic models in
- * `invokeai/app/services/events/events_common.py` (serialized as snake_case).
- */
+/** Mirror snake_case backend Socket.IO payload contracts from events_common.py. */
 
 export interface QueueItemEventBase {
   queue_id: string;
@@ -84,6 +80,10 @@ export interface InvocationEventBase extends QueueItemEventBase {
   session_id: string;
   /** The id of the executing invocation's source node — the editor's node id. */
   invocation_source_id: string;
+  parent_item_id?: number | null;
+  root_item_id?: number | null;
+  /** The visible parent Call Saved Workflow node for child execution events. */
+  workflow_call_parent_source_id?: string | null;
 }
 
 export interface InvocationStartedEvent extends InvocationEventBase {}
@@ -95,16 +95,11 @@ export interface InvocationProgressEvent extends InvocationEventBase {
   /** Intermittent denoising preview, when the invocation produces one. */
   image?: { width: number; height: number; dataURL: string } | null;
   /**
-   * Monotonic per queue item, when the backend sends it: a frame at or below a
-   * revision already shown is stale and dropped. Absent from today's socket
-   * events, which arrive in order; the reconnect snapshot carries it.
+   * Monotonic per queue item and session on image-bearing frames. Drop revisions at or below the latest accepted
+   * frame so live and reconnect replay cannot move preview backward.
    */
   revision?: number | null;
-  /**
-   * The accelerator running this session, e.g. `cuda:1` or `xpu:1` — null on CPU/MPS and in
-   * single-device mode. With `generation_devices` set (default `auto`) several
-   * sessions run at once, one per accelerator, so progress must be attributable.
-   */
+  /** Device identifies concurrent accelerator sessions; null denotes CPU/MPS or single-device mode. */
   device?: string | null;
 }
 
@@ -133,28 +128,13 @@ export interface BackendSocketEvents {
 export const isTerminalBackendStatus = (status: QueueItemStatus): status is TerminalQueueItemStatus =>
   status === 'completed' || status === 'failed' || status === 'canceled';
 
-/**
- * Queue items enqueued by webv2 carry the local queue item id in their origin
- * so that submissions survive a reload: on startup the backend queue is listed
- * and items are re-adopted by decoding their origin.
- */
+/** Encode local IDs in origins so reload reconciliation can re-adopt submitted backend items. */
 const QUEUE_ITEM_ORIGIN_PREFIX = 'webv2:';
 const PROJECT_QUEUE_ITEM_ORIGIN_PREFIX = 'webv2:p:';
 
 /**
- * The origin prefix for utility-queue items — small graphs (filter previews,
- * SAM, …) enqueued OUTSIDE any project's queue and awaited directly via
- * `socketHub.on` (see `canvas-engine/backend/utilityQueue.ts`).
- *
- * The whole point of a distinct prefix is result isolation (plan Risk 4): a
- * utility item must never be mistaken for a project queue item and routed into
- * staging or the gallery. `parseQueueItemOrigin` therefore returns `null` for it
- * — so `queueCoordinator.reconcile` and `isQueueItemReadModelInProject` never map a
- * utility backend item to a local project item, and `routeQueueItemResults`
- * (only ever invoked for coordinator-tracked project runs, which utility items
- * are never registered as) never sees it. The `util:` segment sits under the
- * shared `webv2:` namespace but is checked BEFORE the generic branch below, so
- * it is not misparsed as a bare (non-project) local queue item id.
+ * Utility origins isolate one-shot graphs from project adoption and result routing. Parse util before generic
+ * webv2 origins to prevent accidental local IDs.
  */
 const UTILITY_QUEUE_ITEM_ORIGIN_PREFIX = 'webv2:util:';
 
@@ -175,10 +155,7 @@ export const isUtilityQueueItemOrigin = (origin: string | null | undefined): boo
   origin?.startsWith(UTILITY_QUEUE_ITEM_ORIGIN_PREFIX) ?? false;
 
 export const parseQueueItemOrigin = (origin: string | null | undefined): string | null => {
-  // Utility items are intentionally invisible to project routing (Risk 4): they
-  // resolve to no local queue item, so nothing adopts them or routes their
-  // results. Checked first because `webv2:util:` also matches the generic
-  // `webv2:` branch below.
+  // Reject utility origins before the generic webv2 branch so project reconciliation cannot adopt them.
   if (isUtilityQueueItemOrigin(origin)) {
     return null;
   }

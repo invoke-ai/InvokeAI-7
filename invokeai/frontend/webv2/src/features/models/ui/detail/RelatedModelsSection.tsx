@@ -22,12 +22,6 @@ import { Link2OffIcon } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * Bidirectional "related models" links — e.g. attach the LoRAs and VAE that
- * pair well with a checkpoint so other surfaces can suggest them together.
- * One grouped, compatibility-filtered picker searches every linkable type at
- * once; linked models render as rows with an unlink action.
- */
 interface RelatedModelsSectionProps {
   model: Pick<ModelConfig, 'base' | 'key' | 'type'>;
   onError: (message: string) => void;

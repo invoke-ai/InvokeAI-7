@@ -102,8 +102,7 @@ export const ModelEditForm = ({
       items: formats.map((format) => ({ label: getModelFormatLabel(format), value: format })),
     });
   }, [model.format]);
-  // Reacts to base/type edits so the offered variants always match the
-  // combination being saved; an unknown current value stays selectable.
+  // Update variant choices with edited base/type while retaining unknown current values.
   const { variantCollection, variantOptions } = useMemo(() => {
     const options = getVariantOptionsFor(form.values.base, form.values.type);
     const withCurrent =

@@ -3,14 +3,8 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { settleAnimations } from './settleAnimations.testing';
 
 /**
- * The helper's whole job is to be awaited before an appearance assertion, so the two ways it
- * can fail are both silent: returning early leaves the flake it was written to remove, and
- * waiting on an animation that never ends hangs the run instead of failing it.
- *
- * The never-ending cases have no explicit timeout here on purpose — a regression surfaces as
- * this file's own test timeout, which names the case. A hand-rolled deadline would only trade
- * that for a wrong-reason failure whenever the machine stalls past it, which is the very class
- * of bug this helper exists to remove.
+ * Use the test runner's deadline for never-ending cases; extra timing thresholds introduce load-sensitive
+ * failures.
  */
 
 let host: HTMLDivElement | null = null;
@@ -26,10 +20,7 @@ const container = (): HTMLDivElement => (host ??= document.body.appendChild(docu
 const scripted = (options: KeyframeAnimationOptions): Animation =>
   container().appendChild(document.createElement('div')).animate(FADE, options);
 
-/**
- * A CSS-driven animation, which is what the components under test actually run and the only
- * kind whose `finished` rejects when its element is removed.
- */
+/** Use CSS animations so element removal rejects finished, matching real components. */
 const cssAnimated = (): { animation: Animation; element: HTMLDivElement } => {
   styles ??= document.head.appendChild(document.createElement('style'));
   styles.textContent = `@keyframes settle-probe { from { opacity: 0 } to { opacity: 1 } }
@@ -63,13 +54,10 @@ it('waits for a running animation in the subtree rather than returning on the fi
 });
 
 it('finds animations anywhere in the document when given no subtree, since backdrops and menus are portalled', async () => {
-  // Every call site relies on this default: what an audit reads is the composite, and the
-  // backdrop behind a dialog is a sibling of it rather than a descendant. The root element is
-  // included too, which is what distinguishes the document from `document.body`.
+  // Cover sibling backdrops and document-root animations, not only the audited subtree or body.
   const outside = detached.appendChild(document.createElement('div'));
   const sibling = outside.animate(FADE, { duration: 120, fill: 'forwards' });
-  // Deliberately the longest of the three: if the helper only walked `document.body`, it would
-  // return when the sibling finished and leave this one running.
+  // Keep the root animation longest so a body-only scan would return early.
   const root = document.documentElement.animate([{ opacity: 0.99 }, { opacity: 1 }], { duration: 400 });
 
   await settleAnimations();
@@ -78,8 +66,6 @@ it('finds animations anywhere in the document when given no subtree, since backd
 });
 
 it('skips an animation that repeats forever instead of hanging on one that never finishes', async () => {
-  // A spinner or shimmering skeleton in the audited page. Awaiting it would never return, so a
-  // regression here shows up as this test timing out rather than as a bad assertion.
   scripted({ duration: 50, iterations: Infinity });
   const finite = scripted({ duration: 50, fill: 'forwards' });
 
@@ -117,8 +103,7 @@ it('settles when an animating element is removed mid-flight, which rejects rathe
 
   element.remove();
 
-  // Resolving well inside the animation's own duration is the assertion: the helper returned
-  // because the animation was cancelled, not because it waited the fade out.
+  // Resolve before the fade duration to prove cancellation, not natural completion, settled the wait.
   await expect(settled).resolves.toBeUndefined();
   await rejection;
 });

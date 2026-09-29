@@ -1,9 +1,10 @@
 /* oxlint-disable react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-object-as-prop */
 import type { GalleryImageItem, GalleryVideoItem } from '@features/gallery';
+import type { QueueProgressSession } from '@features/queue/contracts';
 import type * as queueDevicesModule from '@features/queue/devices';
 import type { ImageActions } from '@workbench/image-actions';
 
-import { Box, ChakraProvider, Text } from '@chakra-ui/react';
+import { Box, ChakraProvider } from '@chakra-ui/react';
 import { DndContext, PointerSensor, useDndMonitor, useSensor, useSensors, type DragStartEvent } from '@dnd-kit/core';
 import { system } from '@theme/system';
 import { createInstance } from 'i18next';
@@ -11,11 +12,10 @@ import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { page } from 'vitest/browser';
 
 import { PreviewActionStrip } from './PreviewActionStrip';
 import { PreviewFilmstrip } from './PreviewFilmstrip';
-import { PreviewFooter } from './PreviewFooter';
-import { LivePreviewTile } from './PreviewWidgetView';
 
 const sharedImage: GalleryImageItem = {
   boardId: 'none',
@@ -95,15 +95,27 @@ void i18n.use(initReactI18next).init({
       translation: {
         common: { countOfTotal: '{{count}} of {{total}}', edit: 'Edit', generating: 'Generating' },
         widgets: {
+          canvas: { import: { control: 'Control Layer', raster: 'Raster Layer' } },
+          gallery: {
+            progressPreparing: 'Preparing',
+            progressQueued: 'Queued',
+            progressSession: '{{name}} {{index}}/{{total}}',
+            progressSettling: 'Finishing',
+          },
           preview: {
             copyCurrentFrame: 'Copy Current Frame',
+            details: 'Details',
             editOnCanvas: 'Edit on Canvas',
             framesPerSecond: '{{count}} fps',
+            imageActions: 'Image actions',
             itemCount_one: '{{count}} item',
             itemCount_other: '{{count}} items',
-            nextItemInBoard: 'Next item in board',
-            previousItemInBoard: 'Previous item in board',
-            videoDetails: 'Video Details',
+            selectForCompare: 'Select for Compare',
+            sendToCanvas: 'Send to Canvas',
+            starImage: 'Star image',
+            starVideo: 'Star video',
+            unstarImage: 'Unstar image',
+            unstarVideo: 'Unstar video',
             videoDuration: 'Duration {{duration}}',
           },
           queue: {
@@ -232,10 +244,7 @@ describe('PreviewFilmstrip mixed media', () => {
     const viewportCenterY = viewportRect.top + viewportRect.height / 2;
     const thumbCenterY = thumbRect.top + thumbRect.height / 2;
 
-    // Without the Scrollable `contentProps={{ h: 'full' }}` fix, the content
-    // wrapper shrinks to the thumb row's own height and the row sticks to
-    // the viewport's top edge instead of centering in it — a multi-pixel
-    // offset for the "full" density's 60px strip / 48px thumb combination.
+    // Fill the ScrollArea content height so thumbnails center vertically within the strip.
     expect(Math.abs(thumbCenterY - viewportCenterY)).toBeLessThan(1);
   });
 
@@ -266,6 +275,38 @@ describe('PreviewFilmstrip mixed media', () => {
     await interact(() => videoButton?.click());
 
     expect(onSelect).toHaveBeenCalledWith(sharedVideo);
+  });
+
+  it('opens the image context menu for a thumb and arms a comparison on alt-click', async () => {
+    const onSelect = vi.fn();
+    const onCompare = vi.fn();
+    const onContextMenu = vi.fn();
+
+    await render(
+      <DndContext>
+        <PreviewFilmstrip
+          density="full"
+          items={[sharedImage, sharedVideo]}
+          selectedItemKey="video:shared"
+          onCompare={onCompare}
+          onContextMenu={onContextMenu}
+          onSelect={onSelect}
+        />
+      </DndContext>
+    );
+    const imageButton = host!.querySelector<HTMLButtonElement>('[aria-label="shared"]')!;
+
+    const contextEvent = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 50 });
+    await interact(() => imageButton.dispatchEvent(contextEvent));
+    expect(contextEvent.defaultPrevented).toBe(true);
+    expect(onContextMenu).toHaveBeenCalledExactlyOnceWith(sharedImage, 40, 50);
+
+    await interact(() => imageButton.dispatchEvent(new MouseEvent('click', { altKey: true, bubbles: true })));
+    expect(onCompare).toHaveBeenCalledExactlyOnceWith(sharedImage);
+    expect(onSelect).not.toHaveBeenCalled();
+
+    await interact(() => imageButton.click());
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith(sharedImage);
   });
 
   it('drags a video poster with a qualified filmstrip id and video ref payload', async () => {
@@ -318,80 +359,13 @@ describe('PreviewFilmstrip mixed media', () => {
   });
 });
 
-describe('Preview mixed media footer and actions', () => {
-  it('uses the readable muted foreground for compact image and video footer text', async () => {
-    for (const item of [sharedImage, sharedVideo]) {
-      await render(
-        <>
-          <Text color="fg.muted" data-testid="expected-muted">
-            Expected muted
-          </Text>
-          <PreviewFooter
-            boardItemCount={3}
-            isLoadingBoard={false}
-            isMetadataOpen={false}
-            media={{ actionImage: null, actions: {} as ImageActions, item, kind: 'item' }}
-            selectedIndex={1}
-            onNext={() => undefined}
-            onPrevious={() => undefined}
-            onToggleMetadata={() => undefined}
-          />
-        </>
-      );
-
-      const position = Array.from(host!.querySelectorAll<HTMLElement>('p')).find((element) =>
-        element.textContent?.includes('2 of 3')
-      );
-      const dimensions = Array.from(host!.querySelectorAll<HTMLElement>('p')).find((element) =>
-        element.textContent?.includes(`${item.width} × ${item.height}`)
-      );
-      const details = host!.querySelector<HTMLElement>('button[aria-expanded="false"]');
-      const mutedColor = getComputedStyle(host!.querySelector<HTMLElement>('[data-testid="expected-muted"]')!).color;
-
-      expect(getComputedStyle(position!).color).toBe(mutedColor);
-      expect(getComputedStyle(dimensions!).color).toBe(mutedColor);
-      expect(getComputedStyle(details!).color).toBe(mutedColor);
-    }
-  });
-
-  it('shows mixed position, dimensions, duration, and localized fps with tabular numerals', async () => {
-    await render(
-      <PreviewFooter
-        boardItemCount={3}
-        isLoadingBoard={false}
-        isMetadataOpen={false}
-        media={{ actionImage: null, actions: {} as ImageActions, item: sharedVideo, kind: 'item' }}
-        selectedIndex={1}
-        onNext={() => undefined}
-        onPrevious={() => undefined}
-        onToggleMetadata={() => undefined}
-      />
-    );
-
-    expect(host?.textContent).toContain('2 of 3');
-    expect(host?.textContent).toContain('1920 × 1080');
-    expect(host?.textContent).toContain('Duration 1:06');
-    expect(host?.textContent).toContain('23.976 fps');
-
-    const status = Array.from(host!.querySelectorAll<HTMLElement>('p')).find((element) =>
-      element.textContent?.includes('1920 × 1080')
-    );
-    const position = Array.from(host!.querySelectorAll<HTMLElement>('p')).find((element) =>
-      element.textContent?.includes('2 of 3')
-    );
-    expect(status ? getComputedStyle(status).fontVariantNumeric : '').toContain('tabular-nums');
-    expect(position ? getComputedStyle(position).fontVariantNumeric : '').toContain('tabular-nums');
-    expect(host?.querySelector('[aria-label="Previous item in board"]')).not.toBeNull();
-    expect(host?.querySelector('[aria-label="Next item in board"]')).not.toBeNull();
-  });
-
-  it('keeps common video actions, adds Preview-only frame/details actions, and hides image-only actions', async () => {
+describe('Preview mixed media actions', () => {
+  it('keeps common video actions, adds the Preview-only frame copy, and hides image-only actions', async () => {
     const actions = {
       downloadItem: vi.fn(() => Promise.resolve()),
       setItemsStarred: vi.fn(() => Promise.resolve()),
     } as unknown as ImageActions;
     const onCopyCurrentFrame = vi.fn();
-    const onOpenDetails = vi.fn();
 
     await render(
       <PreviewActionStrip
@@ -400,7 +374,6 @@ describe('Preview mixed media footer and actions', () => {
         isVideoFrameCopyAvailable={false}
         item={sharedVideo}
         onCopyCurrentFrame={onCopyCurrentFrame}
-        onOpenDetails={onOpenDetails}
         onOpenMenu={() => undefined}
       />
     );
@@ -411,17 +384,15 @@ describe('Preview mixed media footer and actions', () => {
     expect(host?.querySelector('[aria-label="Edit on Canvas"]')).toBeNull();
 
     const copyFrame = host?.querySelector<HTMLButtonElement>('[aria-label="Copy Current Frame"]');
-    const details = host?.querySelector<HTMLButtonElement>('[aria-label="Video Details"]');
     const star = host?.querySelector<HTMLButtonElement>('[aria-label="Unstar video"]');
     expect(copyFrame).not.toBeNull();
     expect(copyFrame?.disabled).toBe(true);
-    expect(details).not.toBeNull();
+    // Details lives beside the header toggles now, not in the strip.
+    expect(host?.querySelector('[aria-label="Details"]')).toBeNull();
     expect(star).not.toBeNull();
 
-    await interact(() => details?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })));
     await interact(() => star?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })));
 
-    expect(onOpenDetails).toHaveBeenCalledOnce();
     expect(onCopyCurrentFrame).not.toHaveBeenCalled();
     expect(actions.setItemsStarred).toHaveBeenCalledWith([{ kind: 'video', name: 'shared' }], false);
 
@@ -432,7 +403,6 @@ describe('Preview mixed media footer and actions', () => {
         isVideoFrameCopyAvailable
         item={sharedVideo}
         onCopyCurrentFrame={onCopyCurrentFrame}
-        onOpenDetails={onOpenDetails}
         onOpenMenu={() => undefined}
       />
     );
@@ -443,7 +413,7 @@ describe('Preview mixed media footer and actions', () => {
     expect(onCopyCurrentFrame).toHaveBeenCalledOnce();
   });
 
-  it('sends an image to the canvas as a raster layer', async () => {
+  it('opens Edit onto the canvas layer destinations and sends the image to the chosen one', async () => {
     const actions = {
       copyImage: vi.fn(() => Promise.resolve()),
       downloadItem: vi.fn(() => Promise.resolve()),
@@ -462,12 +432,13 @@ describe('Preview mixed media footer and actions', () => {
     expect(host?.querySelector('button')).toBe(editOnCanvas);
     expect(editOnCanvas?.textContent).toContain('Edit');
     expect(host?.querySelector('[aria-label="Copy Current Frame"]')).toBeNull();
-    await interact(() => editOnCanvas?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })));
-    expect(actions.sendToCanvas).toHaveBeenCalledWith([expect.objectContaining({ imageName: 'shared' })], 'raster');
+
+    await page.getByRole('button', { name: 'Edit on Canvas' }).click();
+    await expect.element(page.getByRole('menuitem', { name: 'Raster Layer' })).toBeVisible();
+    await page.getByRole('menuitem', { name: 'Control Layer' }).click();
+    expect(actions.sendToCanvas).toHaveBeenCalledWith([expect.objectContaining({ imageName: 'shared' })], 'control');
   });
 
-  // Both remain one click away in the dropdown's quick row, which is why they
-  // left the strip.
   it('leaves copy and download to the image-actions dropdown', async () => {
     const actions = {
       copyImage: vi.fn(() => Promise.resolve()),
@@ -487,81 +458,180 @@ describe('Preview mixed media footer and actions', () => {
   });
 });
 
-describe('Multi-session live preview tiles', () => {
-  const placeholder = {
-    backendItemId: 1,
-    boardId: 'none',
-    label: 'Generate',
-    sourceId: 'generate' as const,
-    itemCount: 1,
-    state: 'running' as const,
+describe('PreviewFilmstrip live sessions', () => {
+  const session = (id: string, state: QueueProgressSession['state'], backendItemId = 1): QueueProgressSession => ({
+    backendItemId,
     height: 512,
-    id: 'queue-1:0',
-    itemIndex: 0,
+    id,
+    itemCount: 2,
+    itemIndex: Number(id.split(':')[1]),
+    label: 'Generate',
     queueItemId: 'queue-1',
+    sourceId: 'generate',
+    state,
     width: 512,
-  };
+  });
 
-  const renderTile = async () => {
+  it('leads the strip with one thumb per slot, naming device and progress, and follows a running one on click', async () => {
+    mocks.itemProgress = { device: 'cuda:1', percentage: 0.4 };
+    mocks.deviceLabel = { index: 1 };
+    const onFollowSession = vi.fn();
+    const onUnpinSession = vi.fn();
+
+    // A single board item would hide the strip; the live sessions earn it.
     await render(
       <DndContext>
-        <LivePreviewTile placeholder={placeholder} shouldAntialiasProgressImage={false} />
+        <PreviewFilmstrip
+          density="full"
+          followedSessionId="queue-1:1"
+          items={[sharedImage]}
+          selectedItemKey={null}
+          sessions={[session('queue-1:1', 'running'), session('queue-1:2', 'queued', 2)]}
+          onFollowSession={onFollowSession}
+          onSelect={() => undefined}
+          onUnpinSession={onUnpinSession}
+        />
       </DndContext>
     );
 
-    return Array.from(host!.querySelectorAll<HTMLElement>('p')).map((element) => element.textContent ?? '');
-  };
+    const thumbs = [...host!.querySelectorAll<HTMLButtonElement>('[data-preview-live-thumb]')];
+    expect(thumbs.map((thumb) => thumb.getAttribute('aria-label'))).toEqual([
+      'Generate 1/2 · GPU 1 · 40%',
+      'Generate 2/2 · GPU 1 · Queued',
+    ]);
+    // Live thumbs come first; the item thumb follows them.
+    expect(host!.querySelector('button')).toBe(thumbs[0]);
+    expect(thumbs[0]?.getAttribute('aria-current')).toBe('true');
+    expect(thumbs[1]?.getAttribute('aria-current')).toBeNull();
+    expect(thumbs[1]?.getAttribute('aria-disabled')).toBe('true');
 
-  it('reports percent from the footer when no device label is available', async () => {
-    mocks.itemProgress = { device: null, percentage: 0.4 };
-    mocks.deviceLabel = null;
-
-    const footerText = await renderTile();
-
-    expect(footerText).toContain('40%');
+    await interact(() => thumbs[1]?.click());
+    expect(onFollowSession).not.toHaveBeenCalled();
+    await interact(() => thumbs[0]?.click());
+    expect(onFollowSession).toHaveBeenCalledExactlyOnceWith('queue-1:1');
+    expect(onUnpinSession).not.toHaveBeenCalled();
   });
 
-  it('names the device alongside percent once the label resolves', async () => {
-    mocks.itemProgress = { device: 'cuda:1', percentage: 0.4 };
-    mocks.deviceLabel = { index: 1 };
-
-    const footerText = await renderTile();
-
-    expect(footerText).toContain('GPU 1');
-    expect(footerText).toContain('40%');
-  });
-
-  it('still declares itself live before progress is quantified', async () => {
-    // A silent tile reads as a stuck one when several sessions race, so the
-    // footer says "Generating" rather than going blank.
+  it('reads as a pressed toggle while pinned and unpins on the next click', async () => {
     mocks.itemProgress = { device: null, percentage: null };
     mocks.deviceLabel = null;
-
-    const footerText = await renderTile();
-
-    expect(footerText).toContain('Generating');
-  });
-
-  it('carries no caption over the image itself', async () => {
-    // The frame must be indistinguishable from a finished item's, so that
-    // nothing moves at the moment denoising ends.
-    mocks.itemProgress = { device: 'cuda:1', percentage: 0.4 };
-    mocks.deviceLabel = { index: 1 };
+    const onFollowSession = vi.fn();
+    const onUnpinSession = vi.fn();
 
     await render(
       <DndContext>
-        <LivePreviewTile placeholder={placeholder} shouldAntialiasProgressImage={false} />
+        <PreviewFilmstrip
+          density="compact"
+          followedSessionId="queue-1:1"
+          isSessionPinned
+          items={[]}
+          selectedItemKey={null}
+          sessions={[session('queue-1:1', 'running'), session('queue-1:2', 'settling', 2)]}
+          onFollowSession={onFollowSession}
+          onSelect={() => undefined}
+          onUnpinSession={onUnpinSession}
+        />
       </DndContext>
     );
 
-    const image = host!.querySelector('img');
-    const captionInsideFrame = image?.closest('div')?.querySelector('p, span');
+    const [pinned, settling] = [...host!.querySelectorAll<HTMLButtonElement>('[data-preview-live-thumb]')];
+    // A silent thumb reads as a stuck one, so it says it is preparing.
+    expect(pinned?.getAttribute('aria-label')).toBe('Generate 1/2 · Preparing');
+    expect(pinned?.getAttribute('aria-pressed')).toBe('true');
+    // The pin shows in place of the progress ring, so the next click reads as "unpin".
+    expect(pinned?.hasAttribute('data-preview-live-pinned')).toBe(true);
+    expect(pinned?.querySelector('[data-scope="progress-circle"]')).toBeNull();
+    expect(settling?.hasAttribute('data-preview-live-pinned')).toBe(false);
+    expect(settling?.getAttribute('aria-label')).toBe('Generate 2/2 · Finishing');
+    expect(settling?.getAttribute('aria-pressed')).toBeNull();
 
-    expect(image).not.toBeNull();
-    expect(captionInsideFrame).toBeNull();
+    await interact(() => pinned?.click());
+    expect(onUnpinSession).toHaveBeenCalledOnce();
+    expect(onFollowSession).not.toHaveBeenCalled();
+  });
+
+  it('earns the strip for a lone item only while a session is live', async () => {
+    mocks.itemProgress = null;
+    mocks.deviceLabel = null;
+    const strip = () => host!.querySelector('[data-preview-filmstrip]');
+
+    await render(
+      <DndContext>
+        <PreviewFilmstrip density="full" items={[sharedImage]} selectedItemKey={null} onSelect={() => undefined} />
+      </DndContext>
+    );
+    expect(strip()).toBeNull();
+
+    await render(
+      <DndContext>
+        <PreviewFilmstrip
+          density="full"
+          items={[sharedImage]}
+          selectedItemKey={null}
+          sessions={[session('queue-1:1', 'running')]}
+          onSelect={() => undefined}
+        />
+      </DndContext>
+    );
+    expect(strip()).not.toBeNull();
+  });
+
+  it('hands focus back to the preview region when the focused live thumb finishes', async () => {
+    mocks.itemProgress = { device: null, percentage: 0.5 };
+    mocks.deviceLabel = null;
+    const strip = (sessions: QueueProgressSession[]) => (
+      // The preview's navigation boundary is a focusable region too.
+      // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+      <div role="region" tabIndex={0} data-testid="preview-region">
+        <DndContext>
+          <PreviewFilmstrip
+            density="full"
+            items={[sharedImage, sharedVideo]}
+            selectedItemKey={null}
+            sessions={sessions}
+            onSelect={() => undefined}
+          />
+        </DndContext>
+      </div>
+    );
+
+    await render(strip([session('queue-1:1', 'running')]));
+    const thumb = host!.querySelector<HTMLButtonElement>('[data-preview-live-thumb]')!;
+    await interact(() => thumb.focus());
+    expect(document.activeElement).toBe(thumb);
+
+    await render(strip([]));
+    await interact(() => undefined);
+    expect(document.activeElement).toBe(host!.querySelector('[data-testid="preview-region"]'));
+  });
+
+  it('keeps focus on a thumb that becomes the followed one', async () => {
+    mocks.itemProgress = { device: null, percentage: 0.5 };
+    mocks.deviceLabel = null;
+    const strip = (followedSessionId: string | null) => (
+      // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+      <div role="region" tabIndex={0}>
+        <DndContext>
+          <PreviewFilmstrip
+            density="full"
+            followedSessionId={followedSessionId}
+            items={[]}
+            selectedItemKey={null}
+            sessions={[session('queue-1:1', 'running'), session('queue-1:2', 'running', 2)]}
+            onSelect={() => undefined}
+          />
+        </DndContext>
+      </div>
+    );
+
+    await render(strip('queue-1:1'));
+    const second = host!.querySelector<HTMLButtonElement>('[data-preview-live-thumb="queue-1:2"]')!;
+    await interact(() => second.focus());
+
+    // The click that follows it re-renders it as current; focus must stay put.
+    await render(strip('queue-1:2'));
+    await interact(() => undefined);
+    expect(document.activeElement).toBe(second);
+    expect(second.getAttribute('aria-current')).toBe('true');
   });
 });
-
-vi.mock('./livePreviewFollow', () => ({
-  useLivePreviewFollow: () => ({ sessions: [], pinnedSessionId: null, pin: vi.fn(), showAll: vi.fn() }),
-}));

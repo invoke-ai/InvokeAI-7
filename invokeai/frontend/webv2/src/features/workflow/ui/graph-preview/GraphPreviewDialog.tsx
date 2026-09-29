@@ -25,11 +25,7 @@ interface GraphPreviewDialogProps {
   /** Hides the footer Invoke button only — Copy JSON and the Open-as menu stay. For sources with no invocation route (e.g. a library entry, previewed before it's ever opened into a project). */
   hideInvoke?: boolean;
   onOpenChange: (isOpen: boolean) => void;
-  /**
-   * Fires once the close transition has finished playing. Hosts that mount this
-   * dialog conditionally must drop the mount here rather than the moment
-   * `isOpen` goes false, or the exit animation never gets to run.
-   */
+  /** Conditional hosts must unmount after close completion so exit animation can run. */
   onExitComplete?: () => void;
 }
 
@@ -98,8 +94,7 @@ export const GraphPreviewDialog = ({
   const graph = source.graph;
   const selectedNode = graph?.nodes.find((node) => node.id === selectedNodeId) ?? null;
 
-  // Every path that can close the dialog routes through this, so the
-  // selection never survives into the next time it's opened.
+  // Reset selection on every close path so reopening starts clean.
   const closeAndReset = useCallback(
     (open: boolean) => {
       if (!open) {
@@ -122,11 +117,7 @@ export const GraphPreviewDialog = ({
     });
   }, [graphPreview, closeAndReset, sourceId]);
 
-  // Consumed by `handleFlowInit` the next time the flow mounts. Set by
-  // `selectAndReveal` when it fires while the flow isn't the visible pane —
-  // `flowInstanceRef` still points at the *previous* mount's (destroyed)
-  // instance until then, so fitting it immediately would no-op on a dead
-  // instance instead of the one that's about to render.
+  // Queue reveals for the next flow initialization; the previous mount's instance may already be destroyed.
   const pendingRevealNodeIdRef = useRef<string | null>(null);
 
   const handleFlowInit = useCallback((instance: ReactFlowInstance) => {
@@ -146,13 +137,7 @@ export const GraphPreviewDialog = ({
     closeAndReset(false);
   }, [graphPreview, sourceId, closeAndReset]);
 
-  // Selects a node and brings it into view. List rows and the notice banner's
-  // "show node" link both switch to graph mode so the selection is always
-  // visible after they fire — but if the flow isn't the mounted pane right
-  // now (`mode` is still 'list'/'json' at call time), setting `mode` below
-  // only *starts* the remount; the fresh instance doesn't exist until
-  // `handleFlowInit` runs next render. Stash the id for that instead of
-  // fitting a stale/dead instance.
+  // Switching from list/JSON starts a flow remount; defer fitView until its fresh instance initializes.
   const selectAndReveal = useCallback(
     (nodeId: string) => {
       setSelectedNodeId(nodeId);
@@ -183,10 +168,7 @@ export const GraphPreviewDialog = ({
           clearTimeout(copyResetTimerRef.current);
         }
 
-        // Deliberately not a `useEffect` cleanup (unlike `JsonPreview`'s
-        // equivalent timer) — the no-useEffect rule keeps this in the
-        // handler, and a `setHasCopied` that fires after unmount is a no-op
-        // in React 18+, not a leak.
+        // Keep copy-feedback timing in the event handler; a post-unmount state update is ignored.
         copyResetTimerRef.current = setTimeout(() => setHasCopied(false), COPY_RESET_DELAY_MS);
       })
       .catch(() => toaster.create({ title: t('graphPreview.copyFailed'), type: 'error' }));
@@ -204,10 +186,6 @@ export const GraphPreviewDialog = ({
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>
-          {/* A graph reads left-to-right, so the dialog is landscape: it takes
-              the width it can get and only as much height as that shape wants,
-              instead of the near-full-height column an 80vh-first sizing gave
-              it on tall displays. */}
           <Dialog.Content h="min(46rem, 85vh)" maxH="85vh" maxW="min(72rem, calc(100vw - 4rem))">
             <Dialog.Header alignItems="center" flexDirection="row" justifyContent="space-between">
               <Stack gap="0.5" minW="0">

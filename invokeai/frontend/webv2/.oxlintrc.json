@@ -33,13 +33,6 @@
     "radix": "error",
     "no-restricted-exports": "error",
 
-    // "eslint/complexity": [
-    //   "error",
-    //   {
-    //     "max": 3
-    //   }
-    // ],
-
     "react/jsx-curly-brace-presence": [
       "error",
       {
@@ -53,13 +46,8 @@
     "react/jsx-no-useless-fragment": "error",
     "react/exhaustive-deps": "error",
 
-    // React Compiler diagnostics, split per category since oxlint 1.79.
-    // Left off: `todo` (dynamic import / try-finally merely skip optimization),
-    // `rule-suppression` (would flag every suppression below),
-    // `exhaustive-effect-dependencies` and `memo-dependencies` (this codebase
-    // deliberately lists identity-trigger deps next to useEffectEvent and
-    // ref-only closures; `react/exhaustive-deps` above stays the dependency
-    // gate).
+    // Omit optimization-only todo and suppression diagnostics. Identity-trigger/ref-only dependencies use
+    // react/exhaustive-deps rather than compiler dependency rules.
     "react/capitalized-calls": "error",
     "react/error-boundaries": "error",
     "react/globals": "error",
@@ -82,11 +70,8 @@
     "react-hooks/exhaustive-deps": "error",
     "react-hooks/rules-of-hooks": "error",
 
-    // Invoke's Chakra/Ark composites deliberately use ARIA listbox, option,
-    // separator, and status semantics on polymorphic primitives. Replacing
-    // those primitives with the rule's suggested native tags would break the
-    // owning composite's keyboard/focus contract; Axe journeys validate the
-    // resulting accessibility tree instead.
+    // Chakra/Ark polymorphic composites own keyboard semantics; native-tag substitutions can break them. Axe
+    // checks the resulting tree.
     "jsx-a11y/prefer-tag-over-role": "off",
 
     "react-perf/jsx-no-new-object-as-prop": [
@@ -147,9 +132,7 @@
   },
   "overrides": [
     {
-      // These are focus-managed entry points. Autofocus is intentional and
-      // scoped to an opened dialog, an auth screen, or an inline rename so
-      // keyboard users land on the only immediate task.
+      // Allow scoped autofocus for task-entry dialogs, authentication, and inline rename.
       "files": [
         "src/features/gallery/ui/GalleryBoardMenu.tsx",
         "src/features/identity/ui/LoginScreen.tsx",
@@ -166,9 +149,8 @@
       }
     },
     {
-      // Oxlint cannot see the focusable DOM produced by Chakra Button/Input/
-      // Menu primitives. Palette options are the other intentional case:
-      // focus stays on their aria-activedescendant combobox by design.
+      // Chakra primitives supply focusable DOM; palette options retain focus on the aria-activedescendant
+      // combobox.
       "files": [
         "src/features/models/ui/components/ModelSelect.tsx",
         "src/features/models/ui/shared/ModelFilterMenu.tsx",

@@ -19,7 +19,8 @@ export type SettingDefinition = SettingBase &
     | { kind: 'boolean' }
     | { kind: 'select'; options: readonly { label: SettingsText; value: string }[] }
     | { kind: 'number' | 'slider'; min: number; max: number; step?: number }
-    | { kind: 'custom' }
+    /** `fill`: the editor owns its scrolling and takes the dialog body's full height. */
+    | { kind: 'custom'; fill?: boolean }
   );
 
 export interface SettingsTarget {

@@ -18,12 +18,7 @@ import {
 
 import { IS_MAC_OS } from './keys';
 
-/**
- * Keys whose keycap symbol is universal get an icon on every platform; the
- * platform-branded modifier symbols (⌘ ⌥ ⇧ ⌃) are macOS-only — printing them
- * in a Windows/Linux hint would name keys those keyboards do not have, so
- * there the modifiers keep their word labels ("Ctrl", "Alt", "Win").
- */
+/** Use universal key icons everywhere; macOS modifier glyphs become word labels on Windows/Linux. */
 const UNIVERSAL_KEY_ICONS: Record<string, LucideIcon> = {
   arrowdown: ArrowDownIcon,
   arrowleft: ArrowLeftIcon,
@@ -64,12 +59,7 @@ export const SHORTCUT_KEY_ARIA_LABELS: Record<string, string> = {
   tab: 'Tab',
 };
 
-/**
- * One key of a shortcut hint: the key's icon where it has one, otherwise the
- * caller's text fallback (each render site keeps its own text casing). Icon
- * renders carry a screen-reader-only spoken name, so an icon-only `Kbd` still
- * announces the key.
- */
+/** Render an icon or the caller's text casing; icon-only hints include a spoken key name. */
 export const ShortcutKeyGlyph = ({ fallback, part }: { fallback?: ReactNode; part: string }) => {
   const GlyphIcon = getShortcutKeyIcon(part);
 

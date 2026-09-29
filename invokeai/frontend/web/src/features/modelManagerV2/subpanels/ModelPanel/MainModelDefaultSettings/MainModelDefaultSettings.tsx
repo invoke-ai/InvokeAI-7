@@ -58,7 +58,7 @@ export const MainModelDefaultSettings = memo(({ modelConfig }: Props) => {
 
   // Already-quantized weights cannot also be stored as FP8 — the backend refuses it (see
   // `_should_use_fp8`), so offering the switch would be a control that silently does nothing.
-  // Keep in sync with `_QUANTIZED_MODEL_FORMATS` in `load_default.py`.
+  // Keep in sync with `QUANTIZED_MODEL_FORMATS` in `taxonomy.py`.
   const isQuantized = useMemo(() => {
     return ['gguf_quantized', 'bnb_quantized_nf4b', 'bnb_quantized_int8b', 'sdnq_quantized'].includes(
       modelConfig.format

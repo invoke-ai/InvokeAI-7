@@ -68,14 +68,17 @@ class _FakeCacheRecord:
 
 
 class _FakeInfo:
-    """Mirrors the runtime ``LoadedModel`` enough for the swapper to reach
-    ``info._cache_record.cached_model.full_unload_from_vram()`` on swap."""
+    """Mirrors the runtime ``LoadedModel`` enough for the swapper to force the outgoing expert off
+    the device on swap. ``weight_bytes`` and ``resident_weight_bytes`` are the public properties the
+    swapper sizes its unload request from."""
 
     def __init__(self, label: str, model: nn.Module, log: list[str]) -> None:
         self._label = label
         self._model = model
         self._log = log
         self._cache_record = _FakeCacheRecord(_FakeCachedModel(label, log))
+        self.weight_bytes = 0
+        self.resident_weight_bytes = 0
 
     def model_on_device(self):
         return _FakeModelOnDevice(self._label, self._model, self._log)

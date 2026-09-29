@@ -20,7 +20,7 @@ import {
   type DurableProjectPersistenceApi,
 } from './durableSyncedPersistence';
 import { createDeterministicProjectId } from './ids';
-import { serializeProjectDocumentV2 } from './projectDocument';
+import { serializeProjectDocumentV3 } from './projectDocument';
 import { acquireProjectMutationLock } from './projectLifecycleLocks';
 import { getProjectSyncSnapshot, registerOpenProject, unregisterOpenProject } from './syncStore';
 
@@ -56,7 +56,7 @@ const stateWith = (projects: Project[]): WorkbenchState => ({
 const toRecord = (project: Project, revision = 1): ProjectRecordDTO => ({
   board_id: `board-${project.id}`,
   created_at: now,
-  data: serializeProjectDocumentV2(project),
+  data: serializeProjectDocumentV3(project),
   minimum_canvas_schema_version: 3,
   name: project.name,
   project_id: project.id,
@@ -173,6 +173,104 @@ beforeEach(() => {
 });
 
 describe('durable project persistence', () => {
+  it('awaits one acknowledged creation for concurrent uploads without saving later edits', async () => {
+    const api = createApi();
+    const project = createDraftProject([]);
+    const service = createService(captureAccountScope(), api);
+    let acknowledge!: (record: ProjectRecordDTO) => void;
+    const created = new Promise<ProjectRecordDTO>((resolve) => {
+      acknowledge = resolve;
+    });
+    vi.mocked(api.createProject).mockReturnValueOnce(created);
+    const first = service.ensureProjectOnServer(project);
+    const second = service.ensureProjectOnServer(project);
+    const ready = vi.fn();
+    void first.then(ready);
+    await vi.waitFor(() => expect(api.createProject).toHaveBeenCalledOnce());
+    expect(ready).not.toHaveBeenCalled();
+
+    acknowledge(toRecord(project));
+    await Promise.all([first, second]);
+    await service.ensureProjectOnServer({ ...project, name: 'Unsaved later edit' });
+    expect(api.createProject).toHaveBeenCalledOnce();
+    expect(api.updateProject).not.toHaveBeenCalled();
+    expect(ready).toHaveBeenCalledOnce();
+  });
+
+  it('answers an acknowledged project without waiting behind queued saves of other projects', async () => {
+    const api = createApi();
+    const project = createDraftProject([]);
+    const other = createDraftProject([]);
+    const service = createService(captureAccountScope(), api);
+    await service.ensureProjectOnServer(project);
+    vi.mocked(api.createProject).mockReturnValueOnce(new Promise<never>(() => {}));
+    void service.ensureProjectOnServer(other).catch(() => undefined);
+    await vi.waitFor(() => expect(api.createProject).toHaveBeenCalledTimes(2));
+
+    await expect(service.ensureProjectOnServer(project)).resolves.toBeUndefined();
+  });
+
+  it('fences an upload when its project is deleted while creation is pending', async () => {
+    const api = createApi();
+    const project = createDraftProject([]);
+    const service = createService(captureAccountScope(), api);
+    let acknowledge!: (record: ProjectRecordDTO) => void;
+    vi.mocked(api.createProject).mockReturnValueOnce(
+      new Promise((resolve) => {
+        acknowledge = resolve;
+      })
+    );
+    const pending = service.ensureProjectOnServer(project);
+    const rejected = expect(pending).rejects.toMatchObject({ reason: 'superseded' });
+    await vi.waitFor(() => expect(api.createProject).toHaveBeenCalledOnce());
+    service.markProjectDeleted(project.id);
+    acknowledge(toRecord(project));
+    await rejected;
+  });
+
+  it('shares one failed creation across waiting and following uploads, then retries after a pause', async () => {
+    const api = createApi();
+    const project = createDraftProject([]);
+    const service = createService(captureAccountScope(), api);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    let fail!: (error: Error) => void;
+    vi.mocked(api.createProject).mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        fail = reject;
+      })
+    );
+    try {
+      const waiting = [service.ensureProjectOnServer(project), service.ensureProjectOnServer(project)];
+      await vi.waitFor(() => expect(api.createProject).toHaveBeenCalledOnce());
+      fail(new Error('offline'));
+      for (const upload of waiting) {
+        await expect(upload).rejects.toMatchObject({ reason: 'unsynced' });
+      }
+      await expect(service.ensureProjectOnServer(project)).rejects.toMatchObject({ reason: 'unsynced' });
+      expect(api.createProject).toHaveBeenCalledOnce();
+
+      clock.mockReturnValue(10_000);
+      await service.ensureProjectOnServer(project);
+      expect(api.createProject).toHaveBeenCalledTimes(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('rejects deleted projects and expired accounts even after their creation was acknowledged', async () => {
+    const api = createApi();
+    const project = createDraftProject([]);
+    const service = createService(captureAccountScope(), api);
+    await service.ensureProjectOnServer(project);
+    service.markProjectDeleted(project.id);
+    await expect(service.ensureProjectOnServer(project)).rejects.toMatchObject({ reason: 'superseded' });
+    service.unmarkProjectDeleted(project.id);
+    accountLifecycle.activate('another-account');
+    await expect(service.ensureProjectOnServer(project)).rejects.toMatchObject({ name: 'AccountScopeExpiredError' });
+    expect(api.createProject).toHaveBeenCalledOnce();
+    expect(api.updateProject).not.toHaveBeenCalled();
+  });
+
   it('activates a requested new project and restores it after saving and reloading', async () => {
     const owner = captureAccountScope();
     const api = createApi();
@@ -398,8 +496,8 @@ describe('durable project persistence', () => {
     const project = createDraftProject([]);
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2(project)),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3(project)),
+      documentSchemaVersion: 3,
       editorSessionId: 'older-editor',
       generation: 1,
       projectId: project.id,
@@ -418,6 +516,42 @@ describe('durable project persistence', () => {
     expect(loaded.state.projects.map((candidate) => candidate.id)).toEqual([project.id]);
     expect(loaded.conflicts).toEqual([expect.objectContaining({ kind: 'deleted', projectId: project.id })]);
     expect(loaded.queueRecovery.projects).toEqual([]);
+  });
+
+  it('migrates an older draft on recovery, turning its library binding into an unknown-revision source', async () => {
+    const owner = captureAccountScope();
+    const api = createApi();
+    const draftStore = createMemoryProjectDraftStore();
+    const project = createDraftProject([]);
+    const { workflows: _workflows, ...document } = serializeProjectDocumentV3(project);
+    const graph = project.workflows.entries[0]!.document;
+    await draftStore.stage({
+      baseRevision: 1,
+      documentJson: JSON.stringify({
+        ...document,
+        documentSchemaVersion: 2,
+        projectGraph: { ...graph, libraryWorkflowId: 'lib-1' },
+      }),
+      documentSchemaVersion: 2,
+      editorSessionId: 'older-editor',
+      generation: 1,
+      projectId: project.id,
+      updatedAt: 1,
+      writerToken: 'older-writer',
+    });
+    vi.mocked(api.loadSession).mockResolvedValue({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: '',
+      openProjectIds: [],
+    });
+    listQueueRunProjectIds.mockResolvedValue({ kind: 'available', projectIds: [project.id] });
+
+    const loaded = await createService(owner, api, draftStore).loadWorkbench();
+    const restored = loaded.state.projects.find((candidate) => candidate.id === project.id);
+
+    expect(restored?.workflows.entries.map((entry) => entry.document.id)).toEqual([graph.id]);
+    expect(restored?.workflows.entries[0]?.source).toEqual({ libraryWorkflowId: 'lib-1', revision: null });
+    expect(restored).not.toHaveProperty('projectGraph');
   });
 
   it('reports a journal project that has neither a server record nor a recoverable draft', async () => {
@@ -476,8 +610,8 @@ describe('durable project persistence', () => {
     for (const [index, project] of drafts.entries()) {
       await draftStore.stage({
         baseRevision: null,
-        documentJson: JSON.stringify(serializeProjectDocumentV2(project)),
-        documentSchemaVersion: 2,
+        documentJson: JSON.stringify(serializeProjectDocumentV3(project)),
+        documentSchemaVersion: 3,
         editorSessionId: `old-${index}`,
         generation: 1,
         projectId: project.id,
@@ -532,8 +666,8 @@ describe('durable project persistence', () => {
     ] as const) {
       await draftStore.stage({
         baseRevision: null,
-        documentJson: JSON.stringify(serializeProjectDocumentV2(project)),
-        documentSchemaVersion: 2,
+        documentJson: JSON.stringify(serializeProjectDocumentV3(project)),
+        documentSchemaVersion: 3,
         editorSessionId,
         generation: 1,
         projectId: recovered.id,
@@ -563,8 +697,8 @@ describe('durable project persistence', () => {
     const project = createDraftProject([]);
     await draftStore.stage({
       baseRevision: null,
-      documentJson: JSON.stringify(serializeProjectDocumentV2(project)),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3(project)),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: project.id,
@@ -729,8 +863,8 @@ describe('durable project persistence', () => {
     expect(stage).toHaveBeenCalledWith(
       expect.objectContaining({
         baseRevision: null,
-        documentJson: JSON.stringify(serializeProjectDocumentV2(project)),
-        documentSchemaVersion: 2,
+        documentJson: JSON.stringify(serializeProjectDocumentV3(project)),
+        documentSchemaVersion: 3,
         projectId: project.id,
       })
     );
@@ -889,8 +1023,8 @@ describe('durable project persistence', () => {
     api.records.set(project.id, toRecord(project, 2));
     await backingStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: project.id,
@@ -1039,8 +1173,8 @@ describe('durable project persistence', () => {
     api.records.set(project.id, toRecord(project));
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'other tab edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'other tab edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-2',
       generation: 1,
       projectId: project.id,
@@ -1061,8 +1195,8 @@ describe('durable project persistence', () => {
     api.records.set(project.id, toRecord(project));
     await backingStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: project.id,
@@ -1174,7 +1308,7 @@ describe('durable project persistence', () => {
       await draftStore.stage({
         baseRevision: null,
         documentJson: JSON.stringify({ ...request.data, name: 'newer edit' }),
-        documentSchemaVersion: 2,
+        documentSchemaVersion: 3,
         editorSessionId: 'editor-1',
         generation: 2,
         projectId: project.id,
@@ -1229,8 +1363,8 @@ describe('durable project persistence', () => {
     api.records.set(project.id, toRecord(project, 2));
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 4,
       projectId: project.id,
@@ -1269,8 +1403,8 @@ describe('durable project persistence', () => {
     api.records.set(project.id, toRecord(project, 2));
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: project.id,
@@ -1302,12 +1436,12 @@ describe('durable project persistence', () => {
     const draftStore = createMemoryProjectDraftStore();
     const project = createDraftProject([]);
     const futureRecord = toRecord(project, 2);
-    futureRecord.data = { ...futureRecord.data, documentSchemaVersion: 3 };
+    futureRecord.data = { ...futureRecord.data, documentSchemaVersion: 4 };
     api.records.set(project.id, futureRecord);
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: project.id,
@@ -1330,7 +1464,7 @@ describe('durable project persistence', () => {
     expect(api.updateProject).not.toHaveBeenCalled();
     await expect(draftStore.get(project.id, 'editor-1')).resolves.toMatchObject({
       draft: {
-        refusal: { documentSchemaVersion: 3, kind: 'document', maxDocumentSchemaVersion: 2 },
+        refusal: { documentSchemaVersion: 4, kind: 'document', maxDocumentSchemaVersion: 3 },
         state: 'schema-refused',
       },
       kind: 'found',
@@ -1343,11 +1477,11 @@ describe('durable project persistence', () => {
     const draftStore = createMemoryProjectDraftStore();
     const project = createDraftProject([]);
     api.records.set(project.id, toRecord(project));
-    const futureDocumentJson = JSON.stringify({ ...serializeProjectDocumentV2(project), documentSchemaVersion: 3 });
+    const futureDocumentJson = JSON.stringify({ ...serializeProjectDocumentV3(project), documentSchemaVersion: 4 });
     await draftStore.stage({
       baseRevision: 1,
       documentJson: futureDocumentJson,
-      documentSchemaVersion: 3,
+      documentSchemaVersion: 4,
       editorSessionId: 'older-editor',
       generation: 1,
       projectId: project.id,
@@ -1381,11 +1515,11 @@ describe('durable project persistence', () => {
     const draftStore = createMemoryProjectDraftStore();
     const project = createDraftProject([]);
     api.records.set(project.id, toRecord(project));
-    const futureDocumentJson = JSON.stringify({ ...serializeProjectDocumentV2(project), documentSchemaVersion: 3 });
+    const futureDocumentJson = JSON.stringify({ ...serializeProjectDocumentV3(project), documentSchemaVersion: 4 });
     await draftStore.stage({
       baseRevision: 1,
       documentJson: futureDocumentJson,
-      documentSchemaVersion: 3,
+      documentSchemaVersion: 4,
       editorSessionId: 'older-editor',
       generation: 1,
       projectId: project.id,
@@ -1412,11 +1546,11 @@ describe('durable project persistence', () => {
     const draftStore = createMemoryProjectDraftStore();
     const project = createDraftProject([]);
     api.records.set(project.id, toRecord(project));
-    const futureDocumentJson = JSON.stringify({ ...serializeProjectDocumentV2(project), documentSchemaVersion: 3 });
+    const futureDocumentJson = JSON.stringify({ ...serializeProjectDocumentV3(project), documentSchemaVersion: 4 });
     await draftStore.stage({
       baseRevision: 1,
       documentJson: futureDocumentJson,
-      documentSchemaVersion: 3,
+      documentSchemaVersion: 4,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: project.id,
@@ -1437,7 +1571,7 @@ describe('durable project persistence', () => {
     await expect(service.getRecoverableDraftDocument(project.id, 'editor-1')).resolves.toBe(futureDocumentJson);
   });
 
-  it('rewrites a loaded legacy project once as a V2 document', async () => {
+  it('rewrites a loaded legacy project once in the current document schema', async () => {
     const owner = captureAccountScope();
     const api = createApi();
     const project = createDraftProject([]);
@@ -1456,7 +1590,7 @@ describe('durable project persistence', () => {
     await service.saveWorkbench(loaded.state);
 
     expect(api.updateProject).toHaveBeenCalledOnce();
-    expect(vi.mocked(api.updateProject).mock.calls[0]![1].data.documentSchemaVersion).toBe(2);
+    expect(vi.mocked(api.updateProject).mock.calls[0]![1].data.documentSchemaVersion).toBe(3);
   });
 
   it.each([
@@ -1470,8 +1604,8 @@ describe('durable project persistence', () => {
     api.records.set(project.id, toRecord(project));
     await draftStore.stage({
       baseRevision: testCase.baseRevision,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'older-editor',
       generation: 1,
       projectId: project.id,
@@ -1501,8 +1635,8 @@ describe('durable project persistence', () => {
     ] as const) {
       await draftStore.stage({
         baseRevision: 1,
-        documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name })),
-        documentSchemaVersion: 2,
+        documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name })),
+        documentSchemaVersion: 3,
         editorSessionId,
         generation: 1,
         projectId: project.id,
@@ -1532,8 +1666,8 @@ describe('durable project persistence', () => {
     for (let index = 0; index < 34; index += 1) {
       await draftStore.stage({
         baseRevision: 1,
-        documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: `offline edit ${index}` })),
-        documentSchemaVersion: 2,
+        documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: `offline edit ${index}` })),
+        documentSchemaVersion: 3,
         editorSessionId: `lineage-${index}`,
         generation: 1,
         projectId: project.id,
@@ -1562,11 +1696,11 @@ describe('durable project persistence', () => {
     const draftStore = createMemoryProjectDraftStore();
     const project = createDraftProject([]);
     api.records.set(project.id, toRecord(project));
-    const documentJson = JSON.stringify({ ...serializeProjectDocumentV2(project), documentSchemaVersion: 3 });
+    const documentJson = JSON.stringify({ ...serializeProjectDocumentV3(project), documentSchemaVersion: 3 });
     await draftStore.stage({
       baseRevision: 1,
       documentJson,
-      documentSchemaVersion: 3,
+      documentSchemaVersion: 4,
       editorSessionId: 'older-editor',
       generation: 1,
       projectId: project.id,
@@ -1589,8 +1723,8 @@ describe('durable project persistence', () => {
     api.records.set(project.id, toRecord(project));
     await backingStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'unadopted edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'unadopted edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'older-editor',
       generation: 1,
       projectId: project.id,
@@ -1621,8 +1755,8 @@ describe('durable project persistence', () => {
     const updatedAt = Date.parse(now);
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify({ ...serializeProjectDocumentV2(project), documentSchemaVersion: 3 }),
-      documentSchemaVersion: 3,
+      documentJson: JSON.stringify({ ...serializeProjectDocumentV3(project), documentSchemaVersion: 3 }),
+      documentSchemaVersion: 4,
       editorSessionId: 'newer-editor',
       generation: 1,
       projectId: project.id,
@@ -1653,8 +1787,8 @@ describe('durable project persistence', () => {
     api.records.set(project.id, toRecord(project));
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify({ documentSchemaVersion: 2, id: project.id }),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify({ documentSchemaVersion: 3, id: project.id }),
+      documentSchemaVersion: 3,
       editorSessionId: 'broken-editor',
       generation: 1,
       projectId: project.id,
@@ -1705,8 +1839,8 @@ describe('durable project persistence', () => {
       const project = createDraftProject([]);
       await draftStore.stage({
         baseRevision,
-        documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'local edit' })),
-        documentSchemaVersion: 2,
+        documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'local edit' })),
+        documentSchemaVersion: 3,
         editorSessionId: 'older-editor',
         generation: 1,
         projectId: project.id,
@@ -1734,8 +1868,8 @@ describe('durable project persistence', () => {
     api.records.set(project.id, toRecord(project));
     await backingStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'older-editor',
       generation: 1,
       projectId: project.id,
@@ -1778,8 +1912,8 @@ describe('durable project persistence', () => {
     api.records.set(project.id, toRecord(project, 2));
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: project.id,
@@ -1861,8 +1995,8 @@ describe('durable project persistence', () => {
     api.records.set(project.id, toRecord(project, 2));
     await backingStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: project.id,
@@ -1925,13 +2059,13 @@ describe('durable project persistence', () => {
     await vi.waitFor(() => expect(stage).toHaveBeenCalledOnce());
     releaseCreate();
     const copy = await resolving;
-    expect(copy.project.settings).toEqual(serializeProjectDocumentV2(backgroundEdit).settings);
+    expect(copy.project.settings).toEqual(serializeProjectDocumentV3(backgroundEdit).settings);
     expect(copy.project.name).toBe(`${local.name} (copy)`);
     await saving;
 
     expect(api.records.get(copy.targetProjectId)?.name).toBe(`${local.name} (copy)`);
     expect(api.records.get(copy.targetProjectId)?.data.settings).toEqual(
-      serializeProjectDocumentV2(backgroundEdit).settings
+      serializeProjectDocumentV3(backgroundEdit).settings
     );
   });
 
@@ -1945,8 +2079,8 @@ describe('durable project persistence', () => {
     api.records.set(other.id, toRecord(other));
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...source, name: 'click-time edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...source, name: 'click-time edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: source.id,
@@ -2008,7 +2142,7 @@ describe('durable project persistence', () => {
     const saving = service.saveWorkbench(stateWith([backgroundEdit]));
     await vi.waitFor(async () => {
       await expect(draftStore.get(source.id, 'editor-1')).resolves.toMatchObject({
-        draft: { documentJson: JSON.stringify(serializeProjectDocumentV2(backgroundEdit)) },
+        draft: { documentJson: JSON.stringify(serializeProjectDocumentV3(backgroundEdit)) },
         kind: 'found',
       });
     });
@@ -2017,7 +2151,7 @@ describe('durable project persistence', () => {
     await blocking;
     await createStarted;
     await expect(draftStore.get(source.id, 'editor-1')).resolves.toMatchObject({
-      draft: { documentJson: JSON.stringify(serializeProjectDocumentV2(backgroundEdit)) },
+      draft: { documentJson: JSON.stringify(serializeProjectDocumentV3(backgroundEdit)) },
       kind: 'found',
     });
     releaseCreate();
@@ -2036,8 +2170,8 @@ describe('durable project persistence', () => {
     api.records.set(source.id, toRecord(source, 2));
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...source, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...source, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: source.id,
@@ -2105,8 +2239,8 @@ describe('durable project persistence', () => {
     api.records.set(project.id, toRecord(project, 2));
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: project.id,
@@ -2154,8 +2288,8 @@ describe('durable project persistence', () => {
     api.records.set(project.id, toRecord(project, 2));
     await backingStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: project.id,
@@ -2224,8 +2358,8 @@ describe('durable project persistence', () => {
     api.records.set(project.id, toRecord(project, 2));
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: project.id,
@@ -2290,8 +2424,8 @@ describe('durable project persistence', () => {
     api.records.set(other.id, toRecord(other));
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...source, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...source, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: source.id,
@@ -2384,8 +2518,8 @@ describe('durable project persistence', () => {
     api.records.set(source.id, toRecord(source, 2));
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...source, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...source, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: source.id,
@@ -2447,8 +2581,8 @@ describe('durable project persistence', () => {
     api.records.set(source.id, toRecord(source, 2));
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...source, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...source, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: source.id,
@@ -2500,11 +2634,11 @@ describe('durable project persistence', () => {
     const draftStore = createMemoryProjectDraftStore();
     const project = createDraftProject([]);
     api.records.set(project.id, toRecord(project, 2));
-    const futureDocumentJson = JSON.stringify({ ...serializeProjectDocumentV2(project), documentSchemaVersion: 3 });
+    const futureDocumentJson = JSON.stringify({ ...serializeProjectDocumentV3(project), documentSchemaVersion: 4 });
     await draftStore.stage({
       baseRevision: 1,
       documentJson: futureDocumentJson,
-      documentSchemaVersion: 3,
+      documentSchemaVersion: 4,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: project.id,
@@ -2513,8 +2647,8 @@ describe('durable project persistence', () => {
     });
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'older-editor',
       generation: 1,
       projectId: project.id,
@@ -2575,8 +2709,8 @@ describe('durable project persistence', () => {
     api.records.set(project.id, toRecord(project));
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: project.id,
@@ -2604,7 +2738,7 @@ describe('durable project persistence', () => {
   });
 
   it.each([
-    { documentSchemaVersion: 2, kind: 'document' as const, maxDocumentSchemaVersion: 1 },
+    { documentSchemaVersion: 3, kind: 'document' as const, maxDocumentSchemaVersion: 1 },
     { kind: 'invalid-server-document' as const },
   ])('resumes a loadable $kind refusal after the client or server is corrected', async (refusal) => {
     const owner = captureAccountScope();
@@ -2614,8 +2748,8 @@ describe('durable project persistence', () => {
     api.records.set(project.id, toRecord(project));
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: project.id,
@@ -2646,8 +2780,8 @@ describe('durable project persistence', () => {
     api.records.set(project.id, toRecord(project, 2));
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: project.id,
@@ -2674,8 +2808,8 @@ describe('durable project persistence', () => {
     api.records.set(project.id, toRecord(remote, 2));
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'discarded local edit' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'discarded local edit' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: project.id,
@@ -2732,8 +2866,8 @@ describe('durable project persistence', () => {
     const project = createDraftProject([]);
     await draftStore.stage({
       baseRevision: 1,
-      documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name: 'discard me' })),
-      documentSchemaVersion: 2,
+      documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name: 'discard me' })),
+      documentSchemaVersion: 3,
       editorSessionId: 'editor-1',
       generation: 1,
       projectId: project.id,
@@ -2867,8 +3001,8 @@ describe('durable project persistence', () => {
     ] as const) {
       await draftStore.stage({
         baseRevision: 1,
-        documentJson: JSON.stringify(serializeProjectDocumentV2({ ...project, name })),
-        documentSchemaVersion: 2,
+        documentJson: JSON.stringify(serializeProjectDocumentV3({ ...project, name })),
+        documentSchemaVersion: 3,
         editorSessionId,
         generation: 1,
         projectId: project.id,

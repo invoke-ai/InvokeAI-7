@@ -506,8 +506,6 @@ describe('browser performance sampling and policy', () => {
 
 describe('derived growth allowance', () => {
   it('absorbs ordinary growth instead of failing on a handful of bytes', () => {
-    // The regression this replaces: a route whose captured ceiling equalled its measurement, so
-    // any byte of growth failed and every PR paid a re-record for whatever main had drifted.
     const measurement = createSyntheticBuild(1_000);
     const budget = createArchitectureBaseline(measurement).build.launchpad;
     const grown = { ...measurement, ownedRawBytes: measurement.ownedRawBytes + 64 };
@@ -533,8 +531,7 @@ describe('derived growth allowance', () => {
   });
 
   it('allows the floor over a zero baseline, which the exact request counts bound', () => {
-    // Six committed browser routes have all-zero activated resources; "zero" now means "up to the
-    // floor", and it is the exact request cap that keeps a new asset from arriving unnoticed.
+    // Zero-byte baselines still get the byte floor; exact request caps catch new assets.
     assert.equal(deriveLimit('otherAssetRawBytes', 0), GROWTH_ALLOWANCE_FLOOR_BYTES);
     assert.equal(deriveLimit('requestCount', 0), 0);
   });
@@ -558,8 +555,7 @@ describe('derived growth allowance', () => {
 
 describe('hard ceiling over the committed baseline', () => {
   it('bounds a moving reference by the committed baseline', () => {
-    // A run of allowance-sized merges moves the reference; the committed file must still be the
-    // outer bound, or the budgets would be advisory before a merge.
+    // Keep the committed baseline as a hard bound so allowance-sized merges cannot compound indefinitely.
     const committed = 100_000;
     const reference = committed + HARD_CEILING_FLOOR_BYTES - 1000;
 
@@ -598,9 +594,7 @@ describe('base-branch reference', () => {
   });
 
   it('judges bytes against the reference while the committed source-owner pin still fails a leak', () => {
-    // The committed baseline is stale by 20 KB of growth that main has already accepted. Against
-    // it the pull request would fail for main's drift; against the reference it answers only for
-    // its own bytes -- and a module that leaked into the graph still fails at zero bytes.
+    // Use the reference for accepted byte drift; structural leaks must still fail at zero added bytes.
     const committed = createSyntheticBuild(1_000);
     const mainNow = {
       ...createSyntheticBuild(21_000),
@@ -675,8 +669,7 @@ describe('base-branch reference', () => {
   });
 
   it('is judged incompatible, not broken, when written by a checkout with a different metric set', () => {
-    // The reference is read by a different commit's copy of these scripts. A pull request that
-    // adds or removes a metric must fall back with a reason, not wedge its own CI.
+    // References may come from another commit; schema or metric drift must fall back with a reason.
     const reference = buildReference([createSyntheticBuild(1_000)]);
 
     assert.equal(referenceIncompatibility(reference, 'build', BUILD_METRIC_KEYS), null);

@@ -4,10 +4,7 @@ import { useCallback, useRef } from 'react';
 import { forwardGalleryBoardDrop, isGalleryItemDragData, resolveGallerySemanticSearchDrop } from './galleryDnd';
 import { useGalleryWidget } from './GalleryWidgetContext';
 
-/**
- * Owns board-drop forwarding and the temporary disclosure needed to make
- * board targets available when an item drag begins from a collapsed gallery.
- */
+/** Forward board drops and temporarily expose collapsed board targets during item drags. */
 export const GalleryBoardDragMonitor = () => {
   const { actions, gallery, itemActions } = useGalleryWidget();
   const dragOpenedPanelRef = useRef(false);
@@ -38,8 +35,6 @@ export const GalleryBoardDragMonitor = () => {
       const semanticDrop = resolveGallerySemanticSearchDrop(event.active.data.current, event.over?.id);
 
       if (semanticDrop) {
-        // Dropping a gallery image on the search field ranks the gallery by
-        // visual similarity to it.
         actions.setSemanticImageQuery({ imageName: semanticDrop.imageName, kind: 'image' });
         restoreDisclosure();
         return;

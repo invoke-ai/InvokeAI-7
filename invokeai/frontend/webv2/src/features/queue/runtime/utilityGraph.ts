@@ -1,28 +1,6 @@
 /**
- * The utility queue: fire-and-await small graphs OUTSIDE any project's queue.
- *
- * Filter previews and (later) Segment-Anything need to run a one-shot graph and
- * read back its single output image WITHOUT the result ever touching project
- * staging or the gallery. {@link runUtilityGraph} does exactly that:
- *
- * 1. Mints a fresh `webv2:util:<uuid>` origin (see `backend/events.ts`). That
- *    origin is deliberately invisible to project routing — `parseQueueItemOrigin`
- *    returns `null` for it, so `queueCoordinator.reconcile` /
- *    `isQueueItemReadModelInProject` never adopt it and `routeQueueItemResults`
- *    (only invoked for coordinator-tracked project runs, which a utility item is
- *    never registered as) never sees it. This is the plan's Risk-4 guard.
- * 2. Attaches raw `socketHub.on` listeners (they survive socket recreation) for
- *    `invocation_complete` (to capture the output image name and dimensions) and
- *    `queue_item_status_changed` (to settle on the terminal status), matching
- *    events by our unique origin.
- * 3. Enqueues the graph (listeners are attached first, closing the fast-finish
- *    race), then resolves with the output image metadata on completion, or rejects
- *    on failure/cancellation/timeout/abort. Abort and timeout also best-effort
- *    cancel every backend item accepted for this run, including when enqueue
- *    resolves after the local await has already rejected.
- *
- * Zero React, zero DOM: `hub` and `enqueue` are injected, so this runs in node
- * tests against fakes. Every side-effecting dependency is a parameter.
+ * Run isolated utility graphs with unique origins. Subscribe before enqueue to cover fast completion;
+ * abort/timeout best-effort cancels all accepted items, including late enqueue responses.
  */
 
 import type { QueueBackendGraph } from '@features/queue/core/types';
@@ -212,9 +190,8 @@ export const reconcileUtilityCompletedOutput: UtilityCompletedOutputReconciler =
 };
 
 /**
- * Runs `graph` on the utility queue and resolves with its output image metadata.
- * Never routes into project state (isolated origin). Rejects with a
- * {@link UtilityQueueError} on failure/cancel/timeout/abort/enqueue error.
+ * Return utility output metadata without project routing; reject failures, cancellation, timeout, abort, and
+ * enqueue errors as {@link UtilityQueueError}.
  */
 export const runUtilityGraph = (options: RunUtilityGraphOptions): Promise<UtilityGraphResult> => {
   const { graph, hub, outputNodeId, signal } = options;

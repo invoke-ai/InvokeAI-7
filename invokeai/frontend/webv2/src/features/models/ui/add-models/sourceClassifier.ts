@@ -10,11 +10,7 @@ const FILE_EXTENSION_PATTERN = /\.[A-Za-z0-9]{1,12}$/;
 const MODEL_FILE_EXTENSION_PATTERN = /\.(safetensors|ckpt|pt|pth|bin|gguf|onnx|pkl)$/i;
 const RELATIVE_PATH_PATTERN = /^\.{1,2}[\\/]/;
 
-/**
- * Discriminated on `isInstallable`: an installable source always carries a
- * label key, and a search never looks like any source shape — so consumers
- * need no null fallbacks inside an installable branch.
- */
+/** isInstallable narrows to a source with a label key; searches never share installable source shapes. */
 export type SourceKind =
   | {
       isInstallable: true;
@@ -48,10 +44,8 @@ const classifyLocalPath = (value: string): 'file' | 'folder' => {
 export const classifySource = (value: string): SourceKind => {
   const looksLocal = value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value);
   const looksUrl = /^https?:\/\//i.test(value);
-  // "models/foo.safetensors" and "./repo" satisfy the HF repo shape but are
-  // clearly path-like; they fall through to search, since a relative path is
-  // not an installable source. The extension check runs on the pre-colon
-  // portion so "owner/repo:fp16:path/file.safetensors" stays a repo.
+  // Relative paths fall through to search even if repo-shaped; inspect extensions before colon qualifiers so valid
+  // repo file selectors remain installable.
   const looksRelativePath =
     RELATIVE_PATH_PATTERN.test(value) || MODEL_FILE_EXTENSION_PATTERN.test(value.split(':', 1)[0] ?? '');
   const looksRepo = !looksLocal && !looksUrl && !looksRelativePath && HF_REPO_PATTERN.test(value);

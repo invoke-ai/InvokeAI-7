@@ -5,17 +5,8 @@ import { layoutPresets } from './layoutPresets';
 import { resolveSavedLayoutPreset } from './layoutPresetSnapshots';
 
 /**
- * The account's saved order, with anything it has never seen slotted in.
- *
- * A preset the order has never recorded is placed next to its canonical
- * neighbour rather than appended. Appending looks the same on a fresh account —
- * nothing is stored, so every preset is "new" and they land in `presets` order
- * — but it is wrong the moment a *shipped* preset is added later: every
- * existing account would pin it to the end of the strip no matter where the
- * built-in list puts it, and there is no schema version to hang a migration on.
- *
- * The saved order still wins for everything it does name: ids already stored
- * keep their relative positions, so a dragged tab stays dragged.
+ * Preserve saved relative order, inserting unseen presets beside canonical neighbors so newly shipped presets do
+ * not always append.
  */
 export const normalizeLayoutPresetOrder = (value: unknown, presets: readonly LayoutPreset[]): LayoutPresetId[] => {
   const knownIds = new Set(presets.map(({ id }) => id));
@@ -36,8 +27,6 @@ export const normalizeLayoutPresetOrder = (value: unknown, presets: readonly Lay
       return;
     }
 
-    // The nearest preset that canonically precedes this one and is already
-    // placed. Nothing before it means it belongs at the front.
     let insertAt = 0;
 
     for (let index = presetIndex - 1; index >= 0; index -= 1) {

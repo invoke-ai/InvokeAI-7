@@ -1,3 +1,6 @@
+import { DEFAULT_LOGGING_CONFIG } from '@platform/logging/contracts';
+import { configureLogging, getLogSnapshot, resetLogging } from '@platform/logging/logger';
+import { accountLifecycle } from '@platform/state/accountLifecycle';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./deploymentBase', () => ({
@@ -175,10 +178,82 @@ describe('request identity ownership', () => {
   });
 });
 
+describe('transport diagnostics', () => {
+  beforeEach(() => {
+    const identity = {};
+    configureHttpAuth({ getIdentity: () => identity, getToken: () => null, onUnauthorized: vi.fn() });
+    resetLogging();
+    configureLogging({ ...DEFAULT_LOGGING_CONFIG, level: 'debug' });
+  });
+
+  it('records failed responses and network failures as debug breadcrumbs without query strings', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response('{"detail":"nope"}', { status: 503 }))
+        .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    );
+
+    await expect(apiFetch('/api/v1/images?token=abc', { method: 'POST' })).rejects.toBeInstanceOf(ApiError);
+    await expect(apiFetch('/api/v1/boards')).rejects.toBeInstanceOf(TypeError);
+
+    expect(getLogSnapshot().entries).toMatchObject([
+      {
+        error: { message: 'Failed to fetch', name: 'TypeError' },
+        level: 'debug',
+        name: 'http.request-failed',
+        source: { area: 'http', namespace: 'transport' },
+      },
+      {
+        context: { method: 'POST', path: '/api/v1/images', status: 503 },
+        level: 'debug',
+        message: 'POST /api/v1/images responded 503',
+        name: 'http.response-error',
+      },
+    ]);
+  });
+
+  it('drops breadcrumbs from requests whose account lifetime ended and ignores aborts', async () => {
+    accountLifecycle.activate('user-a');
+    let settle: (response: Response) => void = () => undefined;
+
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise<Response>((resolve) => {
+              settle = resolve;
+            })
+        )
+        .mockRejectedValueOnce(new DOMException('aborted', 'AbortError'))
+    );
+
+    const late = apiFetch('/api/v1/boards');
+
+    accountLifecycle.invalidate();
+    configureLogging({ ...DEFAULT_LOGGING_CONFIG, level: 'debug' });
+    settle(new Response('', { status: 500 }));
+    await expect(late).rejects.toBeInstanceOf(ApiError);
+    await expect(apiFetch('/api/v1/images')).rejects.toBeInstanceOf(DOMException);
+
+    expect(getLogSnapshot().entries).toEqual([]);
+  });
+
+  it('records nothing for successful requests', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+
+    await apiFetch('/api/v1/app/version');
+
+    expect(getLogSnapshot().entries).toEqual([]);
+  });
+});
+
 describe('media cookie credentials', () => {
   beforeEach(() => {
-    // One stable identity for the whole request: a fresh object per call would read as a
-    // mid-request account rotation and reject before the assertion.
+    // Keep the identity object stable; a fresh object would simulate rotation before the assertion.
     const identity = {};
     configureHttpAuth({ getIdentity: () => identity, getToken: () => null, onUnauthorized: vi.fn() });
   });

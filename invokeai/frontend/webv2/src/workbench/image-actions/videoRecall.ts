@@ -4,11 +4,17 @@ import type {
   LoraModelConfig,
   MainModelConfig,
 } from '@features/generation/contracts';
-import type { VideoAspectRatioId, VideoTargetResolution, VideoWidgetValues } from '@features/video';
+import type {
+  VideoAspectRatioId,
+  VideoConditioningRole,
+  VideoTargetResolution,
+  VideoWidgetValues,
+} from '@features/video';
 
 import { isLoraCompatibleWithModel, isLoraModelConfig } from '@features/generation/settings';
 import {
   findAcceleratorLorasIn,
+  getAcceleratorToggleResult,
   getAcceleratorSteps,
   getVideoAspectRatioOptions,
   getVideoDimensions,
@@ -17,19 +23,28 @@ import {
   getVideoTargetResolutionOptions,
   isSupportedVideoModel,
   isValidVideoNumFrames,
+  LTX2_NUM_FRAMES_STEP,
+  MINIMAX_H3_HYBRID_BLOCK_RANGE,
+  snapLtx2FramesDown,
   snapVideoNumFrames,
 } from '@features/video';
 import { SEED_MAX } from '@platform/core/seed';
 
 /**
- * Pure mapping from a video's recorded `core_metadata` to a Video-panel
- * patch — the sibling of `imageRecall.ts`. Model resolution is by KEY against
- * the installed catalog; an uninstalled model skips the model field and
- * everything downstream validates against the current model instead. The
- * conditioning mode is never recalled directly: the panel derives it from
- * which media fields are filled, so recall restores the media and lets the
- * mode fall out.
+ * Map video metadata to panel values using installed model key, hash, then name/base/type. Unresolved models
+ * retain the current model for validation. Restore media to derive mode rather than recalling mode directly.
  */
+
+/**
+ * Canonical record key → the names earlier writers used for the same value.
+ * The record format is versioned (`metadata_version`); these are read-only
+ * aliases for pre-1.0 records and are never written again.
+ */
+const METADATA_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  wan_guidance_scale_low_noise: ['guidance_scale_low_noise'],
+  wan_t5_encoder_model: ['wan_t5_encoder'],
+  wan_transformer_low_noise: ['transformer_low_noise'],
+};
 
 /** The generation_mode strings the video graphs stamp; anything else is not video metadata. */
 const VIDEO_GENERATION_MODE_IDS: ReadonlySet<string> = new Set([
@@ -43,6 +58,13 @@ const VIDEO_GENERATION_MODE_IDS: ReadonlySet<string> = new Set([
   'minimax_h3_flf2v',
   'minimax_h3_extend_video',
   'minimax_h3_ref2v',
+  'ltx2_t2v',
+  'ltx2_i2v',
+  'ltx2_a2v',
+  'ltx2_v2a',
+  'ltx2_lf2v',
+  'ltx2_flf2v',
+  'ltx2_extend_video',
 ]);
 
 export type VideoRecallKind = 'all' | 'remix' | 'prompts' | 'seed';
@@ -72,6 +94,7 @@ export type VideoRecalledField =
   | 'cfg'
   | 'loras'
   | 'components'
+  | 'extendContext'
   | 'media';
 
 export interface VideoRecallResult {
@@ -82,32 +105,35 @@ export interface VideoRecallResult {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
-const getRecord = (value: unknown, key: string): Record<string, unknown> | null => {
-  if (!isRecord(value)) {
-    return null;
+/** The recorded value under `key`, or under the first present alias of it; `undefined` when absent. */
+const readKey = (metadata: unknown, key: string): unknown => {
+  if (!isRecord(metadata)) {
+    return undefined;
   }
 
-  const child = value[key];
+  for (const candidate of [key, ...(METADATA_KEY_ALIASES[key] ?? [])]) {
+    if (candidate in metadata) {
+      return metadata[candidate];
+    }
+  }
+
+  return undefined;
+};
+
+const getRecord = (value: unknown, key: string): Record<string, unknown> | null => {
+  const child = readKey(value, key);
 
   return isRecord(child) ? child : null;
 };
 
 const getString = (metadata: unknown, key: string): string | null => {
-  if (!isRecord(metadata)) {
-    return null;
-  }
-
-  const value = metadata[key];
+  const value = readKey(metadata, key);
 
   return typeof value === 'string' ? value : null;
 };
 
 const getNullableString = (metadata: unknown, key: string): string | null | undefined => {
-  if (!isRecord(metadata)) {
-    return undefined;
-  }
-
-  const value = metadata[key];
+  const value = readKey(metadata, key);
 
   if (value === null) {
     return null;
@@ -117,11 +143,7 @@ const getNullableString = (metadata: unknown, key: string): string | null | unde
 };
 
 const getNumber = (metadata: unknown, key: string): number | null => {
-  if (!isRecord(metadata)) {
-    return null;
-  }
-
-  const value = metadata[key];
+  const value = readKey(metadata, key);
 
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 };
@@ -144,20 +166,67 @@ export const isVideoGenerationMetadata = (metadata: unknown): boolean => {
   return mode !== null && VIDEO_GENERATION_MODE_IDS.has(mode);
 };
 
-const getMetadataModelKey = (metadata: unknown, key: string): string | null => {
-  const model = getRecord(metadata, key);
+/** A recorded `ModelIdentifier` — `{ key, hash, name, base, type }` — with every field optional on read. */
+interface RecordedModelRef {
+  key: string | null;
+  hash: string | null;
+  name: string | null;
+  base: string | null;
+  type: string | null;
+}
 
-  return typeof model?.key === 'string' ? model.key : null;
-};
-
-const getSupportedVideoMetadataModel = (metadata: unknown, models: readonly ModelConfig[]): MainModelConfig | null => {
-  const modelKey = getMetadataModelKey(metadata, 'model');
-
-  if (!modelKey) {
+const toRecordedModelRef = (value: unknown): RecordedModelRef | null => {
+  if (!isRecord(value)) {
     return null;
   }
 
-  const installed = models.find((model) => model.key === modelKey);
+  const field = (name: string) => (typeof value[name] === 'string' ? (value[name] as string) : null);
+  const ref: RecordedModelRef = {
+    base: field('base'),
+    hash: field('hash'),
+    key: field('key'),
+    name: field('name'),
+    type: field('type'),
+  };
+
+  // Only a ref that at least one rung of `resolveRecordedModel` can act on counts as recorded;
+  // anything less would advertise a recall that can never resolve.
+  return ref.key || ref.hash || (ref.name && ref.base && ref.type) ? ref : null;
+};
+
+const getMetadataModelRef = (metadata: unknown, key: string): RecordedModelRef | null =>
+  toRecordedModelRef(getRecord(metadata, key));
+
+/**
+ * Resolve install-local keys, then portable content hashes, then name/base/type. Only the final fallback may
+ * select different weights.
+ */
+const resolveRecordedModel = <T extends ModelConfig>(ref: RecordedModelRef | null, models: readonly T[]): T | null => {
+  if (!ref) {
+    return null;
+  }
+
+  const byKey = ref.key ? models.find((model) => model.key === ref.key) : undefined;
+  if (byKey) {
+    return byKey;
+  }
+
+  const byHash = ref.hash ? models.find((model) => model.hash === ref.hash) : undefined;
+  if (byHash) {
+    return byHash;
+  }
+
+  if (ref.name && ref.base && ref.type) {
+    return (
+      models.find((model) => model.name === ref.name && model.base === ref.base && model.type === ref.type) ?? null
+    );
+  }
+
+  return null;
+};
+
+const getSupportedVideoMetadataModel = (metadata: unknown, models: readonly ModelConfig[]): MainModelConfig | null => {
+  const installed = resolveRecordedModel(getMetadataModelRef(metadata, 'model'), models);
 
   return installed && isSupportedVideoModel(installed) ? (installed as MainModelConfig) : null;
 };
@@ -181,6 +250,18 @@ const getImageName = (metadata: unknown, key: string): string | null => {
   return typeof field?.image_name === 'string' ? field.image_name : null;
 };
 
+/** The whole-modality conditioning clip, from the LTX-2 extras the graph records. */
+const getRecallableConditioningClip = (metadata: unknown): VideoRecallConditioningClip | null => {
+  const field = getRecord(metadata, 'ltx2_conditioning_video');
+  const role = isRecord(metadata) ? metadata.ltx2_conditioning_role : undefined;
+
+  if (typeof field?.video_name !== 'string' || (role !== 'audio' && role !== 'video')) {
+    return null;
+  }
+
+  return { name: field.video_name, role };
+};
+
 const getSourceVideoName = (metadata: unknown): string | null => {
   const field = getRecord(metadata, 'source_video');
 
@@ -188,11 +269,8 @@ const getSourceVideoName = (metadata: unknown): string | null => {
 };
 
 /**
- * The keyframe names the recall should restore, per the recorded mode. In
- * extend mode `first_frame_image` is the frame the graph EXTRACTED from the
- * source clip — derived conditioning, not user input — so restoring it would
- * both misrepresent the session and collide with the panel's first-frame ⊻
- * initial-video exclusion.
+ * In extend mode, first_frame_image was extracted from the source clip; do not restore it as user input or
+ * conflict with initial video.
  */
 export const getRecallableMediaNames = (
   metadata: unknown
@@ -206,38 +284,41 @@ export const getRecallableMediaNames = (
   };
 };
 
-const getMetadataLoras = (metadata: unknown): { key: string; weight: number }[] => {
+const getMetadataLoras = (metadata: unknown): { model: RecordedModelRef; weight: number }[] => {
   if (!isRecord(metadata) || !Array.isArray(metadata.loras)) {
     return [];
   }
 
   return metadata.loras.flatMap((entry) => {
-    if (!isRecord(entry) || !isRecord(entry.model) || typeof entry.model.key !== 'string') {
+    const model = isRecord(entry) ? toRecordedModelRef(entry.model) : null;
+
+    if (!model) {
       return [];
     }
 
     const weight = typeof entry.weight === 'number' && Number.isFinite(entry.weight) ? entry.weight : 1;
 
-    return [{ key: entry.model.key, weight }];
+    return [{ model, weight }];
   });
 };
 
-/** Metadata component slot → widget-values key, with the recorded value's key resolved against the catalog. */
+/** Metadata component slot → widget-values key, with the recorded model resolved against the catalog. */
 const VIDEO_COMPONENT_METADATA_KEYS = [
   ['vae', 'vae'],
-  ['wan_t5_encoder', 'wanT5EncoderModel'],
+  ['wan_t5_encoder_model', 'wanT5EncoderModel'],
   ['wan_component_source', 'componentSourceModel'],
-  ['transformer_low_noise', 'wanLowNoiseModel'],
+  ['wan_transformer_low_noise', 'wanLowNoiseModel'],
   ['minimax_h3_transformer_model', 'h3TransformerModel'],
   ['minimax_h3_component_source', 'componentSourceModel'],
   ['minimax_h3_text_encoder_model', 'h3TextEncoderModel'],
+  ['minimax_h3_hybrid_base_model', 'h3HybridBaseModel'],
+  ['ltx2_component_source', 'componentSourceModel'],
+  ['ltx2_text_encoder_model', 'ltx2TextEncoderModel'],
 ] as const;
 
 /**
- * The recorded W×H inverted back into the panel's aspect-ratio preset +
- * target-resolution pair — exact matches only. A near-miss would silently
- * recall a preset the run never used: a non-matching size means the dims came
- * from conditioning media, and recalling that media locks the size anyway.
+ * Recall aspect/resolution presets only on exact dimension matches; other dimensions came from conditioning media
+ * and remain media-controlled.
  */
 export const getVideoSizeRecall = (
   model: MainModelConfig,
@@ -252,6 +333,7 @@ export const getVideoSizeRecall = (
     for (const option of getVideoTargetResolutionOptions(model)) {
       const derived = getVideoDimensions(model, {
         aspectRatioId,
+        conditioningClip: null,
         firstFrameImage: null,
         lastFrameImage: null,
         sourceVideo: null,
@@ -268,12 +350,8 @@ export const getVideoSizeRecall = (
 };
 
 /**
- * Whether the recalled LoRA list is itself a complete accelerator set for this
- * model, run at the step count that set was distilled for — if so the flag
- * (and its recorded keys) come back on, so the panel shows the same fast-path
- * state that produced the video. Two Turbo LoRAs are both valid fast paths at
- * different step counts, so the set is read off the recalled list rather than
- * off whatever the catalog would pick today.
+ * Restore acceleration only when recalled LoRAs form a complete set at its distilled step count; derive from
+ * recorded keys, not today's catalog preference.
  */
 export const deriveAcceleratorRecallState = (
   model: MainModelConfig,
@@ -281,10 +359,8 @@ export const deriveAcceleratorRecallState = (
   steps: number,
   settings: VideoWidgetValues
 ): Pick<VideoWidgetValues, 'acceleratorEnabled' | 'acceleratorLoraKeys'> => {
-  // The H3 task variant lives on the model itself (a single-file transformer
-  // checkpoint carries its own variant), and the two tasks have DIFFERENT
-  // accelerators (fl2va Turbo at 6 or 8 steps, ref2v Turbo at 4 or 8). Callers must
-  // promote a legacy transformer override onto `model` before deriving this.
+  // Promote legacy H3 transformer overrides before deriving task-specific accelerators: fl2va and ref2v use
+  // different sets and steps.
   const accelerator = getVideoModelPolicy(model, settings).ui.accelerator;
   const recalled = accelerator
     ? findAcceleratorLorasIn(
@@ -309,7 +385,7 @@ export const getVideoRecallCapabilities = (metadata: unknown): VideoRecallCapabi
   const media = getRecallableMediaNames(metadata);
   const hasNonSeed =
     prompts ||
-    getMetadataModelKey(metadata, 'model') !== null ||
+    getMetadataModelRef(metadata, 'model') !== null ||
     getInteger(metadata, 'num_frames') !== null ||
     getInteger(metadata, 'steps') !== null ||
     getNumber(metadata, 'cfg_scale') !== null ||
@@ -331,15 +407,18 @@ export const getVideoRecallCapabilities = (metadata: unknown): VideoRecallCapabi
  * against the gallery (existence + dimensions/probe data the metadata does not
  * carry) before they become widget values.
  */
+export interface VideoRecallConditioningClip {
+  name: string;
+  role: VideoConditioningRole;
+}
+
 export interface VideoRecallMediaNames {
+  /** The LTX-2 whole-modality conditioning clip, which excludes every other slot below. */
+  conditioningClip: VideoRecallConditioningClip | null;
   firstFrameName: string | null;
   lastFrameName: string | null;
   sourceVideoName: string | null;
-  /**
-   * The recorded trim bounds (metadata extras), so the executor can restore
-   * the clip's actual trim instead of `createVideoSourceClip`'s default —
-   * without them a recalled extension would start from the wrong frame.
-   */
+  /** Restore recorded clip trim so extension starts from the original frame rather than the default. */
   sourceVideoTrim: { endFrame: number; startFrame: number } | null;
   /**
    * The recorded Ref2VA references, in conditioning order. Names and options only — the
@@ -393,23 +472,35 @@ export const buildVideoRecallSettings = ({
   kind,
   metadata,
   models,
+  partial = false,
+  requireGenerationMode = true,
 }: {
   currentValues: VideoWidgetValues;
   kind: VideoRecallKind;
   metadata: unknown;
   models: readonly ModelConfig[];
+  /**
+   * Apply only what the record carries, leaving everything it omits as the panel has it — the external recall
+   * API's default. A full recall instead reproduces the run: it clears LoRAs, media and the hybrid base the record
+   * does not name.
+   */
+  partial?: boolean;
+  /**
+   * Whether the record must be video generation metadata. A video's own record always is; the external recall API
+   * sends the same keys without a `generation_mode`.
+   */
+  requireGenerationMode?: boolean;
 }): (VideoRecallResult & { mediaNames: VideoRecallMediaNames }) | null => {
-  if (!isVideoGenerationMetadata(metadata)) {
+  if (requireGenerationMode ? !isVideoGenerationMetadata(metadata) : !isRecord(metadata)) {
     return null;
   }
 
   const fields: VideoRecalledField[] = [];
   let values: VideoWidgetValues = { ...currentValues };
-  // Held aside rather than folded into `values` where it is read: the model
-  // transition below rebuilds `values` from the recalled family's defaults, and
-  // recalled prompts must survive that. Merged in at each return instead.
+  // Hold prompts outside values until return so model-default transitions cannot overwrite them.
   let promptPatch: Partial<VideoWidgetValues> | null = null;
   const mediaNames: VideoRecallMediaNames = {
+    conditioningClip: null,
     firstFrameName: null,
     lastFrameName: null,
     references: [],
@@ -421,9 +512,7 @@ export const buildVideoRecallSettings = ({
     const { negativePrompt, positivePrompt } = getMetadataPrompts(metadata);
 
     if (positivePrompt !== null || negativePrompt !== undefined) {
-      // A disabled negative submits as '' — an empty recorded negative is
-      // indistinguishable from disabled, so it must not flip the toggle on
-      // (or erase a saved-but-disabled draft's enabled state).
+      // An empty recorded negative cannot distinguish disabled from empty; preserve the panel's toggle.
       promptPatch = {
         ...(positivePrompt !== null ? { positivePrompt } : {}),
         ...(typeof negativePrompt === 'string' && negativePrompt.length > 0
@@ -459,10 +548,17 @@ export const buildVideoRecallSettings = ({
 
   if (recalledModel && recalledModel.key !== values.model?.key) {
     // The canonical family transition first, so frames/fps/resolution snap to
-    // the recalled model before its recorded values land on top.
+    // the recalled model before its recorded values land on top. Its negative
+    // prompt is held back: what the clip recorded is authoritative, and an
+    // empty recording deliberately leaves the panel's own alone (below), which
+    // a family default seeded on the way in would silently overrule -- the
+    // recalled clip would then be re-run against a list it never used.
+    const carriedNegativePrompt = values.negativePrompt;
+
     values = {
       ...getVideoModelSelectionResult({ currentSettings: values, model: recalledModel, models }).settings,
       model: recalledModel,
+      negativePrompt: carriedNegativePrompt,
     };
     fields.push('model');
   } else if (recalledModel) {
@@ -486,16 +582,27 @@ export const buildVideoRecallSettings = ({
     fields.push('frames');
   }
 
+  // Asked with the accelerator forced OFF, not as the panel currently stands. An accelerator that
+  // removes guidance hides Steps and every guidance scale, and this policy decides which of them
+  // recall is allowed to write -- so recalling an ordinary clip into a panel that happens to have
+  // the accelerator on would drop them all and silently leave the accelerator's values in place,
+  // showing numbers the recalled clip never used. The accelerator's own state is derived further
+  // down from the recalled LoRA set, which overwrites this anyway.
+  // A partial record without `loras` leaves the accelerator as the panel has it, so it may write only the controls
+  // that panel shows; everything else re-derives the accelerator from the recalled LoRAs further down.
+  const lorasRecalled = !partial || (isRecord(metadata) && Array.isArray(metadata.loras));
+  const policy = getVideoModelPolicy(model, lorasRecalled ? { ...values, acceleratorEnabled: false } : values);
   const steps = getInteger(metadata, 'steps');
 
-  if (steps !== null && steps >= 1) {
+  // A fixed-schedule checkpoint ignores whatever step count reaches it, so recalling one would
+  // leave a disabled control showing a number the run will not use — and re-record it next time.
+  if (policy.ui.stepsEditable && steps !== null && steps >= 1) {
     values = { ...values, steps };
     fields.push('steps');
   }
 
   const cfgScale = getNumber(metadata, 'cfg_scale');
-  const cfgScaleLowNoise = getNumber(metadata, 'guidance_scale_low_noise');
-  const policy = getVideoModelPolicy(model, values);
+  const cfgScaleLowNoise = getNumber(metadata, 'wan_guidance_scale_low_noise');
 
   if (policy.ui.cfgVisible && cfgScale !== null && cfgScale >= 1) {
     values = {
@@ -504,17 +611,35 @@ export const buildVideoRecallSettings = ({
       // The graph records the key only when the setting was non-null; absence
       // means "reuse the primary CFG", so restore that exact semantics.
       ...(policy.ui.cfgLowNoiseVisible
-        ? { cfgScaleLowNoise: cfgScaleLowNoise !== null && cfgScaleLowNoise >= 0 ? cfgScaleLowNoise : null }
+        ? { cfgScaleLowNoise: cfgScaleLowNoise !== null && cfgScaleLowNoise >= 1 ? cfgScaleLowNoise : null }
         : {}),
     };
     fields.push('cfg');
   }
 
+  // The per-modality scales ride with CFG: they are the same run's guidance,
+  // and a family that does not offer a control must not be handed a number.
+  const guidanceRecall = [
+    { floor: 1, key: 'audioCfgScale', metadataKey: 'ltx2_audio_cfg_scale', visible: policy.ui.audioCfgVisible },
+    { floor: 0, key: 'stgScale', metadataKey: 'ltx2_stg_scale', visible: policy.ui.stgVisible },
+    { floor: 1, key: 'modalityScale', metadataKey: 'ltx2_modality_scale', visible: policy.ui.modalityVisible },
+  ] as const;
+
+  for (const { floor, key, metadataKey, visible } of guidanceRecall) {
+    const recalled = getNumber(metadata, metadataKey);
+
+    if (visible && recalled !== null && recalled >= floor) {
+      values = { ...values, [key]: recalled };
+
+      if (!fields.includes('cfg')) {
+        fields.push('cfg');
+      }
+    }
+  }
+
   const fps = getInteger(metadata, 'fps');
 
-  // Wan records the delivered frame rate (H3 is fixed at 24 and records
-  // none). Recalling it into an extend-mode panel is harmless: the fps field
-  // is display-only there and the compiled graph re-inherits the clip's rate.
+  // Wan records delivered fps; extend compilation still inherits clip fps, and H3 fixes it at 24.
   if (policy.fps.editable && fps !== null && fps >= 1 && fps <= 120) {
     if (fps !== values.fps) {
       values = { ...values, fps };
@@ -529,38 +654,49 @@ export const buildVideoRecallSettings = ({
     fields.push('size');
   }
 
-  // Components recall FIRST: the accelerator derivation below resolves the H3 task off the
-  // recalled transformer override, so `values` must already hold it.
+  // Recall components before deriving acceleration so H3 task detection sees the recorded transformer.
   let componentsRecalled = false;
+  let hybridBaseRecalled = false;
 
   for (const [metadataKey, valuesKey] of VIDEO_COMPONENT_METADATA_KEYS) {
-    const recordedKey = getMetadataModelKey(metadata, metadataKey);
-
-    if (!recordedKey) {
-      continue;
-    }
-
-    const installed = models.find((candidate) => candidate.key === recordedKey);
+    const installed = resolveRecordedModel(getMetadataModelRef(metadata, metadataKey), models);
 
     if (installed) {
       values = { ...values, [valuesKey]: installed };
       componentsRecalled = true;
+      hybridBaseRecalled ||= valuesKey === 'h3HybridBaseModel';
     }
+  }
+
+  // Restore only an installed recorded hybrid base; otherwise clear it and report against the original panel.
+  // Required source/text components retain current picks when absent.
+  if (!hybridBaseRecalled && !partial) {
+    if (values.h3HybridBaseModel) {
+      values = { ...values, h3HybridBaseModel: null };
+    }
+    componentsRecalled ||= currentValues.h3HybridBaseModel !== null;
+  }
+
+  // The hybrid's start block belongs to the recorded base: a full recall restores it only with that base, never
+  // onto one the panel happened to hold already. A partial recall may set it on the panel's own base.
+  const hybridStartBlock = getInteger(metadata, 'minimax_h3_hybrid_start_block');
+
+  if (
+    (hybridBaseRecalled || (partial && values.h3HybridBaseModel !== null)) &&
+    hybridStartBlock !== null &&
+    hybridStartBlock >= MINIMAX_H3_HYBRID_BLOCK_RANGE.min &&
+    hybridStartBlock <= MINIMAX_H3_HYBRID_BLOCK_RANGE.max
+  ) {
+    values = { ...values, h3HybridStartBlock: hybridStartBlock };
+    componentsRecalled = true;
   }
 
   if (componentsRecalled) {
     fields.push('components');
   }
 
-  // Legacy metadata shape (pre model-positions): the run recorded the H3
-  // Diffusers install as `model` with the single-file transformer as an
-  // override extra. The transformer is the model identity now — promote it,
-  // so the accelerator derivation below judges the right task. It promotes
-  // whenever the components loop resolved an installed H3 checkpoint into the
-  // override slot, even when the recorded install itself is gone (the panel's
-  // current model then stands in for `model`): the transformer is what
-  // defines the run. Anything else that landed in the slot (corrupt metadata
-  // naming a non-main) is dropped rather than left as dangling state.
+  // Promote an installed H3 checkpoint from legacy transformer metadata to model identity, even if the recorded
+  // Diffusers install is gone. Drop invalid non-main overrides.
   if (values.h3TransformerModel) {
     const transformer = values.h3TransformerModel;
 
@@ -588,45 +724,70 @@ export const buildVideoRecallSettings = ({
 
   const recordedLoras = getMetadataLoras(metadata);
   const resolvedLoras = recordedLoras.flatMap((entry) => {
-    const installed = models.find((candidate) => candidate.key === entry.key);
+    const installed = resolveRecordedModel(entry.model, models);
 
     return installed && isLoraModelConfig(installed) && isLoraCompatibleWithModel(installed, model)
       ? [{ isEnabled: true, model: installed as LoraModelConfig, weight: entry.weight }]
       : [];
   });
 
-  // The recall reproduces the recorded LoRA set: empty when the video ran
-  // without LoRAs, and also when the recorded ones are no longer installed —
-  // keeping the panel's current LoRAs would misrepresent the run either way.
-  if (resolvedLoras.length > 0 || values.loras.length > 0) {
-    values = {
-      ...values,
-      loras: resolvedLoras,
-      ...deriveAcceleratorRecallState(model, resolvedLoras, values.steps, values),
-    };
+  // Reproduce the recorded LoRA set, including empty or entirely uninstalled sets; never retain unrelated panel
+  // LoRAs. A partial record without `loras` leaves the panel's set alone.
+  if (lorasRecalled && (resolvedLoras.length > 0 || values.loras.length > 0)) {
+    const accelerator = deriveAcceleratorRecallState(model, resolvedLoras, values.steps, values);
+
+    if (values.acceleratorEnabled && !accelerator.acceleratorEnabled) {
+      // Leaving the fast path restores the model's sampling defaults, as switching it off in the panel does; a
+      // value the record names stays. Otherwise the accelerator's few-step, guidance-free recipe would outlive it.
+      const defaults = getAcceleratorToggleResult(values, model, models, false).settings;
+      const recorded = (key: string) => getNumber(metadata, key) !== null;
+
+      values = {
+        ...values,
+        ...(recorded('steps') ? {} : { steps: defaults.steps }),
+        ...(recorded('cfg_scale') ? {} : { cfgScale: defaults.cfgScale, cfgScaleLowNoise: defaults.cfgScaleLowNoise }),
+        ...(recorded('ltx2_audio_cfg_scale') ? {} : { audioCfgScale: defaults.audioCfgScale }),
+        ...(recorded('ltx2_stg_scale') ? {} : { stgScale: defaults.stgScale }),
+        ...(recorded('ltx2_modality_scale') ? {} : { modalityScale: defaults.modalityScale }),
+      };
+    }
+    values = { ...values, loras: resolvedLoras, ...accelerator };
     fields.push('loras');
   }
 
   const media = getRecallableMediaNames(metadata);
   const references = getRecallableReferences(metadata);
+  const conditioningClip = getRecallableConditioningClip(metadata);
   // Judged against the ORIGINAL panel state: the model transition above may
   // already have cleared media the new family cannot consume, and that change
   // is still part of what this recall did.
   const hadMedia = Boolean(
+    currentValues.conditioningClip ||
     currentValues.firstFrameImage ||
     currentValues.lastFrameImage ||
     currentValues.sourceVideo ||
     currentValues.references.length > 0
   );
 
-  // Media selects the graph family (t2v vs i2v vs extend vs reference), so an all/remix
-  // recall must reproduce the recorded media EXACTLY: whatever the panel held
-  // is cleared, and the executor re-hydrates the recorded names on top.
-  if (hadMedia) {
-    values = { ...values, firstFrameImage: null, lastFrameImage: null, references: [], sourceVideo: null };
+  // All/remix recall clears current media before restoring recorded names because media determines graph family.
+  // A partial recall keeps the panel's media; each slot it names displaces only its rivals when hydrated.
+  if (hadMedia && !partial) {
+    values = {
+      ...values,
+      conditioningClip: null,
+      firstFrameImage: null,
+      lastFrameImage: null,
+      references: [],
+      sourceVideo: null,
+    };
   }
 
-  if (references.length > 0) {
+  if (conditioningClip) {
+    // First, and alone: the clip holds a whole modality clean, so no other slot could have been
+    // filled on the run being recalled.
+    mediaNames.conditioningClip = conditioningClip;
+    fields.push('media');
+  } else if (references.length > 0) {
     // References replace the frame slots, but a recorded source video rides
     // ALONGSIDE them: Ref2VA reference-extend appends the new clip to it.
     mediaNames.references = references;
@@ -649,8 +810,38 @@ export const buildVideoRecallSettings = ({
       mediaNames.sourceVideoTrim = startFrame !== null && endFrame !== null ? { endFrame, startFrame } : null;
     }
     fields.push('media');
-  } else if (hadMedia) {
+  } else if (hadMedia && !partial) {
     fields.push('media');
+  }
+
+  // A partial record's explicitly empty list asks for no references, whatever other media it names; an absent one
+  // leaves them alone.
+  if (
+    partial &&
+    isRecord(metadata) &&
+    Array.isArray(metadata.minimax_h3_references) &&
+    metadata.minimax_h3_references.length === 0 &&
+    values.references.length > 0
+  ) {
+    values = { ...values, references: [] };
+    if (!fields.includes('media')) {
+      fields.push('media');
+    }
+  }
+
+  // Recalled alongside the source rather than with the sampling block: it is only meaningful for a
+  // continuation, and it is not recoverable from anything else in the record -- the output length
+  // folds the source, the generated half and the crossfade together. Snapped on the way in for the
+  // same reason the settings normalizer snaps it: an off-grid value would show a count the run
+  // could not use.
+  const contextFrames = getInteger(metadata, 'ltx2_context_frames');
+
+  if (contextFrames !== null && model?.base === 'ltx-2') {
+    values = {
+      ...values,
+      ltx2ExtendContextFrames: Math.max(1 + LTX2_NUM_FRAMES_STEP, snapLtx2FramesDown(contextFrames)),
+    };
+    fields.push('extendContext');
   }
 
   return fields.length > 0 ? { fields, mediaNames, values: { ...values, ...promptPatch } } : null;
@@ -669,6 +860,7 @@ const VIDEO_FIELD_LABELS: Record<VideoRecalledField, string> = {
   cfg: 'CFG',
   steps: 'steps',
   components: 'components',
+  extendContext: 'context frames',
   fps: 'FPS',
   frames: 'frames',
   loras: 'concepts',

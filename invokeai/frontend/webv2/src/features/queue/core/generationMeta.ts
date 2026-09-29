@@ -1,20 +1,8 @@
 import type { QueueItemReadModel } from '@features/queue/core/types';
 
 /**
- * Best-effort recovery of the human-facing generation parameters for a queue
- * item. The reliable source is the local submission snapshot (matched in the
- * view by origin), but server items from other clients/sources only carry
- * field values — generic node/field/value substitutions.
- *
- * Every batch this client submits names its nodes (`buildGeneratePromptBatchPlan`
- * stamps the graph's prompt/seed node ids as `node_path`), so read by identity
- * first. Order alone is not safe: a submission may legitimately carry an EMPTY
- * positive prompt — the Video panel has no positive-prompt requirement at all —
- * and a positional scan that skips blanks would slide the negative prompt into
- * the positive slot and recall it as the subject.
- *
- * Unknown graphs (other clients, workflow batches naming their own nodes) fall
- * back to the original by-type/by-order heuristic.
+ * Prefer local snapshots, then named node fields. Preserve blank positive prompts; only unknown graph fields fall
+ * back to type/order heuristics.
  */
 
 export interface QueueGenerationMeta {
@@ -51,8 +39,7 @@ export const extractGenerationMeta = (item: QueueItemReadModel): QueueGeneration
     return meta;
   }
 
-  // Fallback for graphs that name their nodes differently: recover by value
-  // type and order, as before. Only fills what the named pass did not.
+  // Fill unresolved metadata by type/order only for graphs with unfamiliar node names.
   const prompts: string[] = [];
 
   for (const { value } of fieldValues) {

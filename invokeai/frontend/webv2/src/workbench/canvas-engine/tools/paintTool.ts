@@ -1,17 +1,7 @@
 /**
- * The shared machinery behind the brush and eraser tools. Both are the same
- * gesture — resolve a paintable target layer on pointer-down (auto-creating a
- * fresh paint layer when the selection can't be painted into), drive a
- * {@link StrokeSession} across the move batches, and commit or cancel on release —
- * differing only in their blend (`source-over` fill vs `destination-out`) and in
- * which options store they read. `createBrushTool` / `createEraserTool`
- * (in `brushTool.ts` / `eraserTool.ts`) are thin wrappers over
- * {@link createPaintTool}.
- *
- * This is the ONE place a painting tool is allowed to dispatch, and only ever
- * the single gesture-start `addCanvasLayer`. Pointer-move never dispatches.
- *
- * Zero React, zero import-time side effects.
+ * Shared brush/eraser gesture resolves or creates a target, drives a StrokeSession and commits/cancels. Only
+ * gesture-start layer creation dispatches here; moves never dispatch. Fill/erase differ by blend and option
+ * source.
  */
 
 import type { CanvasLayerContract, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
@@ -59,11 +49,7 @@ interface PaintTarget {
   cancel(): void;
   /** When the gesture auto-created its layer, the created contract + its anchor (for history). */
   createdLayer?: { layer: CanvasLayerContract; anchor: CanvasNodeInsertionAnchor };
-  /**
-   * Overrides the brush colour for this gesture (mask targets paint an opaque
-   * stencil — the stored RGB is irrelevant, the compositor colorizes by alpha).
-   * Absent ⇒ the tool's own colour.
-   */
+  /** Optional gesture color override; mask RGB is irrelevant because compositing colorizes alpha. */
   color?: string;
   /**
    * True when the target is a transparency-LOCKED raster paint layer. The brush
@@ -72,18 +58,11 @@ interface PaintTarget {
    */
   transparencyLocked?: boolean;
   /**
-   * True for mask targets (inpaint / regional guidance). A mask is an opaque
-   * alpha stencil, so the stroke is forced to opacity 1 regardless of the brush's
-   * opacity slider — a 50%-opacity brush would otherwise land alpha ~128 and
-   * silently attenuate the mask (a ~50% denoise, invisible in the tinted overlay).
+   * Masks force opacity one; partial brush alpha would silently attenuate generation coverage despite the tinted
+   * preview.
    */
   forceOpaque?: boolean;
-  /**
-   * The target layer's committed transform. The session paints layer-local
-   * pixels through its inverse so the stroke lands under the cursor even on a
-   * moved, scaled or rotated layer. Absent ⇒ identity (a freshly auto-created
-   * layer).
-   */
+  /** Invert the committed layer transform to paint under the cursor; absence is identity for new layers. */
   transform?: CanvasLayerContract['transform'];
 }
 
@@ -97,8 +76,7 @@ const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget
   const selected = leaf?.layer;
 
   if (leaf && selected && selected.type === 'raster' && selected.source.type === 'paint') {
-    // The selection is a paint layer: paint into it, unless it's locked/disabled
-    // (a no-op — don't silently spawn a new layer over the user's locked target).
+    // Locked/disabled paint targets refuse rather than silently creating another layer.
     if (!isLeafPaintable(leaf)) {
       return null;
     }
@@ -124,9 +102,8 @@ const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget
   }
 
   if (leaf && selected?.type === 'raster' && selected.source.type === 'image' && tool === 'eraser') {
-    // Erasing is a destructive pixel edit, so materialize the image into an
-    // undoable paint layer in place. A locked/disabled/unready image refuses the
-    // transaction; never spawn a new layer over the selected image.
+    // Erase materializes image pixels as an undoable paint layer in place; locked, disabled or unready images
+    // refuse without spawning.
     if (!isLeafPaintable(leaf) || isLayerTransparencyLocked(selected)) {
       return null;
     }
@@ -145,10 +122,8 @@ const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget
   }
 
   if (leaf && selected && isMaskLayer(selected)) {
-    // The selection is a mask: paint the stroke into its alpha stencil cache
-    // (brush adds coverage, eraser removes — the shared stroke session handles
-    // both via its composite op). Never auto-create a paint layer here. A
-    // locked/disabled mask refuses the stroke (a no-op, not a spawn).
+    // Paint mask alpha directly, adding/removing coverage. Locked/disabled masks refuse and never auto-create
+    // paint layers.
     if (!isLeafPaintable(leaf)) {
       return null;
     }
@@ -182,9 +157,7 @@ const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget
     };
   }
 
-  // Selection is an image/other raster, another layer type, or nothing: create a
-  // fresh paint layer (inserted on top and selected by the reducer) and paint
-  // into it. This is the single allowed gesture-start dispatch.
+  // Other eligible selections create a selected paint layer at the top via the sole gesture-start dispatch.
   const layerId = ctx.createLayerId();
   const previousSelectedLayerId = doc.selectedLayerId;
   const layer: CanvasRasterLayerContractV2 = {
@@ -201,17 +174,12 @@ const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget
   const anchor = ctx.captureInsertionAnchor('raster', doc.selectedLayerId);
   ctx.dispatch({ anchor, layer, type: 'addCanvasLayer' });
 
-  // A brand-new empty paint layer: create a zero-rect cache marked fresh so the
-  // async rasterize pass doesn't clobber the stroke mid-gesture. The first stroke
-  // grows it from empty to the stroke's content bounds.
+  // Mark the new zero-rect cache fresh to fence async rasterization; the stroke grows its bounds.
   const entry = ctx.layers.getOrCreateRect(layerId, { height: 0, width: 0, x: 0, y: 0 });
   entry.stale = false;
   return {
-    // The dispatch above happens at pointer-DOWN, before any pixel exists, and sits
-    // outside history (the stroke's composed entry owns the create+paint pair), so it
-    // needs a real rollback like the control branch's. Reached whenever
-    // `strokeSession.commit()` returns null — every point clipped away by the
-    // generation frame or the selection — plus pointercancel and a mid-drag switch.
+    // Gesture-start creation is outside history until a stroke commits. Roll it back for fully clipped strokes,
+    // cancellation or mid-drag switching.
     cancel: () => {
       ctx.layers.delete(layerId);
       ctx.dispatch({ ids: [layerId], type: 'removeCanvasLayers' });
@@ -283,8 +251,6 @@ export const createPaintTool = (spec: PaintToolSpec): Tool => {
       if (!resolvedTarget) {
         return;
       }
-      // Transparency lock: the eraser is refused (it would alter the locked alpha);
-      // the brush switches to `source-atop` so colour lands only on existing pixels.
       if (resolvedTarget.transparencyLocked && spec.id === 'eraser') {
         return;
       }
@@ -304,9 +270,7 @@ export const createPaintTool = (spec: PaintToolSpec): Tool => {
       target = resolvedTarget;
       try {
         session = createStrokeSession({
-          // Resolve the selection clip ONCE per gesture: when a selection exists the
-          // stroke is masked to it; with none the field is null and the hot path is
-          // untouched (no per-point mask lookup).
+          // Capture selection clipping once per gesture; no selection avoids per-point mask work.
           clipMask: ctx.getSelectionMask?.() ?? null,
           clipRect: ctx.getStrokeClipRect?.() ?? null,
           color: target.color ?? spec.color(ctx),
@@ -318,8 +282,6 @@ export const createPaintTool = (spec: PaintToolSpec): Tool => {
           ctx,
           layerId: target.layerId,
           layerTransform,
-          // Mask strokes are forced opaque (an alpha stencil is all-or-nothing); a
-          // brush-opacity mask stroke would silently attenuate the denoise strength.
           opacity: target.forceOpaque ? 1 : spec.opacity(ctx),
           // A mask stroke is an all-or-nothing alpha stencil, so pressure must not thin it —
           // a partially-transparent mask would silently attenuate the denoise strength.

@@ -1,4 +1,3 @@
-import type { ProjectGraphState } from '@features/workflow/contracts';
 import type { BackendConnectionStatus } from '@platform/transport/types';
 
 import type { CanvasStateContractV3 } from './canvas-engine/api';
@@ -17,6 +16,7 @@ import type {
   WidgetRegionState,
 } from './layoutContracts';
 import type { ProjectEvent } from './projectEventContracts';
+import type { ProjectWorkflowCollection, ProjectWorkflowHistories } from './projectWorkflows';
 import type { WorkbenchQueueState } from './queueHistoryContracts';
 import type { ProjectSettings } from './settings/contracts';
 import type { WidgetFailure, WidgetInstanceContract, WidgetInstanceId, WidgetTypeId } from './widgetContracts';
@@ -29,16 +29,13 @@ export interface Project {
   settings: ProjectSettings;
   layout: ProjectLayoutState;
   invocation: InvocationControllerState;
-  /** The one active project graph: an editable workflow document, compiled to a `GraphContract` at invoke time. */
-  projectGraph: ProjectGraphState;
+  /** The project's workflows and which one is active; the active document compiles to a `GraphContract` at invoke time. */
+  workflows: ProjectWorkflowCollection;
+  /** Session-only graph edit histories by workflow id; never persisted. */
+  workflowHistories: ProjectWorkflowHistories;
   widgetInstances: Record<WidgetInstanceId, WidgetInstanceContract>;
   widgetRegions: Record<WidgetRegion, WidgetRegionState>;
-  /**
-   * Widget instances detached into floating windows. Optional and additive:
-   * projects persisted before this field existed hydrate with no floating
-   * windows. A floated instance is removed from its region's instanceIds
-   * while it floats.
-   */
+  /** Floating instances leave their region's instanceIds; absent in older projects means no floating windows. */
   floatingWidgets?: Record<WidgetInstanceId, FloatingWidgetState>;
   widgetGraphs: Partial<Record<WidgetTypeId, GraphContract>>;
   canvas: CanvasStateContractV3;
@@ -48,13 +45,13 @@ export interface Project {
   events: ProjectEvent[];
 }
 
-/** A persisted project the canvas version gate refused. `raw` is the untouched document, kept for recovery. */
-export interface ProjectDocumentLoadRefusal {
-  raw: unknown;
-  scope: 'project-document';
-  status: 'unsupported-version';
-  version: number;
-}
+/**
+ * A persisted project document that was not loaded: written by a newer version, or structurally damaged. `raw` is
+ * the untouched document, kept for recovery; nothing is written back over it.
+ */
+export type ProjectDocumentLoadRefusal =
+  | { raw: unknown; scope: 'project-document'; status: 'unsupported-version'; version: number }
+  | { raw: unknown; scope: 'project-document'; status: 'malformed'; reason: string };
 
 interface RefusedWorkbenchProjectBase {
   projectId: string;
@@ -100,7 +97,9 @@ export interface WorkbenchNotification {
   id: string;
   kind: WorkbenchNotificationKind;
   title: string;
+  titleKey?: string;
   message?: string;
+  messageKey?: string;
   createdAt: string;
   projectId?: string;
   isRead: boolean;
@@ -120,17 +119,16 @@ export interface UndoRedoEntry {
   createdAt: string;
   label: string;
   project: ProjectUndoSnapshot;
+  /** Edits that arrive as a stream (typing, dragging) share a key so they fold into one step. */
+  mergeKey?: string;
+  /** When the entry last absorbed a same-key edit; the merge window runs from here. */
+  mergedAt?: string;
 }
 
-/**
- * Project-level undo snapshot. Deliberately excludes `canvas`: the canvas
- * rendering engine owns its own pixel-patch history, so project undo/redo
- * passes the live `project.canvas` through untouched (see `restoreUndoSnapshot`).
- */
+/** Project undo preserves the live canvas and workflow documents; the engine and workflow histories own those. */
 export interface ProjectUndoSnapshot {
   layout: ProjectLayoutState;
   invocation: InvocationControllerState;
-  projectGraph: ProjectGraphState;
   widgetInstances: Record<WidgetInstanceId, WidgetInstanceContract>;
   widgetRegions: Record<WidgetRegion, WidgetRegionState>;
   /** Captured with widgetRegions: regions and floating windows are one placement fact. */
@@ -144,7 +142,8 @@ export interface UndoRedoHistory {
 }
 
 export interface AutosaveState {
-  status: 'idle' | 'saving' | 'saved' | 'error';
+  /** `pending`: persisted content changed since the last acknowledged save and its save has not started yet. */
+  status: 'idle' | 'pending' | 'saving' | 'saved' | 'error';
   lastSavedAt?: string;
   error?: string;
 }

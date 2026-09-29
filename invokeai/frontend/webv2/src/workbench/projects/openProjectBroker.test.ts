@@ -5,11 +5,7 @@ import type { ProjectPushOutcome } from './projectFlush';
 import { createOpenProjectBroker } from './openProjectBroker';
 import { getOpenProject } from './syncStore';
 
-/**
- * The registry has to say exactly which projects the editor holds: it is what decides whether a
- * library mutation goes through the sync engine or over HTTP, and a stale entry would put a write
- * on the wrong side of that.
- */
+/** The exact open-project registry decides between sync and HTTP writes. */
 
 const createHarness = () => {
   const listeners = new Set<() => void>();
@@ -58,8 +54,7 @@ describe('createOpenProjectBroker', () => {
     account.accountLifecycle.activate('broker-user');
   });
 
-  // The registry is module state. A test that leaves a handle in it is a test the next one
-  // inherits, and these only pass in isolation by using different ids.
+  // Clear the module registry between tests to avoid leaked handles.
   afterEach(() => {
     for (const broker of brokers.splice(0)) {
       broker.dispose();
@@ -143,11 +138,7 @@ describe('createOpenProjectBroker', () => {
     expect(harness.deps.closeProject).toHaveBeenCalledWith('a');
   });
 
-  /**
-   * A rename is already in the reducer and the local snapshot by the time the flush runs, and the
-   * next save retries the push. Failing the rename because the network blipped would undo nothing
-   * and explain less — so the outcome is read by the surfaces that read the project back, not here.
-   */
+  /** Local rename may succeed with a retryable flush; server-reading operations require acknowledgement. */
   it('does not fail a rename whose flush did not reach the server', async () => {
     const harness = createHarness();
 
@@ -159,11 +150,7 @@ describe('createOpenProjectBroker', () => {
     expect(harness.deps.renameProject).toHaveBeenCalledWith('a', 'New name');
   });
 
-  /**
-   * The registry is cleared when the account changes. A broker that trusted its own record of what
-   * it had published would never register those projects again, and every library mutation would
-   * silently take the HTTP path for the rest of the mount — the exact thing this exists to stop.
-   */
+  /** Republish after account clears even if the broker's previous set is unchanged. */
   it('republishes its handles after the registry is cleared underneath it', async () => {
     const harness = createHarness();
     const account = await import('@platform/state/accountLifecycle');

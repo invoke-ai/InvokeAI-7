@@ -8,14 +8,6 @@ import { WorkflowEditorView } from './editor/WorkflowEditorView';
 import { WorkflowLinearPanel } from './linear/WorkflowLinearPanel';
 import { useWorkflowProjectSelector } from './WorkflowUiContext';
 
-/**
- * The workflow widget's surfaces, per its manifest: the center region is the
- * node editor over the project graph; the left region is the Linear UI panel
- * bound to the same document; the bottom region is a status-bar entry whose
- * expanded panel is the same node editor — handy while another widget (e.g.
- * the canvas and its staging area) holds the center.
- */
-
 const WorkflowStatusBarItem = () => {
   const workflowName = useWorkflowProjectSelector((project) => project.projectGraph.name);
   const isRunning = useWorkflowProjectSelector((project) => project.isWorkflowRunning);

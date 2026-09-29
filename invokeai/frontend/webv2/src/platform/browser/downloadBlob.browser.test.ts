@@ -1,11 +1,7 @@
 import { downloadBlob, downloadText } from '@platform/browser/downloadBlob';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-/**
- * Records each anchor *and whether it was in the document at the moment it was
- * clicked* — the helper detaches it immediately afterwards, so reading that
- * later always says no.
- */
+/** Record connectivity at click time; the helper immediately detaches the anchor afterward. */
 const capture = () => {
   const clicked: { download: string; href: string; wasConnected: boolean }[] = [];
 
@@ -31,8 +27,7 @@ describe('downloadBlob', () => {
     expect(clicked[0]!.href.startsWith('blob:')).toBe(true);
   });
 
-  // A detached anchor's click has historically not worked in Firefox, which is
-  // how "export does nothing" bugs get reported against one browser only.
+  // Attach before click for Firefox compatibility.
   it('attaches the anchor to the document before clicking it', () => {
     const { clicked } = capture();
 
@@ -49,8 +44,7 @@ describe('downloadBlob', () => {
     expect(document.querySelector('a[download="notes.txt"]')).toBeNull();
   });
 
-  // Revoking in the same tick races the browser's own read of the URL and loses
-  // often enough on Safari to produce an empty download.
+  // Defer revocation to avoid racing Safari's URL consumption.
   it('keeps the object URL alive past the click', async () => {
     const { clicked } = capture();
     const revoke = vi.spyOn(URL, 'revokeObjectURL');

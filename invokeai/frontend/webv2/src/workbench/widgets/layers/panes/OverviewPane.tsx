@@ -23,12 +23,8 @@ const CHECKERBOARD_CSS = {
 const VIEW_RECT_TRANSITION = `left ${VIEW_RECT_INTERVAL_MS}ms linear, top ${VIEW_RECT_INTERVAL_MS}ms linear, width ${VIEW_RECT_INTERVAL_MS}ms linear, height ${VIEW_RECT_INTERVAL_MS}ms linear`;
 
 /**
- * The navigator: a fit-to-pane composite of the whole document over a
- * transparency checkerboard, with the live viewport outlined on top. Clicking
- * or dragging centers the view there, the wheel zooms about the point under
- * the cursor, and arrow keys pan when the preview is focused. Composite
- * repaints and outline updates are throttled; the outline is positioned
- * imperatively so pan/zoom never re-renders the pane.
+ * Show a fitted composite with viewport outline; click/drag centers, wheel zooms, and arrows pan. Throttle
+ * painting and update the outline imperatively.
  */
 export const OverviewPane = () => {
   const { t } = useTranslation();
@@ -149,8 +145,7 @@ const ConnectedOverview = ({ engine }: { engine: CanvasEngineHandle }) => {
     scheduleRedraw();
   }, [contentEpoch, stacks, frame, scheduleRedraw]);
 
-  // The outline is written straight to the DOM on a throttled cadence; the CSS
-  // transition carries it between updates.
+  // Throttle DOM outline updates and let CSS interpolate between them.
   useEffect(() => {
     const viewport = engine.viewport.getViewport();
     let timer: ReturnType<typeof setTimeout> | null = null;

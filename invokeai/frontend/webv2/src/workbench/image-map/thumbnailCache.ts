@@ -10,9 +10,8 @@ import {
 import { ApiError } from '@platform/transport/http';
 
 /**
- * What a hover card shows for one item: the thumbnail, plus the duration that
- * makes a clip's card read like its gallery tile. Both derive from the
- * immutable item name, so unlike full DTOs they never go stale.
+ * Hover thumbnail and optional video duration derive from immutable item names and can be cached independently of
+ * mutable DTOs.
  */
 export interface HoverThumbnail {
   url: string;
@@ -67,11 +66,7 @@ export const getThumbnailUrl = (item: GalleryItemRef): Promise<HoverThumbnail | 
       return thumbnail;
     })
     .catch((error: unknown): null => {
-      // A deleted or no-longer-visible item answers definitively, and hovering
-      // is driven by pointer movement — so remember the miss, or every dwell
-      // over that point re-fetches the same 404 for the rest of the session.
-      // (The by-names resolver this replaced returned an empty array for a
-      // miss, which the `then` above cached; the by-ref one throws.)
+      // Remember definitive missing/invisible-item responses so each hover does not repeat the same 404.
       if (error instanceof ApiError && (error.status === 403 || error.status === 404) && isAccountScopeCurrent(owner)) {
         urls.set(key, null);
       }

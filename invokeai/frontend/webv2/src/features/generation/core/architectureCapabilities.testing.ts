@@ -1,13 +1,4 @@
-/**
- * Seeds the architecture capability registry for tests.
- *
- * Generation policy comes from the backend now, and the resolver fails closed without it, so any
- * test that touches policy needs the table present -- the way it always is in a running app, where
- * app boot fetches it before the Generate widget renders.
- *
- * Explicit rather than a global setup file: a test that wants to observe the *unloaded* behaviour
- * should be able to see that it is unloaded.
- */
+/** Seed fixtures explicitly so tests can still exercise unloaded policy. */
 
 import { afterEach, beforeEach } from 'vitest';
 

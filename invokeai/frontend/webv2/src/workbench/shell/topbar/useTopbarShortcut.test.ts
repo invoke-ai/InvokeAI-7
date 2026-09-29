@@ -3,11 +3,6 @@ import { describe, expect, it } from 'vitest';
 
 import { formatTopbarShortcut, formatTopbarShortcutForAria } from './useTopbarShortcut';
 
-/**
- * The bar prints its own bindings on control faces, so it has to print the ones
- * this keyboard actually has. `⌘↵` on Linux names a key that is not there, which
- * is worse than showing nothing.
- */
 describe('topbar shortcut labels', () => {
   it('renders modifiers for the running platform', () => {
     expect(formatTopbarShortcut('mod+enter')).toBe(IS_MAC_OS ? '⌘↵' : 'Ctrl+Enter');

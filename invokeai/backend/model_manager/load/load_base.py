@@ -241,6 +241,22 @@ class LoadedModelWithoutConfig:
         """Whether this model can stream individual weights between RAM and the compute device."""
         return isinstance(self._cache_record.cached_model, CachedModelWithPartialLoad)
 
+    @property
+    def weight_bytes(self) -> int:
+        """Total size of this model's weights, resident or not."""
+        return self._cache_record.cached_model.total_bytes()
+
+    @property
+    def resident_weight_bytes(self) -> int:
+        """How many of this model's weight bytes currently sit on the compute device.
+
+        A caller that has to bound its own residency — because it holds a second model of the same
+        size at the same time — needs this to size its `unload_from_vram` request. Exposed here so
+        such a caller does not have to reach through `_cache_record.cached_model`, whose lifetime
+        the cache owns.
+        """
+        return self._cache_record.cached_model.cur_vram_bytes()
+
     def repair_required_tensors_on_device(self) -> int:
         """Repair required tensors that should be resident on the cached model's execution device."""
         cached_model = self._cache_record.cached_model

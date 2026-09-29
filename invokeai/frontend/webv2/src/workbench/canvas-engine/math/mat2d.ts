@@ -1,27 +1,11 @@
-/**
- * Pure functions on `Mat2d`, the engine's 2D affine matrix type.
- *
- * Convention (matches `CanvasRenderingContext2D.setTransform`):
- * ```
- * x' = a*x + c*y + e
- * y' = b*x + d*y + f
- * ```
- *
- * No classes, no mutation — every function returns a new `Mat2d`.
- */
+/** Immutable 2D affine math matching canvas transforms: x' = a*x + c*y + e; y' = b*x + d*y + f. */
 
 import type { Mat2d, Vec2 } from '@workbench/canvas-engine/types';
 
 /** Returns the identity matrix. */
 export const identity = (): Mat2d => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
 
-/**
- * Composes two matrices such that applying the result to a point is
- * equivalent to applying `b` first, then `a` (i.e. `result = a * b`, using
- * the same composition order as `DOMMatrix.multiply` / `ctx.transform`
- * chaining: `a.multiply(b)` applies `b`'s transform in `a`'s coordinate
- * space).
- */
+/** Returns a*b: apply b first, then a, matching DOMMatrix multiplication. */
 export const multiply = (a: Mat2d, b: Mat2d): Mat2d => ({
   a: a.a * b.a + a.c * b.b,
   b: a.b * b.a + a.d * b.b,
@@ -67,12 +51,7 @@ export const applyToPoint = (m: Mat2d, p: Vec2): Vec2 => ({
   y: m.b * p.x + m.d * p.y + m.f,
 });
 
-/**
- * Composes a matrix from translation, rotation, and scale, in the order
- * translate · rotate · scale — i.e. scale is applied first (in local
- * space), then rotation, then translation. This is the standard TRS
- * composition used for layer transforms.
- */
+/** Composes translate*rotate*scale, applying local scale first, then rotation and translation. */
 export const fromTRS = (translation: Vec2, rotationRad: number, scaleX: number, scaleY: number = scaleX): Mat2d => {
   let m = identity();
   m = translate(m, translation);
@@ -82,11 +61,8 @@ export const fromTRS = (translation: Vec2, rotationRad: number, scaleX: number, 
 };
 
 /**
- * Extracts an approximate uniform scale magnitude from a matrix — the
- * geometric mean of the transformed lengths of the unit x/y axis vectors.
- * Useful for stroke-width and zoom math where an exact per-axis scale isn't
- * needed. For a matrix with no shear/non-uniform scale this equals the
- * true scale factor.
+ * Approximate uniform scale from the geometric mean of transformed unit-axis lengths; exact for uniform scale
+ * without shear.
  */
 export const getScale = (m: Mat2d): number => {
   const scaleX = Math.hypot(m.a, m.b);

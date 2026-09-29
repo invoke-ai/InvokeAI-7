@@ -1,11 +1,6 @@
 import type { CanvasLayerContract } from '@workbench/canvas-engine/api';
 import type { TFunction } from 'i18next';
 
-/**
- * The row's secondary line: what this layer contributes, from data the layer already carries. A
- * raster names its source and any non-default blend or opacity; a control layer its adapter and
- * weight; regional guidance its prompt or reference images; an inpaint mask its denoise bounds.
- */
 export const layerRowSummary = (layer: CanvasLayerContract, t: TFunction): string => {
   switch (layer.type) {
     case 'raster': {

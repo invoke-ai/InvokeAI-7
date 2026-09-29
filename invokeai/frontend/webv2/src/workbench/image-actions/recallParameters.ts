@@ -163,14 +163,8 @@ const toReferenceImage = (config: GenerateReferenceImageConfig): GenerateReferen
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 
 /**
- * Translates one recall payload into the next Generate values. Pure: the caller
- * verifies reference-image availability and commits the result.
- *
- * Present keys are applied; a `null` value (strict mode) resets that field to
- * the effective model's default. Keys the Generate panel has no home for
- * (refiner, denoise strength, canvas control layers) and entries that cannot
- * be resolved against the installed models are reported in `skipped` rather
- * than silently dropped.
+ * Apply present payload keys; strict nulls reset to effective-model defaults. Report unsupported fields and
+ * unresolved models in skipped. The caller verifies reference availability and commits.
  */
 export const buildRecallParametersSettings = ({
   currentValues,
@@ -210,9 +204,7 @@ export const buildRecallParametersSettings = ({
     if (!model) {
       skip('model', 'unresolved', parameters.model);
     } else if (model.key !== values.model.key) {
-      // Model defaults first (as image recall does), then the same compatibility
-      // transition the model selector runs: retarget reference images, clear an
-      // incompatible VAE and component selections.
+      // Apply model defaults before the selector's compatibility transition for references, VAE, and components.
       const { settings } = getGenerateModelSelectionResult({
         currentValues: getSettingsWithModelDefaults(values, model),
         model,

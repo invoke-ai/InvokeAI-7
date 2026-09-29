@@ -39,10 +39,6 @@ const session = (overrides: Partial<TextEditSession> = {}): TextEditSession =>
     ...overrides,
   }) as unknown as TextEditSession;
 
-/**
- * A minimal engine double: the portal only needs the interaction store to read
- * the session, the layers commands it drives, and a viewport for positioning.
- */
 const createEngine = (
   initialSession: TextEditSession | null,
   fonts?: {

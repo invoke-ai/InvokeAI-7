@@ -125,7 +125,7 @@ def test_the_negative_prompt_policy_follows_the_guidance_model() -> None:
         by_usage.setdefault(facet.negative_prompt.usage, set()).add(base.value)
 
     assert by_usage["never"] == {"flux", "flux2", "ideogram-4", "minimax-h3"}
-    assert by_usage["cfg-gated"] == {"anima", "krea-2", "qwen-image", "z-image", "ernie-image"}
+    assert by_usage["cfg-gated"] == {"anima", "krea-2", "qwen-image", "z-image", "ernie-image", "ltx-2"}
     # Nothing declares a visible box it never uses, or an invisible one it does.
     for base in generative_bases():
         facet = get(base, FeaturesFacet)

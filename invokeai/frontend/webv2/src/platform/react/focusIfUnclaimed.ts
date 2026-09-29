@@ -8,12 +8,7 @@ export const focusFirstOperable = (element: HTMLElement | null): void => {
   element?.querySelector<HTMLElement>(FOCUSABLE)?.focus();
 };
 
-/**
- * For content revealed after the control that held focus unmounted -- a retry button replaced by the
- * thing it loaded. Moves focus into `element`, but only while nothing holds focus: it rescues a
- * keyboard user whose focus fell to `<body>` without pulling focus from wherever someone has since
- * moved it.
- */
+/** Restore focus after a control unmounts only while focus remains unclaimed; never steal a user's newer focus. */
 export const focusIfUnclaimed = (element: HTMLElement | null): void => {
   if (document.activeElement !== null && document.activeElement !== document.body) {
     return;

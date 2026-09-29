@@ -159,7 +159,18 @@ qwen_vl_encoder_fp8 = StarterModel(
     base=BaseModelType.Any,
     source="https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
     description="ComfyUI's single-file FP8-scaled Qwen2.5-VL 7B encoder. Bundles the language model and "
-    "visual tower; tokenizer/processor are fetched from HuggingFace on first use. (~7GB)",
+    "visual tower; its tokenizer and config ship with InvokeAI. (~7GB)",
+    type=ModelType.QwenVLEncoder,
+    format=ModelFormat.Checkpoint,
+)
+
+qwen_vl_encoder_nvfp4 = StarterModel(
+    name="Qwen2.5-VL Encoder (NVFP4)",
+    base=BaseModelType.Any,
+    source="https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_nvfp4.safetensors",
+    description="ComfyUI's single-file nvfp4/fp8-mixed Qwen2.5-VL 7B encoder. Bundles the language model and visual "
+    "tower; its tokenizer and config ship with InvokeAI. Its nvfp4 layers stay packed, about 6.7GB "
+    "once loaded. ~5.7GB download",
     type=ModelType.QwenVLEncoder,
     format=ModelFormat.Checkpoint,
 )
@@ -241,6 +252,35 @@ flux2_klein_qwen3_8b_encoder = StarterModel(
     type=ModelType.Qwen3Encoder,
 )
 
+flux2_klein_qwen3_4b_encoder_fp4 = StarterModel(
+    name="FLUX.2 Klein Qwen3 4B Encoder (FP4 mixed)",
+    base=BaseModelType.Any,
+    source="https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/main/split_files/text_encoders/qwen_3_4b_fp4_flux2.safetensors",
+    description="Comfy-Org's nvfp4/fp8-mixed Qwen3 4B text encoder for FLUX.2 Klein 4B. Its nvfp4 layers stay packed, about 5.2GB once loaded. ~3.6GB download",
+    type=ModelType.Qwen3Encoder,
+)
+
+flux2_klein_qwen3_8b_encoder_fp4 = StarterModel(
+    name="FLUX.2 Klein Qwen3 8B Encoder (FP4 mixed)",
+    base=BaseModelType.Any,
+    source="https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/resolve/main/split_files/text_encoders/qwen_3_8b_fp4mixed.safetensors",
+    description="Comfy-Org's nvfp4/fp8-mixed Qwen3 8B text encoder for FLUX.2 Klein 9B. Its nvfp4 layers stay packed, about 9.4GB once loaded. ~6.3GB download",
+    type=ModelType.Qwen3Encoder,
+)
+
+# A community repack -- Comfy-Org publishes no int8 build of this encoder. Pinned to a commit rather
+# than `main` for the same reason the FLUX.1 and Klein 9B int8 entries are: the decode follows the
+# file's own `comfy_quant` marker, which says `convrot: true` at group size 256. A reupload at the
+# same path that changed or dropped that flag would be derotated wrongly, and the result loads
+# cleanly, logs "Kept 252 of 252" and encodes noise.
+flux2_klein_qwen3_8b_encoder_int8 = StarterModel(
+    name="FLUX.2 Klein Qwen3 8B Encoder (int8)",
+    base=BaseModelType.Any,
+    source="https://huggingface.co/supermind/int8_convrot_models/resolve/eb6682675836a42aa91fd4effcd77d68fe60ff42/text_encoders/qwen_3_8b_int8_convrot.safetensors",
+    description="Community int8_convrot Qwen3 8B text encoder for FLUX.2 Klein 9B. Its 252 projections stay int8 and dequantize per forward, so it occupies roughly what it downloads rather than the ~16GB of the BF16 release. ~9.4GB download",
+    type=ModelType.Qwen3Encoder,
+)
+
 # Comfy-Org safetensors (single-file, 30-layer cow, with embedded Tekken tokenizer).
 # Higher precision than the cow GGUFs and avoids the Tekken-via-HF-Hub fetch.
 flux2_dev_comfy_mistral_fp8 = StarterModel(
@@ -263,7 +303,7 @@ flux2_dev_comfy_mistral_fp4 = StarterModel(
     name="FLUX.2 [dev] Mistral Encoder (Comfy FP4 mixed)",
     base=BaseModelType.Any,
     source="https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/text_encoders/mistral_3_small_flux2_fp4_mixed.safetensors",
-    description="Comfy-Org FP4-mixed of BFL's 30-layer cow-mistral3-small. Smallest safetensors variant; embeds Tekken tokenizer. ~12.3GB",
+    description="Comfy-Org FP4-mixed of BFL's 30-layer cow-mistral3-small; embeds Tekken tokenizer. Its nvfp4 layers stay packed, up to about 14.7GB once loaded. ~12.3GB download",
     type=ModelType.MistralEncoder,
 )
 
@@ -312,6 +352,14 @@ z_image_qwen3_encoder_quantized = StarterModel(
     description="Qwen3 4B text encoder for Z-Image quantized to GGUF Q6_K format. ~3.3GB",
     type=ModelType.Qwen3Encoder,
     format=ModelFormat.GGUFQuantized,
+)
+
+z_image_qwen3_encoder_fp4 = StarterModel(
+    name="Z-Image Qwen3 Text Encoder (FP4 mixed)",
+    base=BaseModelType.Any,
+    source="https://huggingface.co/Comfy-Org/z_image/resolve/main/split_files/text_encoders/qwen_3_4b_fp4_mixed.safetensors",
+    description="Comfy-Org's nvfp4/fp8-mixed Qwen3 4B text encoder for Z-Image. Its nvfp4 layers stay packed, about 4.3GB once loaded. ~3.5GB download",
+    type=ModelType.Qwen3Encoder,
 )
 
 # region Krea-2

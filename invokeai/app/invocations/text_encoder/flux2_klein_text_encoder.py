@@ -28,6 +28,7 @@ from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.backend.patches.layer_patcher import LayerPatcher, PatchSpec
 from invokeai.backend.patches.lora_conversions.flux_lora_constants import FLUX_LORA_T5_PREFIX
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
+from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes, requires_sidecar_patching
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import ConditioningFieldData, FLUXConditioningInfo
 from invokeai.backend.util.devices import TorchDevice
 
@@ -102,7 +103,15 @@ class Flux2KleinTextEncoderInvocation(BaseInvocation):
         # Reordered loading to prevent the annoying cache drop issue
         # This prevents it from being evicted while we look up the tokenizer
         text_encoder_info = context.models.load(self.qwen3_encoder.text_encoder)
-        (cached_weights, text_encoder) = exit_stack.enter_context(text_encoder_info.model_on_device())
+        text_encoder_format = context.models.get_config(self.qwen3_encoder.text_encoder).format
+        # An nvfp4 build dequantizes each packed Linear per forward, a transient its resident size does not
+        # cover. Read from the unlocked model, before the lock the reservation applies to; zero for other builds.
+        dequant_bytes = peak_dequant_transient_bytes(
+            text_encoder_info.model, TorchDevice.choose_bfloat16_safe_dtype(text_encoder_info.compute_device)
+        )
+        (cached_weights, text_encoder) = exit_stack.enter_context(
+            text_encoder_info.model_on_device(working_mem_bytes=dequant_bytes)
+        )
 
         # Now it is safe to load and lock the tokenizer
         tokenizer_info = context.models.load(self.qwen3_encoder.tokenizer)
@@ -127,6 +136,9 @@ class Flux2KleinTextEncoderInvocation(BaseInvocation):
                 prefix=FLUX_LORA_T5_PREFIX,
                 dtype=lora_dtype,
                 cached_weights=cached_weights,
+                # Quantized weights (packed nvfp4 Linears, GGUF, SDNQ) cannot take a direct patch, so
+                # their LoRAs ride as sidecars.
+                force_sidecar_patching=requires_sidecar_patching(text_encoder, text_encoder_format),
             )
         )
 

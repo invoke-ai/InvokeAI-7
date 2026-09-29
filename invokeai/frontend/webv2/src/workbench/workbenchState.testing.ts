@@ -1,10 +1,4 @@
-/**
- * Reducer-level compatibility facade for invariant tests only.
- *
- * Production code must use Workbench commands and queries. Keeping this facade
- * separate makes reducer coupling visible and lets those tests be retired as
- * command-level coverage replaces them.
- */
+/** Test-only reducer facade; production callers use Workbench commands and queries. */
 import type { WorkbenchState } from '@workbench/projectContracts';
 
 import {

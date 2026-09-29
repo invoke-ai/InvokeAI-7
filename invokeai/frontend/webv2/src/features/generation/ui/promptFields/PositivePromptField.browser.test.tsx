@@ -55,8 +55,7 @@ it('keeps positive prompt actions enabled when stale view mode has no active tem
       <I18nextProvider i18n={i18n}>
         <QueryClientProvider client={new QueryClient()}>
           <ChakraProvider value={system}>
-            {/* The prompt box is a gallery-image drop target, so it lives inside
-                the shell's DndContext wherever it is really rendered. */}
+            {/* Match production image-drop ownership with DndContext. */}
             <DndContext>
               <PositivePromptField
                 heightPx={96}

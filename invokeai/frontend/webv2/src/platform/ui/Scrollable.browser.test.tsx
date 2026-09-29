@@ -7,14 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { PopoverContent } from './Popover';
 import { Scrollable } from './Scrollable';
 
-/**
- * zag pins `min-width: fit-content` inline on the scroll-area content box. A
- * horizontal strip needs that; a vertical area must not inherit it, because it
- * renders no horizontal scrollbar — anything pushed sideways there is simply
- * unreachable. The popover test covers the other zag trap: an initial measure
- * that lands while the popover mounts at zero size leaves the machine's
- * "has overflow" default standing, stranding a phantom thumb.
- */
+/** Cover Zag's inline-width overflow and phantom thumbs from zero-size popover mounts. */
 
 let host: HTMLDivElement | null = null;
 let root: Root | null = null;
@@ -81,8 +74,6 @@ describe('Scrollable', () => {
 
     expect(viewport.scrollWidth).toBeGreaterThan(viewport.clientWidth);
 
-    // The orientation guard must not over-hide: a bar whose own axis
-    // overflows stays visible.
     const scrollbar = document.querySelector<HTMLElement>(
       '[data-scope="scroll-area"][data-part="scrollbar"][data-orientation="horizontal"]'
     )!;
@@ -92,10 +83,7 @@ describe('Scrollable', () => {
   });
 
   it('hides the vertical scrollbar when only sideways spill exists', async () => {
-    // Chakra's stock guard hides a scrollbar only when NEITHER axis
-    // overflows, so nowrap rows spilling sideways pinned a min-size thumb on
-    // the vertical bar (dynamic prompts, JSON previews). The theme's
-    // orientation-scoped guard is what this pins.
+    // Stock Chakra checks both axes together; horizontal overflow must not show a vertical thumb.
     const viewport = await renderScrollable(
       <div style={{ whiteSpace: 'nowrap' }}>
         {UNBREAKABLE}
@@ -114,8 +102,6 @@ describe('Scrollable', () => {
     await waitFor(() => getComputedStyle(scrollbar).display === 'none');
 
     expect(scrollbar).not.toBeNull();
-    // The spill is real and zag records it; only the orientation guard keeps
-    // the vertical bar out of it.
     expect(scrollbar.hasAttribute('data-overflow-x')).toBe(true);
     expect(viewport.scrollWidth).toBeGreaterThan(viewport.clientWidth);
     expect(getComputedStyle(scrollbar).display).toBe('none');

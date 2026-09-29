@@ -143,9 +143,8 @@ describe('ProjectActionsMenuHost', () => {
   });
 
   it('moves the one menu across cards instead of racing sibling layers', async () => {
-    // Per-card menus died here: zag's dismissable stack treats a layer mounted
-    // above another as nested, so the second card's menu was dismissed along
-    // with the first card's still-closing one.
+    // A single host prevents Zag from treating the next card's menu as nested under the still-closing previous
+    // menu.
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -181,8 +180,7 @@ describe('ProjectActionsMenuHost', () => {
     expect(openMenus()).toHaveLength(1);
     expect(dotsButton('two').getAttribute('aria-expanded')).toBe('true');
 
-    // A dots click opens; a second dots click toggles closed (the pointerdown
-    // already dismissed the menu — the click must not reopen it).
+    // A second dots click closes; pointerdown dismissal must not cause click to reopen.
     await leftClick(dotsButton('one'));
     expect(openMenus()).toHaveLength(1);
     expect(dotsButton('one').getAttribute('aria-expanded')).toBe('true');

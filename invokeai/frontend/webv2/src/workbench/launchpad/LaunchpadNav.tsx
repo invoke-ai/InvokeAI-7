@@ -11,25 +11,13 @@ import { HelpMenu } from './HelpMenu';
 const NAV_BORDER_END_WIDTH = { md: '1px' } as const;
 const NAV_BORDER_BOTTOM_WIDTH = { base: '1px', md: '0' } as const;
 const NAV_WIDTH = { base: 'full', md: '56' } as const;
-/**
- * Below `md` the shell stacks the rail above the page, and `h="full"` there
- * made the rail claim the entire viewport — collapsing the page area to zero
- * height inside the fixed, overflow-hidden shell. The rail takes only what its
- * content needs until it is a sidebar again.
- */
+/** Below md, size the stacked rail to content; full height would consume the fixed shell and leave no page area. */
 const NAV_HEIGHT = { base: 'auto', md: 'full' } as const;
 const FOOTER_MARGIN_TOP = { md: 'auto' } as const;
 
 /**
- * The Launchpad's persistent left rail. Sections are split into where you work
- * and what you administer: they are not peers, and stacking them in one flat
- * list gave "Users" the same weight as "Projects".
- *
- * The group headings are `role="presentation"` children of a single
- * `Tabs.List`, not separate lists — roving focus walks `[role=tab]`
- * descendants, so one tablist keeps arrow-key navigation running across the
- * whole rail while the headings stay decorative. Two sibling lists would split
- * that navigation in half.
+ * Keep decorative group headings inside one Tabs.List so arrow navigation crosses groups while separating work
+ * from administration.
  */
 
 export type LaunchpadNavGroupId = 'workspace' | 'manage';
@@ -48,11 +36,7 @@ const GROUP_LABEL_KEY: Record<LaunchpadNavGroupId, string> = {
   workspace: 'launchpad.groups.workspace',
 };
 
-/**
- * Deliberately not the shared `dropdownGroupLabel` fragment: that one is tuned
- * for menu surfaces, and its `fg.subtle` only reaches 4.11:1 against the rail's
- * background at this size. `fg.muted` clears 4.5:1.
- */
+/** Use fg.muted for rail-heading contrast; the menu label's fg.subtle falls below 4.5:1 here. */
 const GROUP_LABEL_SX: SystemStyleObject = {
   color: 'fg.muted',
   fontSize: '2xs',
@@ -70,8 +54,7 @@ export const LaunchpadNav = ({ items }: { items: LaunchpadNavItem[] }) => {
       ),
     [items]
   );
-  // Headings only earn their space once there is more than one group to tell
-  // apart; a capability-limited account often has just the one.
+  // Show headings only when multiple groups need distinguishing.
   const showGroupLabels = groups.length > 1;
 
   return (

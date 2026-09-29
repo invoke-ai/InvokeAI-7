@@ -30,8 +30,7 @@ describe('layout preset collection', () => {
   });
 
   it('slots a newly shipped built-in beside its neighbour instead of appending it', () => {
-    // The order every account persisted before Video shipped. Appending would
-    // pin Video to the end of the strip for all of them.
+    // Use pre-Video saved order to catch unconditional append behavior.
     expect(normalizeLayoutPresetOrder(['compose', 'edit', 'automate'], layoutPresets)).toEqual([
       'compose',
       'edit',

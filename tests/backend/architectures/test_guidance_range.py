@@ -6,11 +6,11 @@ is `le=20`, so 30 -- a value FLUX Fill genuinely wants, on a *different* archite
 on a FLUX.2 model and failed at enqueue. `ernie_image_denoise.guidance_scale` is `ge=1.0`, so 0 and
 0.5 were offered, forwarded unchanged by `graph.ts`, and failed the same way.
 
-`FeaturesFacet.guidance_min` / `guidance_max` move those bounds to the architecture, and this module
-pins them to the node that actually validates the value -- the same way
-`test_features.py::test_the_dimension_grid_matches_the_node_that_enforces_it` pins the dimension
-grid to the node's `multipleOf`. Transcribing 1.0 and 20.0 into assertions here would check a number
-against itself; reading them off the invocation schema is what makes the pin worth having.
+`FeaturesFacet.guidance_min` / `guidance_max` move those bounds to the architecture. The ceiling and
+any floor above `GUIDANCE_FLOOR` are read off the invocation schema rather than transcribed, the
+same way `test_features.py::test_the_dimension_grid_matches_the_node_that_enforces_it` pins the
+dimension grid to the node's `multipleOf`; the floor itself is a product rule (see `GUIDANCE_FLOOR`)
+and is the one number asserted directly.
 """
 
 from typing import Any
@@ -40,6 +40,7 @@ GUIDANCE_FIELD: dict[BaseModelType, tuple[str, str]] = {
     BaseModelType.Anima: ("anima_denoise", "guidance_scale"),
     BaseModelType.ErnieImage: ("ernie_image_denoise", "guidance_scale"),
     BaseModelType.Wan: ("wan_denoise", "guidance_scale"),
+    BaseModelType.LTX2: ("ltx2_denoise", "cfg_scale"),
     BaseModelType.ZImage: ("z_image_denoise", "guidance_scale"),
 }
 """Where the one guidance slider's value ends up, per architecture.
@@ -64,9 +65,14 @@ NO_GUIDANCE_SLIDER = frozenset(
     }
 )
 
-UNCONSTRAINED_MIN = 0.0
-"""What an architecture whose node enforces no floor declares. A slider has to start somewhere and
-none of these samplers reads a negative guidance, so zero is the UI's floor rather than the node's.
+GUIDANCE_FLOOR = 1.0
+"""The lowest guidance the UI offers anywhere. 1.0 is "no guidance" on every sampler and nothing
+below it is a value a person picks on purpose, so an architecture declares this floor unless its
+node enforces a higher one. SD's `cfg_scale` enforces the same floor through a `field_validator`
+the JSON schema cannot express, which is why the floor is not read off the node. A node whose own
+floor is lower (FLUX.2's `guidance` is `ge=0`) is absorbed by this rule on purpose: the UI declares
+1.0 for it too. A sampler that someday wants values below 1.0 offered is the moment to revisit the
+rule.
 """
 
 
@@ -108,11 +114,12 @@ def test_the_guidance_range_matches_the_node_that_enforces_it(base: BaseModelTyp
     node_min, node_max = _numeric_bounds(node_type, field_name)
     facet = require(base, FeaturesFacet)
 
-    expected_min = UNCONSTRAINED_MIN if node_min is None else node_min
+    expected_min = GUIDANCE_FLOOR if node_min is None else max(GUIDANCE_FLOOR, node_min)
     assert (facet.guidance_min, facet.guidance_max) == (expected_min, node_max), (
         f"'{base.value}' declares guidance {facet.guidance_min}..{facet.guidance_max} but "
-        f"{node_type}.{field_name} accepts {expected_min}..{node_max}. Whichever is wrong, a UI "
-        f"reading the declaration offers a value the graph rejects -- see "
+        f"{node_type}.{field_name} constrains it to {node_min}..{node_max} and the UI floor is "
+        f"{GUIDANCE_FLOOR}, so it should declare {expected_min}..{node_max}. Whichever is wrong, a UI "
+        f"reading the declaration offers a value the graph rejects or hides one it takes -- see "
         f"invokeai/backend/architectures/defs/{base.value.replace('-', '_')}.py."
     )
 
@@ -122,7 +129,7 @@ def test_an_architecture_with_no_slider_declares_no_range(base: BaseModelType) -
     """Nothing sends these a guidance value, so a narrowed range here would be a claim about a
     control that does not exist."""
     facet = require(base, FeaturesFacet)
-    assert (facet.guidance_min, facet.guidance_max) == (UNCONSTRAINED_MIN, None), base.value
+    assert (facet.guidance_min, facet.guidance_max) == (GUIDANCE_FLOOR, None), base.value
 
 
 def test_a_range_that_holds_no_values_is_refused() -> None:

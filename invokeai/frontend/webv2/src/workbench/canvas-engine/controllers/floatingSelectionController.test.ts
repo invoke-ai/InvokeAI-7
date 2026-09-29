@@ -182,8 +182,7 @@ describe('FloatingSelectionController: display effects', () => {
   });
 
   it('bakes a display copy for a control layer with the transparency effect', () => {
-    // Without it the float would show the control map's raw, opaque black
-    // background — the effect the layer itself renders away.
+    // Apply the layer effect so the float hides the control map's opaque black background.
     const h = createHarness({ layer: controlLayer(true) });
     h.controller.lift('a');
 

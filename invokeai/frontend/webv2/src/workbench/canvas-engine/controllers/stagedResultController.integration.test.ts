@@ -65,6 +65,7 @@ describe('staged result project-port integration', () => {
     store.commands.canvas.appendStagingCandidate({ candidate: selected, projectId });
     store.commands.canvas.apply(projectId, { imageIndex: 1, type: 'setStagedImageIndex' });
     const engine = createCanvasEngine({
+      ensureProjectOnServer: () => Promise.resolve(),
       backend: createTestStubRasterBackend(),
       imageResolver: () => Promise.resolve(new Blob()),
       mutationPort: createCanvasProjectMutationPort(store, projectId),
@@ -87,6 +88,7 @@ describe('staged result project-port integration', () => {
     store.commands.canvas.appendStagingCandidate({ candidate, projectId });
     const stagedBefore = store.getState().projects[0]!.canvas.stagingArea;
     const engine = createCanvasEngine({
+      ensureProjectOnServer: () => Promise.resolve(),
       backend: createTestStubRasterBackend(),
       imageResolver: () => Promise.resolve(new Blob()),
       mutationPort: createCanvasProjectMutationPort(store, projectId),
@@ -129,6 +131,7 @@ describe('staged result project-port integration', () => {
       const rejectingPort = createMirrorRejectingPort(store, projectId);
       rejectingPort.arm('commitStagedImage');
       const engine = createCanvasEngine({
+        ensureProjectOnServer: () => Promise.resolve(),
         backend: createTestStubRasterBackend(),
         imageResolver: () => Promise.resolve(new Blob()),
         mutationPort: rejectingPort.port,
@@ -152,6 +155,7 @@ describe('staged result project-port integration', () => {
     store.commands.canvas.appendStagingCandidate({ candidate, projectId });
     const rejectingPort = createMirrorRejectingPort(store, projectId);
     const engine = createCanvasEngine({
+      ensureProjectOnServer: () => Promise.resolve(),
       backend: createTestStubRasterBackend(),
       imageResolver: () => Promise.resolve(new Blob()),
       mutationPort: rejectingPort.port,
@@ -176,6 +180,7 @@ describe('staged result project-port integration', () => {
     store.commands.canvas.appendStagingCandidate({ candidate, projectId });
     const rejectingPort = createMirrorRejectingPort(store, projectId);
     const engine = createCanvasEngine({
+      ensureProjectOnServer: () => Promise.resolve(),
       backend: createTestStubRasterBackend(),
       imageResolver: () => Promise.resolve(new Blob()),
       mutationPort: rejectingPort.port,

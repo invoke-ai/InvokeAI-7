@@ -17,11 +17,7 @@ export interface FontInstance {
 export type FontScope = 'private' | 'shared';
 export type FontSource = 'uploaded' | 'directory';
 
-/**
- * The frontend read model for one indexed font file/face. `id` and
- * `contentHash` are stable identity fields; the readable family and filename
- * are presentation metadata only.
- */
+/** id and contentHash identify a font face; family and filename are display metadata. */
 export interface FontRecord {
   id: string;
   family: string;

@@ -8,10 +8,7 @@
     <link rel="icon" href="./invoke-icon.svg" type="image/svg+xml" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <script>
-      // Apply the saved theme before first paint so non-default themes don't
-      // flash the default dark surfaces. ThemeController re-applies it on mount.
-      // The theme hint key is user-agnostic (the workbench snapshot is per-user
-      // on multi-user backends); the snapshot read is a legacy fallback.
+      // Apply account-independent appearance hints before paint; use the legacy snapshot only as fallback.
       (function () {
         try {
           var themeColorSchemes = {
@@ -21,6 +18,7 @@
             mono: 'dark',
             osakaJade: 'dark',
             ultradark: 'dark',
+            catppuccinMocha: 'dark',
           };
           var id = localStorage.getItem('invokeai:v7:webv2:theme');
           if (!id) {

@@ -103,8 +103,7 @@ describe('settings language select', () => {
     await expect.element(page.getByRole('dialog', { name: 'Settings', exact: true })).toBeVisible();
     await expect.poll(() => dialogContent()?.querySelector('output')?.textContent).toBe('zh-Hant');
     await expect.element(language()).toHaveFocus();
-    // Tab only once the list has finished closing: a Tab during its exit
-    // animation races the select's own focus restore.
+    // Wait for exit focus restoration before pressing Tab.
     await expect.poll(() => listbox()?.checkVisibility() ?? false).toBe(false);
     await act(() => userEvent.keyboard('{Tab}'));
     await expect.poll(() => dialogContent()?.contains(document.activeElement) ?? false).toBe(true);

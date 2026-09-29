@@ -28,12 +28,7 @@ const CacheStat = ({ label, value }: { label: string; value: number }) => (
   </Text>
 );
 
-/**
- * Collapsible MODEL CACHE footer (manifest `footer` slot). Collapsed: a label, a
- * RAM-used / budget readout, and a fill bar. Expanded: hit/miss/loaded counts and
- * a Clear action. The cache has no enable/disable endpoint, so there is no
- * "Disable" toggle. Mirrors the model manager's `InstallQueueBar` collapse shape.
- */
+/** Model-cache footer supports statistics and clearing; no backend disable endpoint exists. */
 export const ModelCacheFooter = () => {
   const { t } = useTranslation();
   const { stats } = useModelCacheStats();

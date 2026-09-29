@@ -11,8 +11,6 @@ const HANDLE_FOCUS_PROPS = {
   outlineOffset: '-1px',
 } as const;
 
-// An 8px target painting a 1px line: a divider as thick as its grab area reads
-// as a gap in the layout.
 const HORIZONTAL_PROPS = {
   cursor: 'row-resize',
   h: `${GALLERY_SPLIT_HANDLE_SIZE_PX}px`,

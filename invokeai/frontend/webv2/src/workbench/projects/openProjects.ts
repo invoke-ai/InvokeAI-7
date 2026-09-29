@@ -8,18 +8,7 @@ import { createSingleFlight } from '@platform/state/singleFlight';
 
 import { fetchSessionBlob } from './session';
 
-/**
- * Which projects the editor currently has open, read from the saved session.
- *
- * The Launchpad asks this from two places — the top bar's way back in, and the
- * library's "open" grouping — so it lives in one store with one request rather
- * than a fetch per component.
- *
- * `ids: null` means *unknown*, not empty: a first run, a session blob written
- * before the open set existed, or an unreachable backend all land there. The
- * `/app` guard makes the same distinction and declines to redirect on it, so
- * callers must not treat unknown as "nothing is open".
- */
+/** Share the route guard's request and null-as-unknown contract. */
 
 export interface OpenProjectsSnapshot {
   status: 'idle' | 'loading' | 'ready';

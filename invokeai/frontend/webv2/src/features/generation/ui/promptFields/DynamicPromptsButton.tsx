@@ -65,8 +65,6 @@ export const DynamicPromptsButton = ({
   const tooltip = expansion.isDynamic
     ? t('widgets.generate.dynamicPrompts.showPrompts')
     : t('widgets.generate.dynamicPrompts.noDynamicSyntax');
-  // Quiet states only: an em-dash while the expansion is in flight, an error tint
-  // when it failed. No spinner, no animation on a control this small.
   const countLabel = !expansion.isDynamic ? null : expansion.isLoading ? '—' : String(expansion.count);
 
   return (
@@ -80,8 +78,6 @@ export const DynamicPromptsButton = ({
     >
       <Tooltip content={tooltip} ids={popoverIds}>
         <Popover.Trigger asChild>
-          {/* A labeled primary rather than a bare icon; the expansion count
-              rides beside the label once the prompt is dynamic. */}
           <IconButton
             aria-label={t('widgets.generate.dynamicPrompts.showPrompts')}
             color={expansion.isError ? 'fg.error' : undefined}

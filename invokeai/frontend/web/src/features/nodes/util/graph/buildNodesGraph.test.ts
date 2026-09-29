@@ -376,4 +376,33 @@ describe('buildNodesGraph', () => {
     const graphNode = graph.nodes['img_resize-1'] as Record<string, unknown> | undefined;
     expect(graphNode?.metadata).toBeUndefined();
   });
+
+  // Loading a webv2 for-loop workflow now works, but the run graph drops the
+  // linkage: `buildNodesGraph` keeps only `type === 'default'` edges, and the
+  // backend then refuses the run with "must have exactly one loop linkage".
+  // The filter is edge-type based, so any two executable nodes demonstrate it.
+  it('keeps loop_linkage edges in the run graph', () => {
+    const source = buildNode(addTemplate);
+    const target = buildNode(addTemplate);
+    const linkage = { ...buildEdge(source.id, 'loop_linkage', target.id, 'loop_linkage'), type: 'loop_linkage' };
+    const nextState = deepClone(nodesSliceConfig.getInitialState());
+
+    nextState.nodes = [source, target];
+    nextState.edges = [linkage as (typeof nextState.edges)[number]];
+
+    const rootState = {
+      gallery: { autoAddBoardId: 'none' },
+      nodes: { future: [], past: [], present: nextState },
+    } as never;
+
+    const graph = buildNodesGraph(rootState, templates);
+
+    expect(graph.edges).toContainEqual(
+      expect.objectContaining({
+        type: 'loop_linkage',
+        destination: { field: 'loop_linkage', node_id: target.id },
+        source: { field: 'loop_linkage', node_id: source.id },
+      })
+    );
+  });
 });

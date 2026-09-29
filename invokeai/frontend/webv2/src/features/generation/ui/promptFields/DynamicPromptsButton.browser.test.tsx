@@ -108,8 +108,6 @@ describe('dynamic prompts in the positive prompt field', () => {
   });
 
   it('is a labeled primary at rest, and widens only to carry a count', async () => {
-    // A labeled button rather than a bare icon; the expansion count appears
-    // beside the label once the prompt is dynamic.
     await render('a plain cat');
     const plain = findButton().getBoundingClientRect();
 

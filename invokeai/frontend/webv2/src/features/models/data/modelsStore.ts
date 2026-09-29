@@ -13,12 +13,8 @@ import { getApiErrorMessage } from '@platform/transport/http';
 import { getModelsDir, listMissingModels, listModels } from './api';
 
 /**
- * Shared library store for installed model configs. Lives outside the
- * workbench reducer because the list is backend-owned server state shared by
- * every model surface (manager, detail views, pickers); a single
- * module store keeps them consistent and avoids re-fetch storms. Mutations go
- * through the API layer and then either patch the snapshot in place (fast
- * path) or trigger a refresh.
+ * Share backend-owned model state outside the workbench reducer; mutations patch snapshots or refresh to keep all
+ * surfaces consistent.
  */
 
 export interface ModelsSnapshot {
@@ -139,11 +135,7 @@ export const removeModelsFromStore = (keys: string[]): void => {
   store.patchSnapshot(withModels(store.getSnapshot().models.filter((model) => !removed.has(model.key))));
 };
 
-/**
- * Record a cover image upload/removal without refetching: keeps the truthy
- * `cover_image` marker in sync for thumbnails and bumps the version that
- * cache-busts their URLs (the backend serves the image at a stable URL).
- */
+/** Update cover presence and URL version without refetching; backend cover URLs remain stable. */
 export const markCoverImageChanged = (key: string, hasImage: boolean): void => {
   const { coverImageVersions, models } = store.getSnapshot();
 

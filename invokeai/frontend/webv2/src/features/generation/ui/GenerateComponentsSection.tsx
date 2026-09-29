@@ -38,6 +38,7 @@ const getComponentPolicyContext = (model: GenerateModelConfig, settings: Generat
     qwen3VLEncoderModel: settings.qwen3VLEncoderModel,
     wanT5EncoderModel: settings.wanT5EncoderModel,
     wanLowNoiseModel: settings.wanLowNoiseModel,
+    ideogram4UnconditionalModel: settings.ideogram4UnconditionalModel,
     t5EncoderModel: settings.t5EncoderModel,
     pidDecoderModel: settings.pidDecoderModel,
     gemma2EncoderModel: settings.gemma2EncoderModel,

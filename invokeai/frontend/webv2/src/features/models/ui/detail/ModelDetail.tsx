@@ -6,7 +6,7 @@ import { chakra, DataList, HStack, Icon, Menu, Portal, Separator, Stack, Text } 
 import { isConvertibleToDiffusers } from '@features/models/core/baseIdentity';
 import { isLinkableType } from '@features/models/core/relationships';
 import { isAbsoluteModelPath, resolveModelAbsolutePath } from '@features/models/core/schemas';
-import { formatBytes, getModelSourceHref } from '@features/models/core/taxonomy';
+import { getModelSourceHref } from '@features/models/core/taxonomy';
 import { useModelsSelector, type ModelsSnapshot } from '@features/models/data/modelsStore';
 import {
   ModelActionConfirmDialog,
@@ -14,9 +14,10 @@ import {
   type PendingModelAction,
 } from '@features/models/ui/shared/ModelActionsMenu';
 import { useNotify } from '@features/models/ui/useModelsNotify';
+import { formatBytes } from '@platform/i18n/languages';
 import { areArraysEqual } from '@platform/state/selectors';
 import { Button, IconButton, MenuContent } from '@platform/ui';
-import { HuggingFaceIcon } from '@platform/ui/BrandIcon';
+import { HuggingFaceIcon } from '@platform/ui/VendoredIcon';
 import { ExternalLinkIcon, MoreHorizontalIcon, PencilIcon } from 'lucide-react';
 import { memo, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -103,9 +104,16 @@ const selectModelIdentity = (snapshot: ModelsSnapshot, modelKey: string): ModelI
 const selectDefaultSettingsModel = (snapshot: ModelsSnapshot, modelKey: string): DefaultSettingsModel | null => {
   const model = findModel(snapshot, modelKey);
 
-  // `base` is projected too: the FP8 storage default is unavailable for Z-Image.
+  // `base` and `format` are projected too: together with the type they are the loader key the backend
+  // answers the FP8 Storage question on, and all three parts change the answer.
   return model
-    ? { base: model.base, default_settings: model.default_settings, key: model.key, type: model.type }
+    ? {
+        base: model.base,
+        default_settings: model.default_settings,
+        format: model.format,
+        key: model.key,
+        type: model.type,
+      }
     : null;
 };
 
@@ -124,12 +132,7 @@ const selectCpuOnlyModel = (snapshot: ModelsSnapshot, modelKey: string): CpuOnly
 const areTriggerPhrasesModelsEqual = (left: TriggerPhrasesModel | null, right: TriggerPhrasesModel | null): boolean =>
   left?.key === right?.key && areArraysEqual(left?.trigger_phrases ?? [], right?.trigger_phrases ?? []);
 
-/**
- * Full detail pane for one model: identity (view/edit), per-model default
- * settings, related models, trigger phrases, and lifecycle actions (convert,
- * re-identify, delete). Mount keyed by model key so per-model form state never
- * leaks between models.
- */
+/** Mount keyed by model key so detail forms cannot leak state between models. */
 export const ModelDetail = ({ modelKey, onDeleted }: { modelKey: string; onDeleted: () => void }) => {
   const { t } = useTranslation();
   const model = useModelsSelector((snapshot) => selectModelShell(snapshot, modelKey));
@@ -410,8 +413,7 @@ const ModelAttributes = ({ isMissing, model }: { isMissing: boolean; model: Mode
   // Managed models store paths relative to the models directory; show the
   // resolved absolute path so it can be found on disk.
   const fullPath = resolveModelAbsolutePath(model.path, modelsDir);
-  // In-place installs (absolute paths) may be repointed after the file moves;
-  // a missing model gets the affordance too — that is exactly when it helps.
+  // Allow repointing absolute-path installs, including missing files.
   const canUpdatePath = isAbsoluteModelPath(model.path) || isMissing;
 
   const attributes: { action?: ReactNode; href?: string; label: string; value: string }[] = [
@@ -438,9 +440,7 @@ const ModelAttributes = ({ isMissing, model }: { isMissing: boolean; model: Mode
       label: t('models.source'),
       value: model.source,
     },
-    // The user-editable page link (e.g. a Civitai listing); only visible in
-    // the edit form until now. Old records may predate the http(s)
-    // validation, so unlinkable values still render as text.
+    // Render legacy non-HTTP(S) source links as text rather than unsafe anchors.
     ...(model.source_url
       ? [
           {

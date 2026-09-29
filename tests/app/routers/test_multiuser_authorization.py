@@ -23,7 +23,7 @@ from invokeai.app.services.config.config_default import InvokeAIAppConfig
 from invokeai.app.services.invocation_services import InvocationServices
 from invokeai.app.services.invoker import Invoker
 from invokeai.app.services.project_records.project_records_sqlite import ProjectRecordsSqlite
-from invokeai.app.services.session_queue.session_queue_common import SessionQueueItem
+from invokeai.app.services.session_queue.session_queue_common import SessionQueueItem, SessionQueueItemSummary
 from invokeai.app.services.users.users_common import UserCreateRequest
 from invokeai.app.services.workflow_records.workflow_records_sqlite import SqliteWorkflowRecordsStorage
 from invokeai.backend.util.logging import InvokeAILogger
@@ -146,6 +146,7 @@ def mock_services() -> InvocationServices:
         gallery=None,  # type: ignore
         image_index_records=None,  # type: ignore
         image_index=None,  # type: ignore
+        intermediates=None,  # type: ignore
     )
 
 
@@ -1973,6 +1974,7 @@ class TestSessionQueueSanitization:
             completed_at=None,
             queue_id="default",
             user_id="owner-user",
+            project_id="owner-project",
             user_display_name="Owner Display",
             user_email="owner@test.com",
             field_values=None,
@@ -2024,6 +2026,7 @@ class TestSessionQueueSanitization:
         assert result.user_id == "redacted"
         assert result.user_display_name is None
         assert result.user_email is None
+        assert result.project_id is None
 
         # Stripped: generation metadata
         assert result.batch_id == "redacted"
@@ -2036,6 +2039,24 @@ class TestSessionQueueSanitization:
         assert result.workflow is None
         assert result.session.id == "redacted"
         assert len(result.session.graph.nodes) == 0
+
+    @pytest.mark.parametrize("model", [SessionQueueItem, SessionQueueItemSummary])
+    def test_every_queue_item_field_is_redacted_or_deliberately_public(self, model: type):
+        from invokeai.app.api.routers.session_queue import _REDACTIONS
+
+        # A field added to either projection must choose a side here, or it leaks to other accounts.
+        public = {
+            "item_id",
+            "queue_id",
+            "status",
+            "status_sequence",
+            "device",
+            "created_at",
+            "updated_at",
+            "started_at",
+            "completed_at",
+        }
+        assert set(model.model_fields) - public - set(_REDACTIONS) == set()
 
     def test_sanitization_does_not_mutate_original(self, _sample_queue_item: SessionQueueItem):
         from invokeai.app.api.routers.session_queue import sanitize_queue_item_for_user
@@ -3303,6 +3324,30 @@ class TestWebSocketAuth:
         assert set(room) == {"user:owner-recall", "admin"}
         # And never to the shared queue room, which would leak to other users.
         assert "default" not in room
+
+    def test_video_recall_is_emitted_once_to_the_owner_only(self, socketio: Any) -> None:
+        """A video recall names the owner's media and no admin UI consumes it, so it goes to the
+        owner's room alone, in one emit: a reference-video recall appends, so a second delivery
+        would add the video twice."""
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        from invokeai.app.services.events.events_common import VideoRecallRequestedEvent, VideoRecallVideo
+
+        event = VideoRecallRequestedEvent.build(
+            queue_id="default",
+            user_id="owner-video",
+            action="reference_video",
+            video=VideoRecallVideo(video_name="clip.mp4", width=832, height=480, duration=5.0),
+        )
+
+        mock_emit = AsyncMock()
+        socketio._sio.emit = mock_emit
+
+        asyncio.run(socketio._handle_queue_event(("video_recall_requested", event)))
+
+        assert mock_emit.call_count == 1
+        assert mock_emit.call_args.kwargs.get("room") == "user:owner-video"
 
 
 class TestCustomNodesAuthorization:

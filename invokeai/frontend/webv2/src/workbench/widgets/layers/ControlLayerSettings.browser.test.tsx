@@ -111,8 +111,7 @@ describe('ControlLayerSettings and the capability table', () => {
   });
 
   it('keeps the retry and its focus through a retry that fails again, then offers the adapter kinds', async () => {
-    // The kind list used to be memoised on the base alone, so it stayed empty after the table
-    // arrived until the model changed or the panel remounted.
+    // Capability arrival must update kinds even when the model base is unchanged.
     getArchitectureCapabilities.mockRejectedValueOnce(new Error('Fixture capability outage.'));
     await settle(ensureArchitectureCapabilitiesLoaded);
     await render();

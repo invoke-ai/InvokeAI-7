@@ -2,7 +2,10 @@ import type { GenerationModelCatalogItem as ModelConfig } from '@features/genera
 import type { GenerateModelConfig, GenerateSettings, LoraModelConfig } from '@features/generation/core/types';
 
 import { Box, HStack, Spinner, Stack, Text } from '@chakra-ui/react';
-import { getDefaultGenerateSettings, isSupportedGenerateModel } from '@features/generation/core/baseGenerationPolicies';
+import {
+  getDefaultGenerateSettings,
+  isGenerateModelSelectable,
+} from '@features/generation/core/baseGenerationPolicies';
 import { isLoraModelConfig, normalizeGenerateSettings } from '@features/generation/core/settings';
 import {
   ensureArchitectureCapabilitiesLoaded,
@@ -31,15 +34,12 @@ export const GenerateWidgetView = () => {
   const models = ui.models.catalog;
   const status = ui.models.status;
 
-  const supportedModels = useMemo<GenerateModelConfig[]>(() => models.filter(isSupportedGenerateModel), [models]);
+  const supportedModels = useMemo<GenerateModelConfig[]>(() => models.filter(isGenerateModelSelectable), [models]);
   const loraModels = useMemo(
     () => models.filter((model): model is ModelConfig & LoraModelConfig => isLoraModelConfig(model)),
     [models]
   );
-  // The resolver reads the architecture table from the core registry and fails closed while it is
-  // absent, so the load status is a real input here: without it a resolve attempted before the
-  // table arrives would be cached as `null` and survive the retry that fixed it, leaving a saved
-  // project with an empty model picker.
+  // Include capability revision/status so a cached null resolves again after loading.
   const resolved = useMemo(
     () => (capabilitiesStatus === 'loaded' ? resolveGenerateWidgetValues({ models, storedValues }) : null),
     [capabilitiesStatus, models, storedValues]
@@ -47,8 +47,7 @@ export const GenerateWidgetView = () => {
   const settings =
     resolved?.values ?? normalizeGenerateSettings(storedValues) ?? getDefaultGenerateSettings(supportedModels[0]);
   const selectedModel = resolved?.values.model;
-  // The click flips the status to `loading` synchronously. Keeping the failure surface mounted for
-  // the retry it started is what keeps the button -- and the user's focus -- in place.
+  // Keep the failure surface mounted during retry to preserve button focus.
   const isRetrying = hasRequestedRetry && capabilitiesStatus === 'loading';
 
   // Set by the click, consumed when the form the retry revealed mounts.
@@ -61,9 +60,7 @@ export const GenerateWidgetView = () => {
 
     focusHandoffPending.current = true;
     setHasRequestedRetry(true);
-    // The request belongs to this retry. Once it settles, a later reload -- an account switch, a
-    // retry started from another panel -- is not this widget's: no failure surface while it loads,
-    // and no focus taken when it lands. The form may already have mounted and taken the handoff.
+    // Only the initiating retry owns focus; unrelated later reloads must not take it.
     void ensureArchitectureCapabilitiesLoaded().then(() => {
       focusHandoffPending.current &&= getArchitectureCapabilitiesSnapshot().status === 'loaded';
       setHasRequestedRetry(false);
@@ -104,10 +101,7 @@ export const GenerateWidgetView = () => {
     [projectId, ui]
   );
 
-  // Every field below is prefilled from architecture policy and is editable, so rendering the form
-  // before the backend's table arrives would offer generic fallbacks as if they were the model's
-  // own -- and a single keystroke would commit them. App boot kicks the fetch, so this is one round
-  // trip in practice.
+  // Gate the form so edits cannot persist fallback architecture defaults.
   if (capabilitiesStatus !== 'loaded') {
     if (capabilitiesStatus === 'error' || isRetrying) {
       return (

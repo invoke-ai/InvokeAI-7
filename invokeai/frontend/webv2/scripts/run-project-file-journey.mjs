@@ -81,9 +81,7 @@ const observeBrowserErrors = (page, phase, errors) => {
     if (message.type() === 'error') {
       const location = message.location();
 
-      // Every release harness deliberately uses the HTTP-only mock backend, so
-      // Socket.IO's transport probe is expected to stay disconnected. Ignore
-      // only that browser-generated 404; application console errors still fail.
+      // The HTTP-only mock has no Socket.IO; ignore only its expected transport 404.
       if (
         location.url.includes('/ws/socket.io/') &&
         message.text().includes('the server responded with a status of 404')
@@ -91,8 +89,7 @@ const observeBrowserErrors = (page, phase, errors) => {
         return;
       }
 
-      // Video existence has no bulk endpoint. Import deliberately probes the
-      // archived name and treats this exact 404 as the signal to restore it.
+      // Import probes archived video names; this 404 triggers restoration.
       if (
         phase.endsWith('import') &&
         location.url &&
@@ -150,11 +147,7 @@ const waitForProjectCover = async (projectId, restoredImageNames) => {
   assert.fail(`The project cover index never mapped ${projectId} to a restored image.`);
 };
 
-/**
- * What Fixture Project 002's board holds, as the snapshot describes it: kind, category and
- * starring, with the names left out. Names are exactly what may not survive a transfer — every
- * board item gets a new identity — so the shape is the part that has to round-trip.
- */
+/** Compare membership attributes, excluding names because board media receives new identities on import. */
 const boardShape = (items) => items.map((item) => `${item.kind}:${item.category}:${String(item.starred)}`).sort();
 
 const EXPECTED_BOARD_SHAPE = [
@@ -202,7 +195,49 @@ const getBoardSnapshot = (projectId) => fetchJson(`/api/v1/projects/${encodeURIC
 const getLayerImageNames = (project) =>
   collectCanvasLeaves(project.data.canvas.document).map((layer) => layer.source.image.imageName);
 
-const getDocumentVideoName = (project) => project.data.projectGraph.nodes[0]?.data.inputs.video?.value?.video_name;
+/** The first workflow document of a project record, whichever document schema the record carries. */
+const getWorkflowDocuments = (project) =>
+  project.data.workflows?.entries?.map((entry) => entry.document) ?? [project.data.projectGraph].filter(Boolean);
+
+const getDocumentVideoName = (project) =>
+  getWorkflowDocuments(project)[0]?.nodes[0]?.data.inputs.video?.value?.video_name;
+
+const workflowRequests = async () => (await fetchJson('/__workflow-requests')).requests;
+
+const presetStrip = (page) => page.getByRole('tablist', { exact: true, name: 'Layout preset' });
+
+const centerViewTrigger = (page, label) => page.getByRole('button', { exact: true, name: `Center view: ${label}` });
+
+/** Preset names need not match their center views; pass the expected view explicitly. */
+const selectLayoutPreset = async (page, preset, centerView) => {
+  const name = new RegExp(`^${preset}(, unsaved changes)?$`);
+  const strip = presetStrip(page);
+  const selected = strip.getByRole('tab', { name, selected: true });
+
+  if ((await selected.count()) === 0) {
+    await strip.getByRole('tab', { name }).click();
+  }
+
+  await selected.waitFor();
+  await centerViewTrigger(page, centerView).waitFor();
+};
+
+/** Poll the server record until the project's saved workflows satisfy `predicate`. */
+const waitForSavedWorkflows = async (projectId, predicate, label) => {
+  const deadline = Date.now() + 15_000;
+
+  while (Date.now() < deadline) {
+    const record = await fetchJson(`/api/v1/projects/${encodeURIComponent(projectId)}`);
+
+    if (predicate(record)) {
+      return record;
+    }
+
+    await delay(100);
+  }
+
+  throw new Error(`The project record never reached the expected state: ${label}.`);
+};
 
 /** Import the archive at `archivePath` through the Launchpad, exactly as a person would. */
 const importArchive = async ({ archivePath, browser, contexts, errors, phase }) => {
@@ -226,15 +261,8 @@ const importArchive = async ({ archivePath, browser, contexts, errors, phase }) 
 };
 
 /**
- * The complete round trip: export a project *and its board*, restore it somewhere that has none of
- * its media, then duplicate the result.
- *
- * The rules under test are the ones that distinguish a project file from a folder of pictures.
- * Board media is copied, never adopted — the destination is deliberately seeded with images under
- * the archived names, and a restore that reused one would be pointing at somebody else's picture.
- * Document references outside the board are the opposite: an identity the destination already has
- * satisfies them, so it is reused rather than duplicated. And the things a board holds but no
- * gallery shows — intermediates and the canvas's private `other` category — never travel at all.
+ * Verify imports copy board media despite name collisions, reuse external references, and exclude
+ * intermediate/other items.
  */
 const runRoundTrip = async ({ backend, browser, contexts, errors, tempDirectory }) => {
   const sourceBoard = await getBoardSnapshot(sourceProjectId);
@@ -250,14 +278,10 @@ const runRoundTrip = async ({ backend, browser, contexts, errors, tempDirectory 
   await exportPage.goto(`${origin}${sourceProjectPath}`, { waitUntil: 'domcontentloaded' });
   await exportPage.getByRole('main', { exact: true, name: sourceProjectName }).waitFor();
 
-  // The board the server says this project owns is the one the gallery points at, without the
-  // document having to name it.
   const selectedBoardRow = exportPage.locator('button[aria-current="true"]').filter({ hasText: sourceProjectName });
 
   await selectedBoardRow.first().waitFor();
 
-  // A project's board offers the whole project as a file, alongside the media-only download that
-  // predates it. Both, because they are different things: one is the project, one is its pixels.
   await exportPage.getByRole('button', { exact: true, name: `Board actions for ${sourceProjectName}` }).click();
   await exportPage.getByRole('menuitem', { exact: true, name: 'Export project (.invk)' }).waitFor();
   await exportPage.getByRole('menuitem', { name: /^Download Board/ }).waitFor();
@@ -293,8 +317,7 @@ const runRoundTrip = async ({ backend, browser, contexts, errors, tempDirectory 
   assert.equal(archivedBoard.version, 1);
   assert.deepEqual(boardShape(archivedBoard.items), EXPECTED_BOARD_SHAPE);
   assert.deepEqual(archivedBoard.items.map((item) => item.name).sort(), [...ARCHIVED_BOARD_NAMES].sort());
-  // Board membership plus the canvas's own references, each carried once: five board items, three
-  // external images the document draws with, and one external video a workflow node names.
+  // Expect five board items plus three external images and one external video, deduplicated across references.
   assert.deepEqual(
     bundledImages.sort(),
     [...ARCHIVED_BOARD_NAMES.filter((name) => name.endsWith('.png')), ...PROJECT_FILE_BOARD.externalImages]
@@ -309,8 +332,7 @@ const runRoundTrip = async ({ backend, browser, contexts, errors, tempDirectory 
   assert.equal(entries[`images/${PROJECT_FILE_BOARD.intermediateImage}`], undefined);
   assert.equal(entries[`images/${PROJECT_FILE_BOARD.canvasOwnedImage}`], undefined);
 
-  // Two collisions survive the reset: one name the restore must *not* adopt because the board owns
-  // it, and one it *must* reuse because the document only points at it.
+  // Preserve two collisions: board-owned media must be copied; an external reference must be reused.
   const collide = [PROJECT_FILE_BOARD.referencedImage, PROJECT_FILE_BOARD.video, PROJECT_FILE_BOARD.externalImages[0]];
   const reset = await fetchJson(`/__reset?profile=empty&collide=${collide.map(encodeURIComponent).join(',')}`, {
     method: 'POST',
@@ -355,8 +377,6 @@ const runRoundTrip = async ({ backend, browser, contexts, errors, tempDirectory 
   const importedLayers = getLayerImageNames(imported);
   const [firstExternal, ...otherExternals] = PROJECT_FILE_BOARD.externalImages;
 
-  // The layer whose image the board owned follows the copy; the ones it did not keep pointing
-  // outside the board — the collided name is reused verbatim, the rest were uploaded.
   assert.equal(importedLayers.filter((name) => importedBoardNames.includes(name)).length, 1);
   assert.equal(importedLayers.includes(PROJECT_FILE_BOARD.referencedImage), false);
   assert.equal(importedLayers.includes(firstExternal), true, 'an existing identity must satisfy a reference');
@@ -372,8 +392,7 @@ const runRoundTrip = async ({ backend, browser, contexts, errors, tempDirectory 
   assert.notEqual(importedVideoName, MOCK_BACKEND_REPRESENTATIVE_VIDEO_NAME);
   assert.equal(importedVideoNames.has(importedVideoName), true);
 
-  // The media the destination already held under an archived name is untouched: still there, still
-  // on no board. A restore that had adopted it would have moved it onto the project's board.
+  // Adopting the collision would move it onto the restored board; assert it stays unboarded.
   const collidedVideo = importedVideos.items.find((video) => video.video_name === PROJECT_FILE_BOARD.video);
   const collidedImage = await fetchJson(`/api/v1/images/i/${encodeURIComponent(PROJECT_FILE_BOARD.referencedImage)}`);
 
@@ -403,7 +422,15 @@ const runRoundTrip = async ({ backend, browser, contexts, errors, tempDirectory 
   contexts.delete(importContext);
   assertNoBrowserErrors(errors);
 
+  // The fixture was a schema-2 document with one `projectGraph`; import canonicalizes it into the current
+  // schema with that graph as the only workflow and no library write target.
+  assert.equal(imported.data.documentSchemaVersion, 3);
+  assert.equal(imported.data.workflows.entries.length, 1);
+  assert.equal(imported.data.workflows.activeWorkflowId, imported.data.workflows.entries[0].document.id);
+  assert.equal(imported.data.workflows.entries[0].source, undefined);
+
   await runDuplication({ browser, contexts, errors, imported, importedBoardNames });
+  await runWorkflowCollection({ browser, contexts, errors, imported });
   await runMissingBinaryImport({ browser, contexts, entries, errors, tempDirectory });
 
   return {
@@ -415,11 +442,7 @@ const runRoundTrip = async ({ backend, browser, contexts, errors, tempDirectory 
   };
 };
 
-/**
- * Duplicating the imported project. The copy owns its board media outright — no name is shared with
- * the project it came from — while the references that live outside both boards are simply reused,
- * because both projects are on this one server.
- */
+/** Duplication copies board media but reuses external references on the same server. */
 const runDuplication = async ({ browser, contexts, errors, imported, importedBoardNames }) => {
   const context = await browser.newContext();
 
@@ -427,8 +450,7 @@ const runDuplication = async ({ browser, contexts, errors, imported, importedBoa
   const page = await context.newPage();
 
   observeBrowserErrors(page, 'duplicate', errors);
-  // Through Home rather than straight at the deep link: a cold context has to finish authenticating
-  // before the library will list anything, and landing on the settled shell is how a person arrives.
+  // Enter through Home so authentication settles before opening the library.
   await page.goto(`${origin}/#/`, { waitUntil: 'domcontentloaded' });
   await page.getByRole('heading', { exact: true, name: 'Welcome to Invoke' }).waitFor();
   await page.goto(`${origin}/#/projects`, { waitUntil: 'domcontentloaded' });
@@ -478,10 +500,170 @@ const runDuplication = async ({ browser, contexts, errors, imported, importedBoa
 };
 
 /**
- * An archive missing some of its bytes. The two losses are counted apart because they cost
- * different things: a board item is a result still findable elsewhere, a document reference is a
- * hole in the canvas.
+ * The primary workflow journey: open a template into the project, edit it, switch away and back, save it to the
+ * library under a new name, restart, and find both workflows intact. Project edits and runs issue no library writes;
+ * the This-project view fetches no templates.
  */
+const runWorkflowCollection = async ({ browser, contexts, errors, imported }) => {
+  const projectId = imported.project_id;
+  const template = await fetchJson('/api/v1/workflows/', {
+    body: JSON.stringify({
+      workflow: {
+        author: '',
+        contact: '',
+        description: 'A template the journey opens into the project.',
+        edges: [],
+        exposedFields: [],
+        form: {
+          elements: { root: { data: { children: [], layout: 'column' }, id: 'root', type: 'container' } },
+          rootElementId: 'root',
+        },
+        meta: { category: 'user', version: '3.0.0' },
+        name: 'Journey Template',
+        nodes: [],
+        notes: '',
+        tags: 'journey',
+        version: '1.0.0',
+      },
+    }),
+    headers: { 'Content-Type': 'application/json' },
+    method: 'POST',
+  });
+  const requestsBefore = (await workflowRequests()).length;
+
+  const context = await browser.newContext();
+
+  contexts.add(context);
+  const page = await context.newPage();
+
+  observeBrowserErrors(page, 'workflow-collection', errors);
+  await page.goto(`${origin}/#/`, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('heading', { exact: true, name: 'Welcome to Invoke' }).waitFor();
+  await page.goto(`${origin}/#/app?project=${encodeURIComponent(projectId)}`, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('main', { exact: true, name: imported.name }).waitFor();
+  await selectLayoutPreset(page, 'Automate', 'Workflow');
+
+  const workflowName = () => page.getByRole('button', { name: /^Open this project's workflows\. Current workflow: / });
+  const dialog = page.getByRole('dialog', { exact: true, name: 'Workflows' });
+  const cards = dialog.locator('[data-workflow-card]');
+  const openProjectWorkflows = async () => {
+    await workflowName().click();
+    await dialog.waitFor();
+    await dialog.locator('[data-library-tab="project"]').waitFor();
+  };
+  const currentWorkflowName = async () =>
+    (await workflowName().getAttribute('aria-label')).replace("Open this project's workflows. Current workflow: ", '');
+
+  // The migrated project owns exactly its old graph, marked active; opening the local view fetched nothing.
+  await openProjectWorkflows();
+  assert.equal(await cards.count(), 1);
+  await cards.first().locator('[data-active-workflow]').waitFor();
+  assert.equal(
+    (await workflowRequests()).slice(requestsBefore).some((entry) => entry.method === 'GET'),
+    false
+  );
+
+  // Add workflow leads to the template tabs; the template becomes an independent copy in this project.
+  await dialog.getByRole('button', { exact: true, name: 'Add workflow' }).click();
+  await dialog.locator('[data-library-tab="default"]').waitFor();
+  await dialog.getByText('Yours', { exact: true }).click();
+  await dialog.locator('[data-library-tab="user"]').waitFor();
+  await dialog.locator(`[data-workflow-card="${template.workflow_id}"]`).click();
+  await dialog
+    .locator(`[data-workflow-detail="${template.workflow_id}"]`)
+    .getByRole('button', { exact: true, name: 'Open' })
+    .click();
+  await dialog.waitFor({ state: 'hidden' });
+  assert.equal(await currentWorkflowName(), 'Journey Template');
+
+  // Editing the copy: rename it through the local view. The library is not written.
+  await openProjectWorkflows();
+  assert.equal(await cards.count(), 2);
+  // The rail's menu, not a tile's: every tile now carries its own More-actions button.
+  await dialog
+    .locator('[data-project-workflow-detail]')
+    .getByRole('button', { exact: true, name: 'More actions' })
+    .click();
+  await page.getByRole('menuitem', { name: /^Rename…/ }).click();
+  const renameDialog = page.getByRole('dialog', { exact: true, name: 'Rename workflow' });
+  await renameDialog.waitFor();
+  await renameDialog.getByRole('textbox').fill('Journey Template edited');
+  await renameDialog.getByRole('button', { exact: true, name: 'Rename' }).click();
+  await renameDialog.waitFor({ state: 'hidden' });
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'hidden' });
+  assert.equal(await currentWorkflowName(), 'Journey Template edited');
+
+  // Switching to the other workflow and back keeps both documents.
+  await openProjectWorkflows();
+  await cards.filter({ hasText: 'Empty Workflow' }).dblclick();
+  await dialog.waitFor({ state: 'hidden' });
+  assert.equal(await currentWorkflowName(), 'Empty Workflow');
+  await openProjectWorkflows();
+  await cards.filter({ hasText: 'Journey Template edited' }).dblclick();
+  await dialog.waitFor({ state: 'hidden' });
+  assert.equal(await currentWorkflowName(), 'Journey Template edited');
+
+  const libraryWritesSoFar = (await workflowRequests())
+    .slice(requestsBefore)
+    .filter((entry) => entry.method === 'PATCH' || entry.method === 'POST' || entry.method === 'DELETE');
+
+  assert.deepEqual(libraryWritesSoFar, [], 'project edits must not write to the workflow library');
+
+  // Save the edited copy under a new library name, without duplicating it beforehand.
+  await page.getByRole('button', { exact: true, name: 'Save to library…' }).click();
+  const saveDialog = page.getByRole('dialog', { exact: true, name: 'Save to library' });
+  await saveDialog.waitFor();
+  await saveDialog.getByRole('textbox').fill('Journey Saved');
+  await saveDialog.getByRole('button', { exact: true, name: 'Save' }).click();
+  await page.getByText('Workflow saved', { exact: true }).waitFor();
+
+  const libraryWrites = (await workflowRequests())
+    .slice(requestsBefore)
+    .filter((entry) => entry.method === 'PATCH' || entry.method === 'POST' || entry.method === 'DELETE');
+
+  assert.deepEqual(libraryWrites, [{ method: 'POST', path: '/api/v1/workflows/' }]);
+
+  const library = await fetchJson('/api/v1/workflows/?categories=user&page=0&per_page=50');
+  const saved = library.items.find((item) => item.name === 'Journey Saved');
+
+  assert.ok(saved, 'the save created a new template');
+  assert.equal(saved.revision, 1);
+  assert.equal(library.items.find((item) => item.workflow_id === template.workflow_id)?.name, 'Journey Template');
+
+  // The project keeps both workflows; the saved copy now targets the new template, and the name stayed the copy's.
+  const record = await waitForSavedWorkflows(
+    projectId,
+    (candidate) =>
+      candidate.data.workflows?.entries?.length === 2 &&
+      candidate.data.workflows.entries[1].source?.libraryWorkflowId === saved.workflow_id,
+    'two workflows with the saved copy linked to its new template'
+  );
+
+  assert.equal(record.data.documentSchemaVersion, 3);
+  assert.deepEqual(
+    record.data.workflows.entries.map((entry) => entry.document.name),
+    ['Empty Workflow', 'Journey Template edited']
+  );
+  assert.deepEqual(record.data.workflows.entries[1].source, { libraryWorkflowId: saved.workflow_id, revision: 1 });
+  assert.equal(record.data.workflows.activeWorkflowId, record.data.workflows.entries[1].document.id);
+
+  // Restart: both workflows and the active selection come back from the server.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('main', { exact: true, name: imported.name }).waitFor();
+  await selectLayoutPreset(page, 'Automate', 'Workflow');
+  assert.equal(await currentWorkflowName(), 'Journey Template edited');
+  await openProjectWorkflows();
+  assert.equal(await cards.count(), 2);
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'hidden' });
+
+  await context.close();
+  contexts.delete(context);
+  assertNoBrowserErrors(errors);
+};
+
+/** Count missing board media separately from missing document references. */
 const runMissingBinaryImport = async ({ browser, contexts, entries, errors, tempDirectory }) => {
   const damagedPath = await writeArchiveWithout(
     entries,
@@ -543,11 +725,6 @@ const getDefaultDependencies = () => ({
   waitForPreview: ({ getPreviewExit }) => waitForPreview(getPreviewExit),
 });
 
-/**
- * Owns the complete journey deadline and every disposable resource. Dependencies
- * are injectable so timeout and teardown behavior can be tested without
- * launching a browser or binding a port.
- */
 export const executeProjectFileJourney = async ({
   cleanupTimeoutMs: teardownLimitMs = cleanupTimeoutMs,
   dependencies: dependencyOverrides = {},

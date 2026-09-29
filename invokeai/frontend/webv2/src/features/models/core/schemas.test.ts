@@ -51,9 +51,7 @@ describe('resolveModelAbsolutePath', () => {
 
 describe('mainDefaultSettingsSchema', () => {
   it('accepts the guidance this app itself stores for FLUX.1 Fill', () => {
-    // `defs/flux.py` declares `guidance=30.0` for the dev_fill variant, so a newly identified
-    // FLUX Fill model carries it. The ceiling here used to be 20, which meant opening such a
-    // model and saving any field was refused with a message about a value the user never typed.
+    // FLUX Fill defaults to guidance 30; editing unrelated fields must accept that stored value.
     const result = mainDefaultSettingsSchema.safeParse({
       cfgRescaleMultiplier: null,
       cfgScale: 1,

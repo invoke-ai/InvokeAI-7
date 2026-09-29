@@ -14,12 +14,8 @@ import { useTranslation } from 'react-i18next';
 import { areLorasEquivalent, areModelsEquivalent } from './upscaleComparators';
 
 /**
- * The Upscale widget's prompt and LoRA controls.
- *
- * Both are memoised against content rather than identity (see
- * `upscaleComparators`), because the widget re-derives `values` on every patch
- * and these are the most expensive sections to re-render -- the prompt editors
- * carry autocomplete state that a needless remount would disturb.
+ * Compare prompt/LoRA content across reconstructed values to avoid costly rerenders and disturbed autocomplete
+ * state.
  */
 
 const SWITCH_CHECKED_PROPS = { bg: 'accent.solid' };
@@ -120,11 +116,7 @@ export const UpscalePromptFields = memo(
     areLorasEquivalent(previous.loras, next.loras)
 );
 
-/**
- * One LoRA row. Split out so editing a single weight re-renders that row rather
- * than the whole list; the handlers bind the key here instead of at the call
- * site, where they would be new closures per row per render.
- */
+/** Bind handlers within each memoized row so editing one weight does not rerender the whole list. */
 export const UpscaleLoraRow = memo(function UpscaleLoraRow({
   lora,
   onRemove,

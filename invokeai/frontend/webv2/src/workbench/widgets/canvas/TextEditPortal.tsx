@@ -19,27 +19,9 @@ type TextEditEngine = Pick<CanvasEngineHandle, 'interaction' | 'layers' | 'viewp
   Partial<Pick<CanvasEngineHandle, 'fonts'>>;
 
 /**
- * The text-editing portal: a positioned `contenteditable` div, rendered over the
- * canvas whenever a text-edit session is active, that IS the text while editing
- * (the compositor skips the session's layer so the two never double-draw).
- *
- * ## WYSIWYG
- *
- * The editable's intrinsic styles are set in DOCUMENT units (font size in px,
- * unitless line-height, family/weight/align/color from the live session source)
- * — exactly what the rasterizer will bake. A single CSS transform then maps the
- * layer's document anchor to the screen and magnifies by the view zoom, so the
- * on-screen editable matches the rasterized output at any pan/zoom. `white-space:
- * pre` mirrors the rasterizer's manual-line-break, no-auto-wrap layout.
- *
- * ## Keystrokes stay local
- *
- * Typing only mutates the editable's DOM — never the engine/store (no per-key
- * traffic). Every keydown is `stopPropagation`'d so canvas hotkeys can't fire
- * from the field (belt-and-braces with the pipeline's editable guard and the
- * widget hotkeys' `allowInEditable: false`). Commit is on blur / `mod+enter`;
- * `esc` cancels — the editable owns Escape (stopPropagation) so the engine's
- * Escape priority never also runs.
+ * Render session text as document-unit contenteditable transformed by pan/zoom; the compositor skips that layer.
+ * Preserve manual line breaks without wrapping. Keystrokes stay in DOM and stop hotkey propagation; blur/mod+enter
+ * commits and Escape cancels.
  */
 
 /** Re-renders on any viewport (pan/zoom) change via a value-stable snapshot string. */
@@ -94,11 +76,7 @@ interface TextEditableProps {
   session: TextEditSession;
 }
 
-/**
- * The single editable element for one session. Keyed by `session.id` in the
- * parent so a fresh session remounts it — the ref callback then seeds content +
- * focus exactly once, while position/style recompute on each render.
- */
+/** Key by session.id so content/focus seed once while position and style remain reactive. */
 const TextEditable = ({ engine, session }: TextEditableProps) => {
   // Re-render on pan/zoom so the transform below tracks the viewport.
   useViewportTick(engine);
@@ -107,10 +85,8 @@ const TextEditable = ({ engine, session }: TextEditableProps) => {
   const resolvedFontFamily = useResolvedTextFontFamily(engine.fonts, source);
   const ignoreNextBlur = useRef(false);
 
-  // Seeds content + focus once when the element mounts, and registers a live-
-  // content reader with the engine so it can commit on a canvas pointerdown
-  // (click-elsewhere-to-commit) without per-keystroke traffic. Cleared on unmount.
-  // A stable callback, so React never re-runs it on a position/style re-render.
+  // Use a stable ref to seed/focus once and register a live DOM reader for click-away commit without per-key store
+  // writes; clear it on unmount.
   const setRef = useCallback(
     (el: HTMLDivElement | null) => {
       if (!el) {

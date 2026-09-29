@@ -1,15 +1,6 @@
 /**
- * Wheel routing for the canvas.
- *
- * - Plain wheel → the active tool's `onWheel` if it defines one, else viewport
- *   zoom about the cursor (the default navigation behavior).
- * - Ctrl+wheel → when the active tool is brush/eraser, step its size; otherwise
- *   it is swallowed (reserved for the browser pinch-zoom gesture).
- *
- * The handler is a pure function of injected deps (viewport, the active tool, and
- * a `stepActiveBrushSize` callback the engine wires to the tool-options stores),
- * so it is driven directly in node tests. DOM is touched only through the passed
- * `WheelEvent`. Zero React, zero import-time side effects.
+ * Plain wheel routes to the tool or cursor-centered zoom. Ctrl+wheel sizes brush/eraser and is otherwise
+ * swallowed. Injected dependencies keep routing testable without DOM setup.
  */
 
 import type { InvalidatePayload } from '@workbench/canvas-engine/render/scheduler';

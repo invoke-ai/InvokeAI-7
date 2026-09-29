@@ -6,12 +6,8 @@ import { isExportableRasterLayer, isNodeHidden } from '@workbench/canvas-engine/
 export type StackActionId = 'mergeVisible' | 'exportPsd' | 'toggleVisibility' | 'new';
 
 /**
- * The right-aligned actions for a stack, in left-to-right render order (the "New" action sits
- * rightmost, nearest the panel's own add-layer menu). Only the raster stack offers "merge
- * visible" + "export to PSD". The overlay stacks offer hide/show-all: their layers are drawn
- * only to show where an effect applies, so getting them out of the way is view hygiene. The
- * raster stack has no such action — its layers ARE the image, and bulk-disabling the
- * generation input is not a workflow, only an accident.
+ * Offer merge/export only for raster stacks and hide/show only for overlays, where visibility must not disable
+ * image content. Place New nearest the panel add menu.
  */
 export const getStackActions = (stack: LayerStackKind): StackActionId[] => {
   if (stack === 'raster') {

@@ -1,8 +1,4 @@
-/**
- * "2 days ago" captions for the library's `last_run_at` stamps. The clock is
- * injected rather than read here, so the caption a test asserts is the caption
- * the panel renders — `Date.now()` lives at the call site only.
- */
+/** Inject current time so relative captions remain deterministic. */
 
 const DIVISIONS: readonly { amount: number; unit: Intl.RelativeTimeFormatUnit }[] = [
   { amount: 60, unit: 'second' },
@@ -14,8 +10,6 @@ const DIVISIONS: readonly { amount: number; unit: Intl.RelativeTimeFormatUnit }[
   { amount: Number.POSITIVE_INFINITY, unit: 'year' },
 ];
 
-// `numeric: 'auto'` so the single-unit steps read as "yesterday"/"last week"
-// instead of "1 day ago" — matching the Launchpad's project timestamps.
 const formatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
 
 /** Empty string for timestamps that cannot be read, so callers drop the caption entirely. */

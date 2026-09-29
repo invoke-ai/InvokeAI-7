@@ -12,6 +12,7 @@ import { getDocumentLayer } from '@workbench/canvas-engine/document/documentInde
 import { isLeafEditable } from '@workbench/canvas-engine/document/layerEligibility';
 import { isRenderableLayer } from '@workbench/canvas-engine/document/sources';
 import { createDocumentPatchEntry } from '@workbench/canvas-engine/history/documentPatch';
+import { NO_HELD_ASSET_REFS } from '@workbench/canvas-engine/history/history';
 import { isEmpty, roundOut, transformBounds } from '@workbench/canvas-engine/math/rect';
 import { hittableLayerSize } from '@workbench/canvas-engine/tools/moveHitTest';
 import { bakeMatrix } from '@workbench/canvas-engine/transform/transformMath';
@@ -100,6 +101,7 @@ export class TransformEditingController {
   ): HistoryEntry {
     return {
       bytes: before.data.byteLength + after.data.byteLength + 256,
+      heldAssetRefs: NO_HELD_ASSET_REFS,
       label: 'Transform layer',
       redo: () => {
         this.deps.dispatch({ id: layerId, patch: { transform: newTransform }, type: 'updateCanvasLayer' });

@@ -87,12 +87,8 @@ const ExclusionProvider = ({ children }: { children: ReactNode }) => {
 };
 
 /**
- * A region inside a hint's trigger that the pointer can rest on without
- * summoning the hint — controls that carry their own tooltips. Entering the
- * region counts as leaving the trigger and leaving it as re-entering, so the
- * card closes over the region and reopens over the rest of the trigger. React
- * dispatches enter events outermost first, so a pointer landing straight on the
- * region never opens the card. Keyboard focus on the trigger is unaffected.
+ * Suppress pointer hints over nested tooltip controls by treating entry/exit as trigger leave/enter; keyboard
+ * focus is unaffected.
  */
 export const FeatureHintExclusion = ({ children }: { children: ReactElement<HTMLAttributes<HTMLElement>> }) => {
   const handlers = useContext(ExclusionContext);
@@ -106,16 +102,8 @@ export interface FeatureHintProps {
 }
 
 /**
- * Attaches an informational hint card to a control, opened by hovering the
- * child. Copy lives in the `hints.*` i18n namespace; {@link getFeatureHint}
- * supplies the optional support link.
- *
- * The child is the trigger via `asChild`, and zag builds trigger props with
- * `normalize.element` rather than `normalize.button` — so wrapping a field
- * label adds pointer/focus handlers and `data-*` attributes but no `tabindex`
- * and no role. Labels stay out of the tab order and keep click-to-focus.
- *
- * When hints are turned off the child renders untouched, with no popper mounted.
+ * Attach to the child without button roles/tabindex so labels retain semantics; disabled hints return the child
+ * untouched.
  */
 export const FeatureHint = ({ children, hint }: FeatureHintProps) => {
   const { enabled, onDisable } = useFeatureHints();

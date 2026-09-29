@@ -82,14 +82,8 @@ import {
 import { NodeFieldControl, useNodeFieldBinding } from './NodeFieldControl';
 
 /**
- * The form builder: edit mode of the Linear UI. Every element renders as a
- * card with its own title bar — type label on the left, actions on the right,
- * content below — mirroring the legacy builder. Cards reorder and reparent by
- * dragging their title bar (drop indicators above/below, containers accept
- * drops into their body) via dnd-kit: moves happen only at `onDragEnd`, which
- * fires at the `DndContext` level regardless of whether the drop reparents
- * (and therefore remounts) the dragged card. All edits go through the
- * project graph document reducer.
+ * Commit form moves only at DndContext onDragEnd so reparenting remounts cannot lose completion; all edits use the
+ * document reducer.
  */
 
 interface BuilderDndContextValue {
@@ -102,15 +96,7 @@ const BuilderDndContext = createContext<BuilderDndContextValue>({
   form: { elements: {}, rootElementId: '' },
 });
 
-/**
- * Split out from `BuilderDndContext`: `dropTarget` changes on every
- * `onDragMove` frame while a drag is in flight, while `activeElementId`/
- * `form` only change at drag start/end. Bundling them would force every
- * card to re-render per pointer move (cards read `BuilderDndContext` for
- * opacity/disabled state); only the drop-indicator components below read
- * this one, so a move re-renders just the indicator for the affected card
- * or container.
- */
+/** Separate per-move drop targets from start/end drag state so only indicators rerender while the pointer moves. */
 const BuilderDropTargetContext = createContext<FormDropTarget | null>(null);
 
 /** The dragged card's `DragOverlay` ghost: a compact title bar following the pointer. */
@@ -134,11 +120,7 @@ const BuilderDragGhost = ({ element }: { element: WorkflowFormElement }) => (
   </HStack>
 );
 
-/**
- * The edge drop-indicator line above/below a card. The only piece of a card
- * that needs to know `dropTarget` — isolated into its own component so it's
- * also the only piece that re-renders on every drag-move frame.
- */
+/** Isolate edge indicators as the card's only per-move drop-target consumers. */
 const CardDropEdgeIndicator = ({ elementId }: { elementId: string }) => {
   const dropTarget = use(BuilderDropTargetContext);
   const edge = dropTarget?.kind === 'edge' && dropTarget.elementId === elementId ? dropTarget.edge : null;
@@ -183,13 +165,8 @@ const BuilderCardBase = ({
   const { editGraph } = useProjectGraphCommands();
   const { activeElementId, form } = use(BuilderDndContext);
   const { attributes, listeners, setActivatorNodeRef, setNodeRef: setDragRef } = useDraggable({ id: element.id });
-  // The title bar is both the draggable node and its own drag handle, so it
-  // needs both refs: `setActivatorNodeRef` is what makes `KeyboardSensor`
-  // enforce `event.target === activator` (dnd-kit's `KeyboardSensor.activators`
-  // check) — without it, `Space`/`Enter` bubbling up from the action buttons
-  // this title bar contains (Remove, Zoom to node, etc.) would also lift the
-  // card, the keyboard equivalent of the `onPointerDown` `stopPropagation`
-  // guard those buttons already carry for pointer drags.
+  // Set both draggable and activator refs on title bars so keyboard actions bubbling from child buttons cannot
+  // lift cards.
   const setDragHandleRef = useCallback(
     (node: HTMLElement | null) => {
       setDragRef(node);
@@ -251,20 +228,10 @@ const BuilderCardBase = ({
   );
 };
 
-/**
- * Memoized so a `dropTarget` change elsewhere in the form (a context update
- * that only its parent `BuilderElement` would otherwise re-render for)
- * doesn't cascade into every card — `BuilderCard` itself only reads
- * `BuilderDndContext`, which changes solely at drag start/end.
- */
+/** Memoize cards so drop-target updates do not propagate beyond the indicator consumers. */
 const BuilderCard = memo(BuilderCardBase);
 
-/**
- * The container drop-zone's hover styling and "drop here" vs. "empty" copy.
- * The only piece of `ContainerDropZone` that needs `dropTarget` — isolated
- * into its own component so it's also the only piece that re-renders on
- * every drag-move frame.
- */
+/** Isolate container hover/copy updates from the rest of the drop zone. */
 const ContainerDropZoneBody = ({
   canDrop,
   containerId,
@@ -522,14 +489,8 @@ const BuilderElementBase = ({
 };
 
 /**
- * Memoized so `FormBuilderTab`'s per-drag-move `dropTarget` state update
- * (a plain `useState` re-render, unrelated to any of this component's own
- * props) doesn't re-invoke every card's render function on every pointer
- * move — none of `element`/`hoveredNodeId`/`invalidElementIds`/
- * `projectGraph`/`selectedNodeIds` change mid-drag, so this bails and the
- * `dropTarget` update only reaches the drop-indicator components that
- * subscribe to `BuilderDropTargetContext` directly (context updates reach
- * their consumers regardless of memoized ancestors in between).
+ * Memoized elements retain stable mid-drag props; only direct drop-target context consumers rerender on pointer
+ * movement.
  */
 const BuilderElement = memo(BuilderElementBase);
 
@@ -566,7 +527,7 @@ const AddElementMenu = () => {
   );
 };
 
-const getInvalidNodeFieldElementIds = (
+export const getInvalidNodeFieldElementIds = (
   projectGraph: ProjectGraphState,
   templatesStatus: InvocationTemplatesSnapshot['status'],
   templates: InvocationTemplates
@@ -596,7 +557,7 @@ const getInvalidNodeFieldElementIds = (
       continue;
     }
 
-    const template = templates[node.data.type]?.inputs[fieldName];
+    const template = node.data.dynamicInputTemplates?.[fieldName] ?? templates[node.data.type]?.inputs[fieldName];
 
     if (!template) {
       invalidElementIds.add(element.id);
@@ -629,12 +590,8 @@ export const FormBuilderTab = ({ projectGraph }: { projectGraph: ProjectGraphSta
   // indicators and container hints appear mid-drag, so re-measure continuously.
   const measuring = useMemo(() => ({ droppable: { strategy: MeasuringStrategy.Always } }), []);
   const form = projectGraph.form;
-  // `DragMoveEvent.delta` is scroll-adjusted (translate + the panel's scroll
-  // offset baked in), so `activatorEvent.clientY + delta.y` overshoots the
-  // real pointer once the panel auto-scrolls while `over.rect` stays in
-  // fresh viewport coordinates. `collisionDetection`'s `args.pointerCoordinates`
-  // is the one place dnd-kit hands back the true (already scroll-correct)
-  // pointer position, so it's captured here and read in `handleDragMove`.
+  // Capture collision pointerCoordinates; drag delta includes scroll adjustment and cannot be added to clientY
+  // without overshooting.
   const pointerYRef = useRef<number | null>(null);
   const collisionDetection: CollisionDetection = useCallback(
     (args) => {
@@ -675,10 +632,7 @@ export const FormBuilderTab = ({ projectGraph }: { projectGraph: ProjectGraphSta
       return;
     }
 
-    // The true (scroll-correct) pointer position when the drag has one
-    // (`PointerSensor`, captured from `collisionDetection`'s
-    // `pointerCoordinates`); a `KeyboardSensor` drag has no pointer, so fall
-    // back to the dragged card's translated center.
+    // Use true pointer coordinates when available; keyboard drags use the translated card center.
     const activeRect = active.rect.current.translated;
     const referenceY = pointerYRef.current ?? (activeRect ? activeRect.top + activeRect.height / 2 : over.rect.top);
 

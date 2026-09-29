@@ -24,7 +24,7 @@ export const connectionToEdge = (connection: Connection): AnyEdge => {
   const { source, sourceHandle, target, targetHandle } = connection;
   assert(source && sourceHandle && target && targetHandle, 'Invalid connection');
   return {
-    type: 'default',
+    type: sourceHandle === 'loop_linkage' && targetHandle === 'loop_linkage' ? 'loop_linkage' : 'default',
     source,
     sourceHandle,
     target,

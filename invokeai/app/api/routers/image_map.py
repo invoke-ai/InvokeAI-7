@@ -27,11 +27,10 @@ from invokeai.app.services.image_index.image_index_common import (
 )
 from invokeai.app.services.image_index.projection import (
     DEFAULT_CLUSTER_MIN_SAMPLES,
-    MAX_CLUSTERED_POINTS,
     MIN_BUDGETED_EPS,
-    cluster_at_eps,
+    ClusterDiagnostics,
+    cluster_with_diagnostics,
     compute_clusters,
-    resolve_cluster_eps,
     scope_hash,
 )
 from invokeai.app.services.image_records.image_records_common import ImageRecordNotFoundException
@@ -125,7 +124,9 @@ ClusterEpsQuery = Query(
     ge=MIN_BUDGETED_EPS,
     le=2.0,
     description="DBSCAN eps for clustering. Defaults to an adaptive value derived from the projection's "
-    "k-distance distribution. Clamped server-side relative to the projection's coordinate span.",
+    "k-distance distribution; that default is clamped relative to the coordinate span, a supplied value is "
+    "not. Either way it is reduced if needed to keep DBSCAN's neighbourhoods inside a memory budget, and "
+    "the value actually used is returned as `cluster_eps`.",
 )
 ClusterMinSamplesQuery = Query(
     default=DEFAULT_CLUSTER_MIN_SAMPLES, ge=2, le=100, description="DBSCAN min_samples for clustering"
@@ -170,12 +171,16 @@ def _release_refresh_slot(user_id: str) -> None:
         _refresh_claims.pop(user_id, None)
 
 
-# /points is polled, and between polls its inputs almost never change, so the
-# clustering it repeats is usually identical work. Caching the labels turns the
-# steady state into a dict lookup; entries are int64 label arrays, bounded at
-# ~400KB each by the 50k-point clustering cap (only a clustering that actually
-# ran is stored, so the all-noise array returned above the cap — which is free
-# to recompute and unbounded in size — never lands here).
+# /points is refreshed on every gallery change, and between refreshes its
+# inputs almost never change, so the clustering it repeats is usually
+# identical work. Caching the labels turns the steady state into a dict
+# lookup; entries are int64 label arrays, bounded at 8 bytes per point by the
+# clustering cap (only a clustering that actually ran is stored, so the
+# all-noise array a skipped clustering returns — free to recompute and
+# unbounded in size — never lands here). At the current 300k cap that is
+# 2.4MB per entry and ~77MB across a full pool, up from ~400KB and ~13MB when
+# the cap was 50k; if the cap stays this high, the pool size below wants
+# revisiting.
 #
 # ONE entry per user, rather than a shared pool of N. A shared pool made the
 # cache worse than none: with more concurrent map users than slots, strict LRU
@@ -201,6 +206,62 @@ def _cluster_cache_put(user_id: str, key: _ClusterCacheKey, labels: np.ndarray, 
         _cluster_cache.move_to_end(user_id)
         while len(_cluster_cache) > _CLUSTER_CACHE_USERS:
             _cluster_cache.popitem(last=False)
+
+
+# An all-noise map — every point "unclustered" — is the one clustering outcome
+# the response cannot explain, and it has four separate causes (see
+# ClusterDiagnostics). Reporting the diagnostics turns a user report into a
+# single greppable line.
+#
+# Only that outcome is logged at INFO; a clustering that found clusters
+# explains itself and goes to debug. The map refreshes on every gallery change
+# (socket-driven, not polled), and each refresh moves the cache key, so
+# without a guard a gallery stuck above the point cap would emit a line per
+# refresh forever.
+#
+# The guard is per-user and keyed on the diagnostics minus their timing, so a
+# repeat of the same outcome stays quiet while any change to the point set,
+# the parameters or the resulting clustering speaks up. It also expires: the
+# useful thing to be able to say is "open the map again while I watch the
+# log", and a once-per-process line cannot be reproduced without a restart.
+# Bounded like the cluster cache, under the same lock.
+_CLUSTER_DIAGNOSTICS_USERS = 32
+_CLUSTER_DIAGNOSTICS_REPEAT_AFTER_SECONDS = 600.0
+_cluster_diagnostics_logged: "OrderedDict[str, tuple[str, float]]" = OrderedDict()
+
+
+def _log_cluster_diagnostics(services, user_id: str, diagnostics: ClusterDiagnostics) -> None:
+    """Report why this clustering came out as it did, at most once per outcome."""
+    if diagnostics.n_points == 0:
+        # Nothing was clustered because there was nothing to cluster; the
+        # response already says `empty`.
+        return
+
+    explains_an_all_noise_map = diagnostics.skipped is not None or diagnostics.cluster_count == 0
+    signature = diagnostics.signature()
+    now = time.monotonic()
+    with _state_lock:
+        previous = _cluster_diagnostics_logged.get(user_id)
+        # Recorded and moved to the end even when this request is about to be
+        # suppressed: recency has to mean "last seen", not "last logged", or
+        # the quiet users — the ones whose entry is doing its job — are the
+        # first evicted, and eviction is what re-arms the line.
+        _cluster_diagnostics_logged[user_id] = (signature, now)
+        _cluster_diagnostics_logged.move_to_end(user_id)
+        while len(_cluster_diagnostics_logged) > _CLUSTER_DIAGNOSTICS_USERS:
+            _cluster_diagnostics_logged.popitem(last=False)
+        if previous is not None and previous[0] == signature:
+            if now - previous[1] < _CLUSTER_DIAGNOSTICS_REPEAT_AFTER_SECONDS:
+                # Keep the ORIGINAL timestamp: refreshing it on every
+                # suppressed request would hold the line off indefinitely.
+                _cluster_diagnostics_logged[user_id] = (signature, previous[1])
+                return
+
+    message = f"Image map: clustered user '{user_id}': {diagnostics.summary()}"
+    if explains_an_all_noise_map:
+        services.logger.info(message)
+    else:
+        services.logger.debug(message)
 
 
 def _active_model_id(services) -> Optional[str]:
@@ -377,22 +438,19 @@ async def get_image_map_points(
                 scope_hash(model_id, visible_items),
             )
 
+        diagnostics = None
         try:
-            if 0 < visible_coords.shape[0] <= MAX_CLUSTERED_POINTS:
-                resolved_eps = resolve_cluster_eps(visible_coords, eps, min_samples)
-                # cluster_at_eps, not compute_clusters: the latter re-resolves
-                # what was just resolved, and the second pass re-applies the
-                # 0.01 floor to a budget-shrunk eps — so the value reported
-                # here would not be the value DBSCAN used.
-                labels = cluster_at_eps(visible_coords, resolved_eps, min_samples)
-                # Cached only here. The other branch's labels are a constant
-                # -1 array sized to the full point count — free to recompute,
-                # unbounded in size, and above the cap that is the only array
-                # large enough to matter.
+            labels, diagnostics = cluster_with_diagnostics(visible_coords, eps=eps, min_samples=min_samples)
+            resolved_eps = diagnostics.resolved_eps
+            # eps was resolved exactly when the point cap let the clustering
+            # proceed, so this is "the label array is bounded by the cap" —
+            # asked of the diagnostics rather than re-derived from a second
+            # copy of the constant, which can drift from the one the
+            # clustering actually applied. Above the cap the labels are a
+            # constant -1 array sized to the full point count: free to
+            # recompute, unbounded in size, and never worth storing.
+            if diagnostics.eps is not None:
                 _cluster_cache_put(user_id, cache_key, labels, resolved_eps)
-            else:
-                resolved_eps = None
-                labels = compute_clusters(visible_coords, eps=eps, min_samples=min_samples)
         except Exception:
             # Clustering is a presentation detail; the coordinates are the
             # data. sklearn raises on a non-finite cached row (which a build
@@ -403,6 +461,10 @@ async def get_image_map_points(
             services.logger.exception(f"Image map: clustering failed for user '{user_id}'; serving points unclustered")
             resolved_eps = None
             labels = np.full((visible_coords.shape[0],), -1, dtype=np.int64)
+        if diagnostics is not None:
+            # Outside the try: a logging failure must not be reported as a
+            # clustering failure, nor cost the caller their cached labels.
+            _log_cluster_diagnostics(services, user_id, diagnostics)
         return (
             [
                 ImageMapPoint(x=float(x), y=float(y), image_name=item.name, kind=item.kind, cluster=int(label))
@@ -837,16 +899,11 @@ async def get_image_map_cluster_labels(
             return {}, visible_hash
         visible_coords = record.coords[mask]
         try:
-            if 0 < visible_coords.shape[0] <= MAX_CLUSTERED_POINTS:
-                # cluster_at_eps on a resolved eps, matching /points: passing an
-                # already-resolved eps to compute_clusters re-resolves it, so
-                # the labels here could come from a different eps than the
-                # cluster_eps /points reported and the client passed back.
-                cluster_ids = cluster_at_eps(
-                    visible_coords, resolve_cluster_eps(visible_coords, eps, min_samples), min_samples
-                )
-            else:
-                cluster_ids = compute_clusters(visible_coords, eps=eps, min_samples=min_samples)
+            # Resolves the client-supplied eps exactly once, as /points does, so
+            # both endpoints agree on the clustering these labels describe. The
+            # diagnostics /points reports cover this call too: same points, same
+            # parameters, same result.
+            cluster_ids = compute_clusters(visible_coords, eps=eps, min_samples=min_samples)
         except Exception:
             # /points degrades to unclustered rather than 500ing; labels over no
             # clusters is the same degradation, and the client already discards

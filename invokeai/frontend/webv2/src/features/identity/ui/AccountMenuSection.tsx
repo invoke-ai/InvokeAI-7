@@ -8,21 +8,13 @@ import { useTranslation } from 'react-i18next';
 
 import { ProfileDialog } from './ProfileDialog';
 
-/**
- * The signed-in user's rows — identity header, account settings, user
- * management, sign-out — as menu items rather than a menu of their own, so a
- * host menu can embed them instead of nesting a second popover inside itself.
- *
- * Renders nothing in a single-user session, where there is no account to manage.
- */
+/** Embed account actions directly in host menus to avoid nested popovers; render nothing in single-user mode. */
 export const AccountMenuSection = () => {
   const { t } = useTranslation();
   const session = useAuthSession();
   const navigate = useNavigate();
   const [isProfileOpen, setIsProfileOpen] = useState(false);
 
-  // User management is a Launchpad page (`/users`), not a workbench widget —
-  // so this navigates there, working the same from Home and the editor.
   const openUserManagement = useCallback(() => {
     void navigate({ to: '/users' });
   }, [navigate]);

@@ -1,12 +1,3 @@
-/**
- * Core types for the canvas engine.
- *
- * This module is the shared vocabulary for the imperative canvas engine
- * (`src/workbench/canvas-engine/`). It has zero React imports and zero
- * side effects at import time — it is pure type/interface declarations (the
- * single type-only import below is erased at compile time).
- */
-
 import type { RasterSurface } from './render/raster';
 
 /** A 2D point or vector. */
@@ -34,17 +25,7 @@ export interface PlacedSurface {
   rect: Rect;
 }
 
-/**
- * A 2D affine transform matrix, using the canvas transform convention:
- *
- * ```
- * x' = a*x + c*y + e
- * y' = b*x + d*y + f
- * ```
- *
- * This matches `CanvasRenderingContext2D.setTransform(a, b, c, d, e, f)` and
- * the DOMMatrix 2D constructor argument order.
- */
+/** Canvas/DOMMatrix affine order: x' = a*x + c*y + e; y' = b*x + d*y + f. */
 export interface Mat2d {
   a: number;
   b: number;
@@ -70,12 +51,7 @@ export type ToolId =
   | 'text'
   | 'sam';
 
-/**
- * A pixel-selection boolean operation applied when a new lasso path commits
- * against the existing selection mask (see `selection/selectionState.ts`):
- * `replace` swaps it, `add` unions, `subtract` cuts out, `intersect` keeps the
- * overlap.
- */
+/** Selection operations replace, union, subtract or intersect the existing alpha mask. */
 export type SelectionOp = 'replace' | 'add' | 'subtract' | 'intersect';
 
 /** Modifier key state accompanying a pointer sample. */
@@ -102,11 +78,7 @@ export interface PointerInput {
   timeStamp: number;
 }
 
-/**
- * Describes what needs to be re-rendered on the next frame. Consumers
- * (scheduler/compositor, added in later tasks) union flags together rather
- * than always doing a full repaint.
- */
+/** Next-frame render requirements coalesce in the scheduler to avoid unnecessary full repaint. */
 export interface RenderFlags {
   /** The viewport transform (pan/zoom) changed. */
   view: boolean;
@@ -117,20 +89,13 @@ export interface RenderFlags {
   /** Force a full repaint, ignoring the other flags. */
   all: boolean;
   /**
-   * The regions that changed, when every contributing invalidation could name
-   * one — letting the composite repaint just those pixels instead of the whole
-   * viewport. `null` means "repaint everything", and is the default: an
-   * invalidation that does not carry damage widens the frame back to full.
+   * Partial damage requires every contributing invalidation to name a region; null/default or any unknown damage
+   * forces full repaint.
    */
   damage: LayerDamage[] | null;
 }
 
-/**
- * A changed region, in the LAYER-LOCAL space of `layerId` — the same space a
- * layer's cache rect lives in, so a caller that already knows its dirty rect
- * (the stroke session does) can report it without knowing the layer's transform.
- * The compositor maps it to the screen through that layer's effective matrix.
- */
+/** Changed region in layer-local coordinates; compositor applies the effective layer matrix to reach screen space. */
 export interface LayerDamage {
   layerId: string;
   rect: Rect;

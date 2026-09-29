@@ -1,9 +1,4 @@
-/**
- * Canvas "Scale before processing": persisted in the canvas widget's own
- * `state.values` like the denoising strength, read back with defaults by the
- * invoke orchestrator and threaded into the pure graph compiler. `none` keeps
- * today's behaviour (the bbox snapped to the model grid).
- */
+/** Persist processing scale in canvas values for compilation; none preserves bbox size snapped to model grid. */
 
 import type { CanvasScaleMethod, CanvasScalingSettings } from '@features/generation/contracts';
 

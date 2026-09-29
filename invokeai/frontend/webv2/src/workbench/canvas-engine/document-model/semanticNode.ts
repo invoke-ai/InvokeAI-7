@@ -6,9 +6,8 @@ import { collectSubtreeLeaves, isGroupNode, subtreeDepth } from '@workbench/canv
 import { isNodeHidden } from '@workbench/canvas-engine/document/layerEligibility';
 
 /**
- * Document facts about one node, leaf or group, with its ancestors already applied: what a row,
- * a toolbar or a planner may show or refuse without recomputing any rule. Nothing about the
- * screen, the panel or the session.
+ * Node facts with ancestor state applied, shared by rows, tools and planners without screen or session
+ * dependencies.
  */
 export interface SemanticNode {
   readonly id: string;

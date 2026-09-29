@@ -110,11 +110,7 @@ export type GalleryPickerStatusPart =
   | { count: number; kind: 'boardCount' | 'itemCount' | 'matchCount' | 'remainingCount' | 'windowLimit' }
   | { kind: 'remainingNone' | 'unsupportedImage' | 'unsupportedVideo' };
 
-/**
- * The footer line, most specific first: the boards pane counts boards; a
- * highlighted tile the slot cannot take explains itself; otherwise capacity,
- * then either the window cap or the listing size.
- */
+/** Footer priority: board count, incompatible-highlight explanation, capacity, then window cap or listing size. */
 export const getGalleryPickerStatus = ({
   accept,
   activeItem,

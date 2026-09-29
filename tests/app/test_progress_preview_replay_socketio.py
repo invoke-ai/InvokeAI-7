@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from invokeai.app.api.dependencies import ApiDependencies
 from invokeai.app.api.sockets import SocketIO
 from invokeai.app.services.events.events_common import InvocationProgressEvent
+from invokeai.app.services.progress_previews.progress_previews_common import ProgressPreviewDTO
 from invokeai.app.services.progress_previews.progress_previews_default import MemoryProgressPreviews
 
 
@@ -31,6 +32,22 @@ def _event(item_id: int, user_id: str, queue_id: str = "default") -> InvocationP
         image={"width": 64, "height": 64, "dataURL": "data:image/jpeg;base64,frame"},
         revision=3,
     )
+
+
+def test_preview_dto_preserves_workflow_call_routing_metadata() -> None:
+    event = _event(2, "owner-1").model_copy(
+        update={
+            "parent_item_id": 1,
+            "root_item_id": 1,
+            "workflow_call_parent_source_id": "call-node",
+        }
+    )
+
+    preview = ProgressPreviewDTO.from_event(event)
+
+    assert preview.parent_item_id == 1
+    assert preview.root_item_id == 1
+    assert preview.workflow_call_parent_source_id == "call-node"
 
 
 @pytest.mark.anyio

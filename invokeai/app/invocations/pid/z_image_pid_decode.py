@@ -179,6 +179,7 @@ class ZImagePiDDecodeInvocation(BaseInvocation, WithMetadata, WithBoard):
             latents,
             BaseModelType.Flux,
             pid_memory_optimization,
+            pid_net=pid_info.model,
         )
         with pid_info.model_on_device(working_mem_bytes=estimated_working_memory) as (_, pid_net):
             if not isinstance(pid_net, PidNet):

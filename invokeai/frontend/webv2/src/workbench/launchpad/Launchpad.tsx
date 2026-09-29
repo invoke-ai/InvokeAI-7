@@ -1,11 +1,13 @@
 import { Box, Flex, VisuallyHidden, type SystemStyleObject } from '@chakra-ui/react';
 import { FontsPage } from '@features/fonts/launchpad';
 import { useCapabilities, UsersPage } from '@features/identity';
+import { requestIntermediatesFocus } from '@features/intermediates';
 import { ModelsPage } from '@features/models';
 import { NodesPage } from '@features/nodes';
 import { Tabs } from '@platform/ui';
 import { useLocation, useNavigate } from '@tanstack/react-router';
 import { LaunchpadCommandPalette } from '@workbench/palette/LaunchpadCommandPalette';
+import { openWorkbenchSettings } from '@workbench/settings/settingsDialogStore';
 import { BlocksIcon, BoxIcon, FolderIcon, HouseIcon, TypeIcon, UsersIcon, type LucideIcon } from 'lucide-react';
 import { useCallback, useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -17,16 +19,8 @@ import { ProjectsPage } from './pages/ProjectsPage';
 import { ProjectActionsMenuProvider } from './projects/ProjectActionsMenuHost';
 
 /**
- * The landing surface at `/`: a full-height shell with a slim section rail and
- * a full-width page area — the editor equivalent of Photoshop's home screen.
- * Sections live as switchable pages (Projects, the model manager, and admin
- * user management) so the surface has room to grow without crowding any one of
- * them. It deliberately mounts none of the workbench providers or runtimes, so
- * it stays on the light side of the route-level code split; the heaviest page,
- * the model manager, lazy-loads its own chunk the first time it is opened.
- *
- * Sections carry a `group`, because where you work and what you administer are
- * not peers: a flat list gave "Users" the same standing as "Projects".
+ * Launchpad owns grouped home/admin pages without mounting workbench runtimes. Model management loads on demand
+ * across the route split.
  */
 
 type LaunchpadSectionId = 'home' | 'projects' | 'models' | 'nodes' | 'users' | 'fonts';
@@ -82,6 +76,11 @@ const getActiveSectionId = (
     ? requestedSectionId
     : DEFAULT_SECTION_ID;
 
+const manageIntermediatesOf = (userId: string, label: string): void => {
+  requestIntermediatesFocus({ ownerId: userId, ownerLabel: label });
+  openWorkbenchSettings('intermediates');
+};
+
 export const Launchpad = () => {
   const { canManageModels, canManageNodes, canManageUsers } = useCapabilities();
   const { t } = useTranslation();
@@ -133,7 +132,7 @@ export const Launchpad = () => {
             icon: UsersIcon,
             id: 'users',
             label: t('launchpad.sections.users'),
-            render: () => <UsersPage />,
+            render: () => <UsersPage onManageIntermediates={manageIntermediatesOf} />,
           },
         ] satisfies (LaunchpadSection & { condition?: boolean })[]
       ).filter((section) => section.condition ?? true),

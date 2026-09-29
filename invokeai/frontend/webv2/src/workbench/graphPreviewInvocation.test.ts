@@ -14,8 +14,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { resolveAndSubmitGraphPreviewInvocation } from './graphPreviewInvocation';
 
-// Generation policy now fails closed without the capability table, and a submission cannot
-// happen before app boot has fetched it. Seeding it here is what the running app does.
+// Seed capabilities to match app boot; submission fails closed without them.
 seedArchitectureCapabilities();
 
 const animaModel: MainModelConfig = { base: 'anima', key: 'anima-model', name: 'Anima', type: 'main' };
@@ -47,10 +46,7 @@ const getActiveProject = (values: GenerateWidgetValues) => {
   return project!;
 };
 
-// Mounts the canvas widget into the center region so `resolveInvocationRoute`
-// treats a `canvas` source as available (mirrors invocation.test.ts's
-// `canvasInputFor` mountedWidgetIds override, but here as an actual project
-// mutation since `resolveAndSubmitGraphPreviewInvocation` takes a real Project).
+// Mount Canvas in the project so resolveInvocationRoute considers that source available.
 const withCanvasWidgetMounted = (
   project: ReturnType<typeof getActiveProject>
 ): ReturnType<typeof getActiveProject> => ({

@@ -3,6 +3,8 @@ import type { Rect } from '@workbench/canvas-engine/types';
 
 import type { HistoryEntry } from './history';
 
+import { collectHistoryMediaRefs } from './history';
+
 export interface LayerPixelSnapshot {
   layer: CanvasControlLayerContract | CanvasRasterLayerContractV2;
   rect: Rect;
@@ -57,6 +59,7 @@ export const createLayerSnapshotEntry = ({
   };
   return {
     bytes: (before.pixels?.data.byteLength ?? 0) + (after.pixels?.data.byteLength ?? 0) + 256,
+    heldAssetRefs: collectHistoryMediaRefs(beforeSnapshot.layer, afterSnapshot.layer),
     label,
     redo: () => apply(afterSnapshot),
     replayFailureAtomic: true,

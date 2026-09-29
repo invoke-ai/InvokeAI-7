@@ -4,13 +4,8 @@ import { isLoraFieldCollectionEntry, isModelFieldType, toLoraFieldCollectionList
 import { isInvocationNode } from './types';
 
 /**
- * "Which models does this workflow need, and are they installed?" — pure
- * extraction from a project graph document plus template metadata, and pure
- * resolution against injected installed/starter-catalog data. 28 of the 29
- * shipped default workflows ship with *blank* model fields: the template's
- * `uiModelBase` / `uiModelType` hints on an empty required input (the "slot"
- * requirement) are how those workflows say what they need, so slot handling
- * is not a fallback path — it's the common case.
+ * Extract exact models and template-described empty required slots; blank slots are normal workflow requirements,
+ * not merely a fallback.
  */
 
 export interface WorkflowModelIdentifier {
@@ -112,10 +107,6 @@ const buildSlotLabel = (fieldTemplate: FieldInputTemplate, base: string | null, 
   return fieldTemplate.title || fieldTemplate.name;
 };
 
-// #endregion
-
-// #region Extraction
-
 interface DuckTypedModelValue {
   key: string;
   hash?: unknown;
@@ -192,11 +183,8 @@ const computePrimaryBase = (requirements: readonly WorkflowModelRequirement[]): 
 };
 
 /**
- * Walks invocation nodes' model-typed inputs and classifies each as an
- * `exact` requirement (a concrete `{ key }` value) or a `slot` requirement
- * (an empty *required* field, described by its template's `uiModelBase` /
- * `uiModelType` hints). Connection-fed inputs are skipped entirely — the
- * upstream node is what actually needs a model, not this pass-through.
+ * Classify concrete model identifiers as exact requirements and empty required inputs as slots; skip
+ * connection-fed inputs owned upstream.
  */
 export const extractWorkflowModelRequirements = (
   document: ProjectGraphState,
@@ -247,7 +235,7 @@ export const extractWorkflowModelRequirements = (
       requirements.push({ identifier, kind: 'exact', label: identifier.name ?? identifier.key });
     };
 
-    for (const fieldTemplate of Object.values(template.inputs)) {
+    for (const fieldTemplate of Object.values({ ...template.inputs, ...node.data.dynamicInputTemplates })) {
       const isLoraCollection = fieldTemplate.type.name === 'LoRAField';
 
       if (!isModelFieldType(fieldTemplate.type) && !isLoraCollection) {
@@ -260,9 +248,8 @@ export const extractWorkflowModelRequirements = (
 
       const value = node.data.inputs[fieldTemplate.name]?.value;
 
-      // A LoRA collection holds its identifiers one level down, and holds several of them. Without
-      // this the LoRAs a collection loader applies are invisible to "what does this workflow need",
-      // even though the same LoRAs wired through Select LoRA nodes are counted.
+      // Inspect nested identifiers in LoRA collections so their requirements match equivalent selector-node
+      // graphs.
       if (isLoraCollection) {
         const entries = toLoraFieldCollectionList(value);
 
@@ -303,10 +290,6 @@ export const extractWorkflowModelRequirements = (
 
   return { primaryBase: computePrimaryBase(requirements), requirements };
 };
-
-// #endregion
-
-// #region Resolution
 
 export interface InstalledModelSummary {
   key: string;
@@ -443,12 +426,8 @@ const resolveFromStarter = (
 };
 
 /**
- * Resolves each requirement against injected installed/starter-catalog data.
- * `exact` requirements match installed models by key, then hash, then
- * name+base+type; `slot` requirements match by base (and type, when the
- * slot names one). Unmatched requirements fall through to a starter-catalog
- * lookup, which reports `installing` when its (or a dependency's) source is
- * already being installed.
+ * Resolve exact requirements by key, hash, then name/base/type; slots by base/type. Starter fallback reports
+ * installing sources, including dependencies.
  */
 export const resolveWorkflowModelRequirements = (
   requirements: readonly WorkflowModelRequirement[],
@@ -482,23 +461,9 @@ export const resolveWorkflowModelRequirements = (
     );
   });
 
-// #endregion
-
-// #region Add Models handoff
-
 /**
- * What to search for in Add Models to reach the model a requirement is missing
- * — `null` when there is nothing to send anyone there for, and the row stays
- * plain text.
- *
- * An already-installed requirement is `null` by design: Add Models searches the
- * *starter catalog*, which need not carry a locally installed model's name at
- * all, so the link would dead-end on an empty list.
- *
- * When the catalog can supply the model, its own catalog name is the surest
- * query. Otherwise an exact requirement names one model, and a slot names a
- * *kind* — whose display label ("FLUX checkpoint") is prose the catalog does
- * not index; its raw base (or failing that, raw type) is what it does.
+ * Link only missing requirements to Add Models. Prefer catalog names, then exact model names or raw slot
+ * base/type; display prose is not searchable taxonomy.
  */
 export const getAddModelsSearchTerm = (resolved: ResolvedModelRequirement): string | null => {
   if (resolved.status === 'installed') {

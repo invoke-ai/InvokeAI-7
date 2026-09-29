@@ -129,8 +129,7 @@ export const GalleryBoardRow = ({
 
   return (
     <Box
-      // An outline rather than a border, so the drop affordance never reflows
-      // the list; over the row it steps up to a solid inset ring.
+      // Use outlines to avoid reflow during drag highlighting; the active row gets an inset ring.
       bg={isOver ? 'accent.muted' : undefined}
       outline={isOver ? '2px solid' : canDropItems ? '1px dashed' : undefined}
       outlineColor={canDropItems ? 'accent.solid' : undefined}

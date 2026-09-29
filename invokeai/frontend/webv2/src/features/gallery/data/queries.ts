@@ -23,6 +23,7 @@ import {
 
 import {
   type GalleryItemNames,
+  fetchImageIndexAvailability,
   hydrateGalleryDateBoardItemPage,
   isDateBoardId,
   listGalleryBoards,
@@ -81,11 +82,8 @@ export interface CanonicalGalleryItemsFilter {
 }
 
 /**
- * An infinite window can start below the top of the listing: `offset` (a row
- * offset, normalized to a page multiple, default 0) anchors where the window
- * begins, and the `GALLERY_MAX_ROWS` reach applies from there. This is what
- * lets a reveal land the gallery on an image deeper than the base window
- * could ever load — every board/search/view change resets the anchor to 0.
+ * Offset anchors a page-aligned infinite window with GALLERY_MAX_ROWS reach. Board, search, and view changes reset
+ * it to zero.
  */
 export type GalleryItemsWindow = { kind: 'anchor'; offset: number } | { kind: 'infinite'; offset?: number };
 
@@ -123,16 +121,8 @@ export const canonicalizeGalleryItemsFilter = (filter: GalleryItemsFilter): Cano
   const semantic = filter.semanticQuery ? toGallerySemanticQuery(filter.semanticQuery) : undefined;
 
   if (semantic) {
-    // A ranked result set answers to the reference alone: the semantic branch
-    // of `galleryItemNamesOptionsForOwner` sends only the query, so board,
-    // view, order, the starred filter and the date range change nothing about
-    // the response. Keeping them in the key made clicking a board — or toggling
-    // the starred filter, or switching the images/assets tab — mint a fresh key and
-    // re-run the search for byte-identical results, which for a dropped file
-    // means re-uploading the blob and for a URL reference means the server
-    // re-downloads the remote image. Pinned rather than omitted so the shape
-    // stays a `CanonicalGalleryItemsFilter`; the values are never read on this
-    // path, only compared.
+    // Pin irrelevant filter fields to canonical values: semantic rankings depend only on the query, and distinct
+    // keys would repeat uploads or downloads.
     return {
       boardId: '',
       galleryView: 'images',
@@ -167,8 +157,7 @@ const getWindowKey = (
   if (window.kind === 'infinite') {
     const offset = normalizePageOffset(window.offset ?? 0);
 
-    // A zero offset keeps the historical key shape, so every existing
-    // consumer of the base window shares one cache entry with it.
+    // Preserve the zero-offset key so base-window consumers share one cache entry.
     return offset === 0 ? [] : (['infinite', offset] as const);
   }
 
@@ -196,6 +185,7 @@ export const galleryKeys = {
   itemNamesForAccount: (owner: AccountScope) => [...galleryKeys.itemNamesRoot(), getAccountKey(owner)] as const,
   itemNames: (owner: AccountScope, filter: CanonicalGalleryItemsFilter) =>
     [...galleryKeys.itemNamesForAccount(owner), filter] as const,
+  imageIndexAvailability: (owner: AccountScope) => [...galleryKeys.all, 'image-index', getAccountKey(owner)] as const,
 };
 
 const galleryItemNamesOptionsForOwner = (owner: AccountScope, filter: CanonicalGalleryItemsFilter) =>
@@ -305,10 +295,8 @@ const fetchSharedDateBoardNames = (
 };
 
 /**
- * One range read of a filter's listing, shared by the per-page queryFn and
- * the window rebuild so the two cannot diverge. Name-list filters hydrate a
- * slice of one shared name fetch — re-running a semantic search re-uploads a
- * dropped file's blob. The result is clamped to `limit`.
+ * Share one range reader between pages and rebuilds. Name-list filters hydrate slices of a shared fetch to avoid
+ * repeating semantic uploads; clamp to limit.
  */
 export const fetchGalleryItemsRange = async (
   client: QueryClient,
@@ -335,6 +323,33 @@ export const fetchGalleryItemsRange = async (
   signal.throwIfAborted();
 
   return result.items.length <= limit ? result : { ...result, items: result.items.slice(0, limit) };
+};
+
+/**
+ * Poll missing-model and failed statuses only. Settled status refreshes on a new stale consumer, including after
+ * layout changes.
+ */
+export const IMAGE_INDEX_UNAVAILABLE_POLL_MS = 30_000;
+const IMAGE_INDEX_STALE_MS = 5 * 60_000;
+
+export const imageIndexAvailabilityOptions = () => {
+  const owner = captureAccountScope();
+
+  return queryOptions({
+    queryFn: async ({ signal }) => {
+      const availability = await fetchImageIndexAvailability(AbortSignal.any([signal, owner.signal]));
+
+      assertAccountScopeCurrent(owner);
+
+      return availability;
+    },
+    queryKey: galleryKeys.imageIndexAvailability(owner),
+    refetchInterval: (query) =>
+      query.state.status === 'error' || query.state.data?.state === 'model_missing'
+        ? IMAGE_INDEX_UNAVAILABLE_POLL_MS
+        : false,
+    staleTime: IMAGE_INDEX_STALE_MS,
+  });
 };
 
 export const galleryBoardsOptions = (query: GalleryBoardsQuery = {}) => {
@@ -399,13 +414,8 @@ export const galleryItemsInfiniteOptions = (
         ? undefined
         : getNextPageParam(normalizedWindow, lastPage, lastPageParam),
     getPreviousPageParam: (_firstPage, allPages, firstPageParam) => {
-      // An anchored INFINITE window must not grow upward past its anchor: its
-      // cache key names that start offset, and the grid — which shares the
-      // entry and cannot request earlier pages itself — would have 60 items
-      // spliced in above its viewport, shifting the content under the user.
-      // Paginated anchors keep growing freely: their consumer slices out the
-      // one page it wants by pageParam, so a prepend is invisible there, and
-      // Preview walks backwards through exactly this mechanism.
+      // Infinite windows cannot prepend above their anchor without shifting the viewport. Paginated windows may
+      // prepend because consumers select by pageParam.
       const lowestPageParam = normalizedWindow.kind === 'infinite' ? normalizedWindow.offset : 0;
 
       return allPages.length < GALLERY_MAX_INFINITE_PAGES && firstPageParam - GALLERY_PAGE_SIZE >= lowestPageParam

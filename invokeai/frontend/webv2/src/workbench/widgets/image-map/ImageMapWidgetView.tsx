@@ -11,35 +11,43 @@ import {
   useStartersSelector,
 } from '@features/models';
 import { useMountEffect } from '@platform/react/useMountEffect';
-import { getImageMapClickSelectsCluster, getImageMapShowClusterLabels } from '@workbench/image-map/imageMapSettings';
+import {
+  getImageMapClickSelectsCluster,
+  getImageMapClusterEps,
+  getImageMapShowClusterLabels,
+} from '@workbench/image-map/imageMapSettings';
 import {
   ensureImageMapLoaded,
   imageMapStore,
   refreshImageIndexStatus,
   refreshImageMapPoints,
+  setClusterEps,
   setClusterLabelsEnabled,
 } from '@workbench/image-map/imageMapStore';
 import { isIndexing } from '@workbench/image-map/indexProgress';
 import { useWidgetValuesSelector } from '@workbench/WorkbenchContext';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef } from 'react';
 
+import { CLEAR_CLUSTER_SELECTION_LABEL, ClusterSelectionChip } from './ClusterSelectionChip';
 import { ImageIndexActivityBadge, ImageIndexProgressPanel } from './ImageIndexProgress';
+import { useClearClusterSelection } from './useSelectMapImage';
 
-// Lazy so the plotly bundle (its own vite chunk, ~1.5MB) loads only when the
-// widget is actually shown.
+const CLEAR_CLUSTER_SELECTION_COMMAND = 'image-map.clearClusterSelection';
+// In the center area the view selector floats over the content's top-left
+// corner; the shell publishes its height so overlays can start below it.
+const OVERLAY_COLUMN_TOP = 'calc(var(--chakra-spacing-2) + var(--wb-center-chrome-inset, 0px))';
+const MAP_SURFACE_FOCUS_STYLE = { outline: '2px solid {colors.accent.solid}', outlineOffset: '-2px' } as const;
+
+// Load Plotly only when the map widget is shown.
 const ImageMapPlot = lazy(() => import('./ImageMapPlot'));
 
 const handleRefresh = () => {
   void refreshImageMapPoints();
-  // The counts too: when the retry is the progress panel's, stale counts are
-  // the likeliest reason the user pressed it.
+  // Retry counts as well as points; stale progress is often why retry was requested.
   refreshImageIndexStatus();
 };
 
-// The backend reports the configured model name with `model_missing`, but a
-// response that predates that field, a server that could not read the config,
-// or an `image_index_model: ""` would otherwise leave the sentence with a hole
-// where the model belongs; the config default is the right guess for all three.
+// Use the configured default model name when older/empty responses cannot name the missing encoder.
 const DEFAULT_IMAGE_INDEX_MODEL = 'DFN2B-CLIP-ViT-L-14-39B';
 
 const EMPTY_STARTERS: readonly StarterModel[] = [];
@@ -48,24 +56,52 @@ const selectStarterModels = (snapshot: {
   response: { starter_models: StarterModel[] } | null;
 }): readonly StarterModel[] => snapshot.response?.starter_models ?? EMPTY_STARTERS;
 
-// Module scope: an inline element would be a new value on every render, which
-// is both what react-perf/jsx-no-jsx-as-prop forbids and pointless here — the
-// fallback never varies.
 const plotLoadingFallback = (
   <Center h="full">
     <Spinner size="lg" />
   </Center>
 );
 
-/**
- * Semantic map of the gallery: every image embedded by the backend's image
- * index, projected to 2D with UMAP and colored by cluster. Clicking a point
- * selects that image in the gallery (and so in Preview).
- */
-export const ImageMapWidgetView = (_props: WidgetViewProps) => {
+/** Show backend embeddings projected by UMAP and colored by cluster; point selection drives Gallery and Preview. */
+export const ImageMapWidgetView = ({ runtime }: WidgetViewProps) => {
   const { data, error, indexCounts, indexUpdatedAt, loadState, renderError } = imageMapStore.useSnapshot();
   const clickSelectsCluster = useWidgetValuesSelector('image-map', getImageMapClickSelectsCluster);
+  const clusterEps = useWidgetValuesSelector('image-map', getImageMapClusterEps);
   const showClusterLabels = useWidgetValuesSelector('image-map', getImageMapShowClusterLabels);
+  const clearClusterSelection = useClearClusterSelection();
+
+  // Esc while the map owns focus, the keyboard path to the chip's clear. Also
+  // a palette command. The runtime stamps registrations with the active
+  // project and is rebuilt on a project switch without remounting this view,
+  // so registration follows it; the clear reads the selection when it fires.
+  const { commands: runtimeCommands, hotkeys: runtimeHotkeys } = runtime;
+
+  useEffect(() => {
+    const disposers = [
+      runtimeCommands.register({
+        handler: clearClusterSelection,
+        id: CLEAR_CLUSTER_SELECTION_COMMAND,
+        title: CLEAR_CLUSTER_SELECTION_LABEL,
+      }),
+      runtimeHotkeys.register({
+        allowInEditable: false,
+        commandId: CLEAR_CLUSTER_SELECTION_COMMAND,
+        defaultKeys: ['esc'],
+        id: CLEAR_CLUSTER_SELECTION_COMMAND,
+        title: CLEAR_CLUSTER_SELECTION_LABEL,
+      }),
+    ];
+
+    return () => {
+      disposers.forEach((dispose) => dispose());
+    };
+  }, [clearClusterSelection, runtimeCommands, runtimeHotkeys]);
+
+  // Before the first load, so it carries the chosen strength rather than
+  // fetching at the default and immediately refetching.
+  useEffect(() => {
+    setClusterEps(clusterEps);
+  }, [clusterEps]);
 
   useEffect(() => {
     ensureImageMapLoaded();
@@ -77,9 +113,7 @@ export const ImageMapWidgetView = (_props: WidgetViewProps) => {
     setClusterLabelsEnabled(showClusterLabels);
   }, [showClusterLabels]);
 
-  // Checked before the plot: this is the canvas failing, not a fetch, so
-  // re-mounting the plot would just fail again and render an empty box with no
-  // way out. A successful refresh clears it and lets the plot retry.
+  // Handle render failure before points so the same broken canvas cannot remount until refresh clears it.
   if (renderError) {
     return (
       <CenteredMessage
@@ -94,24 +128,41 @@ export const ImageMapWidgetView = (_props: WidgetViewProps) => {
   // A working map beats a full-screen error: when a refresh fails but prior
   // points exist, keep showing them (the next successful refresh recovers).
   if (data && data.points.length > 0) {
-    // Its own boundary, rather than leaning on WidgetRenderer's. That one wraps
-    // the whole widget, so suspending on the plotly chunk replaced the entire
-    // panel — header and actions menu included — with a skeleton frame, and
-    // then held the resolved content for React's fallback throttle on top. It
-    // also sits above `loadWidgets`, which preloads only the implementation
-    // chunk and cannot reach this nested import, so a preset switch onto an
-    // already-loaded map suspended anyway. Confining it here keeps the frame
-    // mounted and the spinner where the plot will appear.
+    // Keep a nested Suspense boundary around Plotly so its separate lazy load preserves widget chrome and places
+    // loading feedback in the plot area.
     return (
-      // Positioned so the indexing badge can overlay the plot. That badge is
-      // the only sign of an index run once there are points to draw: this
-      // branch preempts the progress panel below, which is right — a usable
-      // stale map beats a progress bar — but silently, which was not.
-      <Box h="full" position="relative" w="full">
+      // Overlay indexing status on usable stale points because this branch bypasses the progress panel. Focusable so a
+      // cleared selection can hand focus back to the map (the chip's button unmounts with it), keeping Esc and the
+      // map's other widget hotkeys in reach.
+      <Box
+        _focusVisible={MAP_SURFACE_FOCUS_STYLE}
+        data-image-map-surface=""
+        h="full"
+        outline="none"
+        position="relative"
+        tabIndex={-1}
+        w="full"
+      >
         <Suspense fallback={plotLoadingFallback}>
           <ImageMapPlot clickSelectsCluster={clickSelectsCluster} showClusterLabels={showClusterLabels} />
         </Suspense>
-        {isIndexing(indexCounts) ? <ImageIndexActivityBadge counts={indexCounts} updatedAt={indexUpdatedAt} /> : null}
+        {/* One corner, stacked: the selection first, since the user made it.
+            The column passes pointer events through, because the plot under
+            it is drag-panned and wheel-zoomed across its whole area; each
+            overlay takes its own back. */}
+        <Stack
+          align="flex-start"
+          gap="1.5"
+          insetStart="2"
+          maxW="calc(100% - 1rem)"
+          pointerEvents="none"
+          position="absolute"
+          top={OVERLAY_COLUMN_TOP}
+          zIndex="1"
+        >
+          <ClusterSelectionChip />
+          {isIndexing(indexCounts) ? <ImageIndexActivityBadge counts={indexCounts} updatedAt={indexUpdatedAt} /> : null}
+        </Stack>
       </Box>
     );
   }
@@ -126,10 +177,8 @@ export const ImageMapWidgetView = (_props: WidgetViewProps) => {
   if (data?.state === 'model_missing') {
     return (
       <CenteredMessage
-        // A standing action, not just an error retry: the server picks a newly
-        // installed encoder up on a request, and nothing else polls while the
-        // indexer is inert, so this button is the user's only way to ask again
-        // without closing the widget.
+        // Keep a standing refresh action to discover newly installed encoders while the indexer is otherwise
+        // inert.
         actionLabel={retainedDataError ? 'Retry' : 'Check again'}
         detail={
           <>
@@ -176,16 +225,8 @@ export const ImageMapWidgetView = (_props: WidgetViewProps) => {
     );
   }
 
-  // Ahead of both `computing` and the empty state: with nothing to draw yet,
-  // how far the backfill has got is the one thing that answers "when will
-  // there be a map?" — a spinner or "nothing to map yet" leaves a user with a
-  // large gallery unable to tell progress from a stall. `computing` is routine
-  // here (the backend asks for a projection as soon as anything is embedded),
-  // so deferring to it would hide the progress for most of a backfill.
-  //
-  // A failed refresh is carried into the panel rather than shadowed by it:
-  // preempting the `error` branch below would otherwise drop both the message
-  // and the only retry the widget has before the map is ready.
+  // Prioritize backfill progress over computing/empty states before points exist. Preserve refresh errors and
+  // retry within that panel.
   if (isIndexing(indexCounts)) {
     return (
       <Center h="full" p="6">
@@ -268,12 +309,8 @@ const CenteredMessage = ({
 );
 
 /**
- * The configured encoder's name, as a one-click install when the starter
- * catalog carries it. Naming a model the user then has to go find by hand is
- * what made this message unactionable: the starter entry knows the source, so
- * the message can queue the download (and its dependencies) itself. Falls back
- * to plain text when the catalog has not loaded, does not know the name (a
- * hand-configured `image_index_model`), or the download is already running.
+ * Offer one-click encoder installation when the starter catalog resolves it; otherwise show text while unknown,
+ * loading, or already downloading.
  */
 const ImageIndexModelInstallLink = ({ modelName }: { modelName: string }) => {
   const starterModels = useStartersSelector(selectStarterModels);

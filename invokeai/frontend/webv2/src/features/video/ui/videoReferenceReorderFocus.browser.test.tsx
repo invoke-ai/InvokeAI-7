@@ -12,13 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VideoReferenceListField } from './VideoReferenceListField';
 import { VideoUiProvider, type VideoUiAdapter } from './VideoUiContext';
 
-/**
- * Reordering the Ref2VA reference stack must not cost the user their place on
- * the keyboard. Two ways it used to: the list was keyed by index, so every move
- * remounted the cards it touched and the pressed arrow's DOM node was destroyed
- * outright; and a move that lands on an end disables that arrow, which cannot
- * then hold focus.
- */
+/** Reordering must preserve card identity and transfer focus when the pressed arrow becomes disabled. */
 const i18n = i18next.createInstance();
 await i18n.use(initReactI18next).init({
   fallbackLng: 'en',
@@ -130,8 +124,6 @@ describe('video reference reorder focus', () => {
 
     expect(order()).toEqual(['a.png', 'c.png', 'b.png']);
 
-    // Same element still focused: the card survived the reorder rather than
-    // being remounted underneath the user.
     expect(document.activeElement).toBe(up);
     expect(buttons('Move reference up')[1]).toBe(up);
   });
@@ -151,9 +143,7 @@ describe('video reference reorder focus', () => {
   });
 
   it('leaves focus alone when the arrow was pressed without holding focus', async () => {
-    // Pressing a button does not focus it in every browser, so the handler can
-    // run with the caret still in the prompt. Handing focus to an arrow then
-    // would haul the user out of what they were typing.
+    // Some browsers dispatch clicks without focusing the button; preserve focus in the prompt.
     await render(['a.png', 'b.png', 'c.png']);
 
     const field = document.querySelector('[aria-label="Prompt"]') as HTMLInputElement;
@@ -167,18 +157,13 @@ describe('video reference reorder focus', () => {
   });
 
   it('never fires a stale handoff after a dropped write', async () => {
-    // The reviewer's path: the write is dropped, `memo` keeps the card from
-    // rendering, so the arm survives. Much later an unrelated change disables
-    // that same arrow -- and the stale arm must not haul focus out of whatever
-    // the user is doing by then.
+    // A dropped write must not leave an arm that steals focus when a later change disables the arrow.
     let drop = true;
     let mutate: (next: string[]) => void = () => undefined;
 
     const StaleHarness = () => {
       const [names, setNames] = useState(['a.png', 'b.png', 'c.png']);
 
-      // Handing the setter out is a side effect, so it happens in an effect --
-      // `act` has flushed it by the time the test reaches for `mutate`.
       useEffect(() => {
         mutate = setNames;
       }, []);
@@ -235,8 +220,6 @@ describe('video reference reorder focus', () => {
 
     await act(() => field.focus());
 
-    // Now remove the first reference, which shifts this card to the top and
-    // disables the arrow it armed.
     drop = false;
     await act(() => mutate(['b.png', 'c.png']));
 
@@ -246,10 +229,7 @@ describe('video reference reorder focus', () => {
   });
 
   it('keeps focus when a card moves PAST a duplicate of another reference', async () => {
-    // The same clip can legitimately appear twice, sampled over two different
-    // windows, so the key disambiguates by occurrence. Moving `tail` down past
-    // the second `dup` re-numbers nothing under that scheme; a name+index key
-    // would have shifted `tail` from 1 to 2 and remounted it.
+    // Repeated clips use occurrence keys; moving tail past the second duplicate must preserve tail's identity.
     await render(['dup.png', 'tail.png', 'dup.png', 'end.png']);
 
     const down = buttons('Move reference down')[1];

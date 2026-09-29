@@ -7,9 +7,8 @@ import { createDomRasterBackend } from '@workbench/canvas-engine/render/raster';
 import { describe, expect, it } from 'vitest';
 
 /**
- * The trim's verdict and its crop blit are both real pixel work, which the node stub
- * (uniform invented readback, recorded-only blits) cannot exercise. These assert the
- * pixels — including the `destination-out` erase that produced the reported bug.
+ * Real pixels verify trim decisions and crop blits, including destination-out erasure that recording stubs cannot
+ * model.
  */
 
 /** A published cache at a non-zero origin — the shape a chunk-padded stroke leaves. */

@@ -15,13 +15,8 @@ export interface GalleryBoardGroups {
 }
 
 /**
- * Splits the flat board list into the panel's three sections.
- *
- * Pure and total: it filters on `showArchived`/`showDates`/`showOtherProjects`
- * itself rather than trusting the query to have excluded them, so grouping can
- * be reasoned about (and tested) without a fetch in the picture. The
- * other-projects filter has to happen here in any case — `GET /boards/` takes
- * no project parameter, so the list always arrives complete.
+ * Apply visibility filters while grouping; GET /boards/ cannot filter other projects and returns the complete
+ * list.
  */
 export const getGalleryBoardGroups = ({
   boards,
@@ -52,8 +47,7 @@ export const getGalleryBoardGroups = ({
   const projectBoard = fetchedProjectBoard ? { ...fetchedProjectBoard, name: projectName } : null;
 
   const matchesBoardSearch = (board: GalleryBoard) => matchesSearch(getGalleryBoardLabel(board, t));
-  // The open project's own board is never "another project's", whatever the
-  // setting says — hiding the board you are working in would be nonsense.
+  // Always retain the active project's board regardless of the other-projects filter.
   const belongsToVisibleProject = (board: GalleryBoard) =>
     showOtherProjects || board.projectId === null || board.id === projectBoard?.id;
   const regularBoards = boards.filter(
@@ -66,8 +60,7 @@ export const getGalleryBoardGroups = ({
   const dateBoards = showDates ? boards.filter((board) => board.kind === 'date' && matchesBoardSearch(board)) : [];
   const archivedBoards = showArchived ? regularBoards.filter((board) => board.archived) : [];
 
-  // The one fixed system row keeps a fixed seat at the top (legacy-gallery
-  // parity) instead of drifting down as boards accumulate.
+  // Keep the fixed system row first as boards accumulate.
   const yourBoards = [
     ...(uncategorizedBoard && matchesBoardSearch(uncategorizedBoard) ? [uncategorizedBoard] : []),
     ...(projectBoard && matchesBoardSearch(projectBoard) ? [projectBoard] : []),

@@ -101,6 +101,7 @@ const createAggregate = (initialState = createInitialWorkbenchState()) => {
     reportLoadUnavailable: (error) => events.push(`load-unavailable:${error}`),
     saveFailed: (error) => events.push(`save-failed:${error}`),
     savePending: (error) => events.push(`save-pending:${error}`),
+    saveScheduled: () => events.push('save-scheduled'),
     saveStarted: () => events.push('save-started'),
     saveSucceeded: (savedAt) => events.push(`save-succeeded:${savedAt}`),
     setHasHydrated: (next) => {
@@ -265,6 +266,44 @@ describe('Workbench persistence runtime', () => {
     );
   });
 
+  it('reports edits as pending from the moment they happen until their own save is acknowledged', async () => {
+    const aggregate = createAggregate();
+    const { persistence } = createPersistence(() => Promise.resolve(null));
+    const first = deferred<WorkbenchSaveResult>();
+    const second = deferred<WorkbenchSaveResult>();
+    vi.mocked(persistence.saveWorkbench)
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const clock = new FakeClock();
+    const runtime = createWorkbenchPersistenceRuntime({ aggregate: aggregate.port, clock, persistence });
+
+    runtime.start();
+    await flushPromises();
+    aggregate.events.length = 0;
+
+    // Before the debounce fires, the edit is already reported, so nothing can claim it was saved.
+    aggregate.edit('First');
+    await flushPromises();
+    expect(aggregate.events).toEqual(['save-scheduled']);
+    expect(persistence.saveWorkbench).not.toHaveBeenCalled();
+
+    clock.runAll();
+    expect(aggregate.events).toEqual(['save-scheduled', 'save-started']);
+
+    // An edit made while the save runs makes that save's answer stale: nothing reports "saved" until the edit's
+    // own save is acknowledged.
+    aggregate.edit('Second');
+    await flushPromises();
+    first.resolve(saveResult(aggregate.state, 'first'));
+    await flushPromises();
+    expect(aggregate.events).toEqual(['save-scheduled', 'save-started']);
+
+    clock.runAll();
+    second.resolve(saveResult(aggregate.state, 'second'));
+    await flushPromises();
+    expect(aggregate.events).toEqual(['save-scheduled', 'save-started', 'save-started', 'save-succeeded:second']);
+  });
+
   it('debounces edits and ignores stale completions after a newer revision', async () => {
     const aggregate = createAggregate();
     const { persistence } = createPersistence(() => Promise.resolve(null));
@@ -296,10 +335,8 @@ describe('Workbench persistence runtime', () => {
   });
 
   it('applies server outcomes from a save that went stale', async () => {
-    // A stale save is one whose *snapshot* moved on, which says nothing about what the server
-    // answered. The board id in a create response exists nowhere else, and the first save of a new
-    // draft is exactly the one an edit is most likely to overtake — so dropping it there leaves the
-    // project pointing at no board until the next reload.
+    // A stale snapshot can still receive the draft's only authoritative board id; preserve that create response
+    // despite intervening edits.
     const aggregate = createAggregate();
     const { persistence } = createPersistence(() => Promise.resolve(null));
     const first = deferred<WorkbenchSaveResult>();

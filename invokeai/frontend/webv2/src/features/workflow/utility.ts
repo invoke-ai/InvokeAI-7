@@ -1,3 +1,4 @@
+export * from './core/batch';
 export * from './core/connectorHandles';
 export * from './core/connectors';
 export * from './core/document';
@@ -7,3 +8,4 @@ export * from './core/graphIndex';
 export * from './core/outputFields';
 export * from './core/validation';
 export * from './core/workflowJson';
+export * from './core/callSavedWorkflow';

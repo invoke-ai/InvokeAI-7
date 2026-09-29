@@ -1,9 +1,6 @@
 /**
- * The project's active color pair — the desktop-editor foreground/background
- * colors that seed painting and creation defaults. The pair is a preference:
- * it persists in the canvas widget's per-project values, never in the document
- * or its history, and changing it never rewrites selected content. Pure data +
- * readers; no React, no engine imports — unit-testable in node.
+ * Persist foreground/background preferences in canvas widget values, outside document history; pair changes never
+ * rewrite existing content.
  */
 
 import { formatHexColor, normalizeHex, parseHexColor } from '@platform/ui/color';

@@ -43,14 +43,11 @@ describe('getModelTriggerPhrases', () => {
 
 describe('areModelsEquivalent', () => {
   it('treats a fresh config under the same key as equivalent when its data matches', () => {
-    // A catalog refresh replaces the object without changing anything the
-    // prompt editors read, and re-rendering them for that is pure waste.
     expect(areModelsEquivalent(model(), model())).toBe(true);
   });
 
   it('separates models the prompt editors would render differently', () => {
-    // Each of these feeds a prompt-editor affordance, so matching on `key`
-    // alone would leave the editors showing the previous model's data.
+    // Compare model metadata beyond key; prompt affordances can change under the same catalog identity.
     expect(areModelsEquivalent(model(), model({ key: 'model-b' }))).toBe(false);
     expect(areModelsEquivalent(model(), model({ base: 'sd-1' }))).toBe(false);
     expect(areModelsEquivalent(model(), model({ name: 'Model B' }))).toBe(false);
@@ -81,8 +78,7 @@ describe('areLorasEquivalent', () => {
 
 describe('areInputImagesEquivalent', () => {
   it('separates images by dimensions as well as by name', () => {
-    // The preflight readout is computed from these, so a same-named image at
-    // new dimensions must not reuse the previous megapixel estimate.
+    // Include dimensions in equality so same-name image updates recompute preflight estimates.
     expect(areInputImagesEquivalent(image(), image())).toBe(true);
     expect(areInputImagesEquivalent(image(), image({ width: 1024 }))).toBe(false);
     expect(areInputImagesEquivalent(image(), image({ height: 1024 }))).toBe(false);

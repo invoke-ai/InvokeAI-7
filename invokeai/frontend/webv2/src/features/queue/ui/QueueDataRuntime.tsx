@@ -15,9 +15,7 @@ export const attachQueueDataRuntime = (): (() => void) => {
     refreshModelCache: refreshModelCacheStats,
   });
 
-  // The device options never change without a restart, so one read at startup is
-  // enough. Every surface that labels an item or a progress tile with its GPU reads
-  // from this store, and on a single-GPU install the labels stay hidden.
+  // Read device options once because changes require restart; hide labels for single-accelerator systems.
   void refreshGenerationDevices();
 
   runtime.start();

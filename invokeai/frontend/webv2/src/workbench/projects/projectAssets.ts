@@ -1,31 +1,15 @@
 /**
- * Which assets a project document points at, and how to rewrite those pointers.
- *
- * ### Collection is by key, not by path
- *
- * Three keys hold an asset name: `imageName`, `image_name` and `video_name`. Collecting every
- * string found at those keys is complete by construction — a new adapter kind or node field is
- * picked up without touching this file. The legacy frontend walks a hand-written list of paths
- * instead, which is why it enumerates `ip_adapter` and `flux_redux` by name and drops the pixels of
- * anything added since. A false positive costs nothing: it fails to resolve and is skipped.
- *
- * Images and videos get a set and a mapping each, because they are separate backend namespaces and
- * could share a name — one flat map would let one rewrite the other.
- *
- * ### Collection skips history, remapping does not
- *
- * Legacy queue entries embedded whole canvas snapshots and the gallery keeps sixty recents, so
- * bundling everything could turn a working project into a multi-gigabyte archive;
- * {@link collectLiveAssetRefs} walks only what the project needs to open. {@link remapAssetRefs}
- * walks everything, because imported legacy documents may still contain history while their asset
- * references are being rewritten before canonical serialization removes it.
+ * Discover references by name key with separate image/video namespaces. Collection excludes history; remapping
+ * includes it.
  */
 
-/** Keys whose string values name an image. */
-const IMAGE_NAME_KEYS = new Set(['imageName', 'image_name']);
-
-/** Keys whose string values name a video. */
-const VIDEO_NAME_KEYS = new Set(['video_name']);
+import {
+  collectMediaNames,
+  IMAGE_NAME_KEYS,
+  MAX_HELD_NAME_LENGTH,
+  type MediaNameRefs,
+  VIDEO_NAME_KEYS,
+} from '@workbench/mediaReferences';
 
 /** Top-level document keys that are history rather than live content. */
 export const PROJECT_HISTORY_ROOT_KEYS: ReadonlySet<string> = new Set(['events', 'graphHistory', 'queue']);
@@ -33,14 +17,7 @@ export const PROJECT_HISTORY_ROOT_KEYS: ReadonlySet<string> = new Set(['events',
 /** Keys that introduce history at any depth (`canvas.snapshots`, the gallery's recents). */
 export const PROJECT_HISTORY_KEYS: ReadonlySet<string> = new Set(['recentImages', 'snapshot', 'snapshots']);
 
-/**
- * The gallery widget's selection: per-install content, so a project arriving elsewhere opens with
- * nothing selected rather than dragging a stranger's gallery behind it.
- *
- * Skipping them during collection is only half of it — an unbundled, unstripped reference still
- * travels, just broken, and the same skip hides it from the restore pass so import cannot even
- * report it as dangling. {@link stripGallerySelection} is the other half.
- */
+/** Skip and strip installation-specific selection references so unbundled names cannot travel silently. */
 export const GALLERY_SELECTION_KEYS: ReadonlySet<string> = new Set([
   'compareImage',
   'selectedImage',
@@ -48,22 +25,10 @@ export const GALLERY_SELECTION_KEYS: ReadonlySet<string> = new Set([
   'selectedImageNames',
 ]);
 
-/**
- * Board ids the gallery widget holds. Installation state, not project state: `projectBoardId` is a
- * cache the server owns and hydration overwrites.
- *
- * Board ids elsewhere in the document — a workflow node's board input — are meaningful and
- * deliberately NOT stripped, which is why this names only the gallery widget's two keys.
- */
+/** Strip gallery board IDs while preserving authored workflow board inputs. */
 export const GALLERY_INSTALLATION_KEYS: ReadonlySet<string> = new Set(['projectBoardId', 'selectedBoardId']);
 
-/**
- * Where the gallery was scrolled to. Meaningless in another install: the board
- * ids above are stripped, so an imported project lands on a different (usually
- * near-empty) board, where a page number — or, in infinite mode, the mid-board
- * window anchor it doubles as — describes a position that does not exist and
- * renders as an empty board.
- */
+/** Clear pagination/window anchors when transferred board IDs change. */
 export const GALLERY_POSITION_KEYS: ReadonlySet<string> = new Set(['galleryPage']);
 
 const INSTALLATION_STATE_KEYS: ReadonlySet<string> = new Set([
@@ -72,87 +37,173 @@ const INSTALLATION_STATE_KEYS: ReadonlySet<string> = new Set([
   ...GALLERY_POSITION_KEYS,
 ]);
 
-/**
- * URLs the document caches beside a media name, naming *this* install's copy.
- *
- * Blanked, not removed: `getBoundedRecentImages` requires both to be strings and drops any entry
- * missing one, so deleting them would discard the whole gallery-recents overlay on import. Every
- * consumer already falls back to deriving the URL from the name, which is the only correct answer
- * once a transfer has renamed the media — the name is remapped, a URL built around the old one is
- * not, and would keep resolving to the source project's picture.
- */
+/** Blank cached URLs instead of deleting keys, preserving entries while forcing URL derivation from remapped names. */
 const DERIVED_URL_KEYS: ReadonlySet<string> = new Set(['imageUrl', 'thumbnailUrl', 'videoUrl']);
 
-export interface ProjectAssetRefs {
-  images: Set<string>;
-  videos: Set<string>;
+export type ProjectAssetRefs = MediaNameRefs;
+
+export interface CanvasHeldAssetRefs {
+  readonly images: readonly string[];
+  readonly videos: readonly string[];
 }
+
+/** What a live Canvas engine's undo state retains, and when that changes. */
+export interface CanvasHeldMediaSource {
+  read(): CanvasHeldAssetRefs;
+  subscribe(listener: () => void): () => void;
+}
+
+/** One mounted Workbench's live Canvas engines, each registered for as long as its undo state survives. */
+export interface CanvasHeldMediaSources {
+  read(projectId: string): CanvasHeldAssetRefs | undefined;
+  register(projectId: string, source: CanvasHeldMediaSource): () => void;
+  subscribe(listener: () => void): () => void;
+}
+
+export const createCanvasHeldMediaSources = (): CanvasHeldMediaSources => {
+  const sources = new Map<string, CanvasHeldMediaSource>();
+  const listeners = new Set<() => void>();
+  const notify = (): void => listeners.forEach((listener) => listener());
+  return {
+    read: (projectId) => sources.get(projectId)?.read(),
+    register: (projectId, source) => {
+      sources.set(projectId, source);
+      const unsubscribe = source.subscribe(notify);
+      notify();
+      return () => {
+        unsubscribe();
+        if (sources.get(projectId) === source) {
+          sources.delete(projectId);
+          notify();
+        }
+      };
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const collectFrom = (node: unknown, refs: ProjectAssetRefs): void => {
-  if (Array.isArray(node)) {
-    for (const item of node) {
-      collectFrom(item, refs);
-    }
+const withoutHistoryRoots = (projectDocument: object): unknown[] =>
+  Object.entries(projectDocument).flatMap(([key, value]) => (PROJECT_HISTORY_ROOT_KEYS.has(key) ? [] : [value]));
 
-    return;
-  }
+export const collectLiveAssetRefs = (projectDocument: Record<string, unknown>): ProjectAssetRefs =>
+  collectMediaNames(
+    withoutHistoryRoots(projectDocument),
+    (key) => PROJECT_HISTORY_KEYS.has(key) || GALLERY_SELECTION_KEYS.has(key)
+  );
 
-  if (!isRecord(node)) {
-    return;
-  }
+const isHeldSkipKey = (key: string): boolean => key === 'recentImages' || GALLERY_SELECTION_KEYS.has(key);
 
-  for (const [key, value] of Object.entries(node)) {
-    if (PROJECT_HISTORY_KEYS.has(key) || GALLERY_SELECTION_KEYS.has(key)) {
-      continue;
-    }
+/** Open editors hold live content and undo state, but not completed queue/event or gallery history. */
+export const collectHeldAssetRefs = (projects: readonly object[]): ProjectAssetRefs =>
+  collectMediaNames(projects.flatMap(withoutHistoryRoots), isHeldSkipKey, MAX_HELD_NAME_LENGTH);
 
-    if (typeof value === 'string' && value !== '') {
-      if (IMAGE_NAME_KEYS.has(key)) {
-        refs.images.add(value);
-        continue;
-      }
+/**
+ * Containers whose children an edit replaces independently: the canvas, its snapshots, undo stacks, and the workflow
+ * collection with its per-workflow histories, so editing one workflow rescans only that workflow.
+ */
+const SPLIT_HELD_KEYS: ReadonlySet<string> = new Set([
+  'canvas',
+  'snapshots',
+  'undoRedo',
+  'past',
+  'future',
+  'workflows',
+  'entries',
+]);
 
-      if (VIDEO_NAME_KEYS.has(key)) {
-        refs.videos.add(value);
-        continue;
-      }
-    }
+/** Containers keyed by ids (workflow histories): every child is split, and their entries are shared by identity. */
+const SPLIT_CHILDREN_HELD_KEYS: ReadonlySet<string> = new Set(['workflowHistories']);
 
-    collectFrom(value, refs);
+type HeldPart = ProjectAssetRefs | CanvasHeldAssetRefs;
+
+const scanHeld = (node: object): ProjectAssetRefs => collectMediaNames([node], isHeldSkipKey, MAX_HELD_NAME_LENGTH);
+
+// Edits that replace name-free subtrees (the project root, layout, settings) then leave the parts unchanged.
+const pushNamed = (refs: ProjectAssetRefs, parts: HeldPart[]): void => {
+  if (refs.images.size || refs.videos.size) {
+    parts.push(refs);
   }
 };
 
 /**
- * Every asset name the project needs in order to open: canvas layers and masks,
- * reference images, widget values, and graph node inputs. History and gallery
- * selections are excluded — see the module docblock.
+ * Reads what open editors hold: each project's live content plus the undo state its Canvas engine retains. Edits
+ * replace the canvas, its snapshots and undo stacks child by child, so the project is split there; every other subtree
+ * is immutable and scanned once per identity, as are the primitive fields of each split node. When no part changed
+ * identity the previous result is returned as is; equal name sets under new identities are left to the lease.
  */
-export const collectLiveAssetRefs = (projectDocument: Record<string, unknown>): ProjectAssetRefs => {
-  const refs: ProjectAssetRefs = { images: new Set<string>(), videos: new Set<string>() };
+export const createOpenProjectsHeldMediaReader = (
+  getProjects: () => readonly (object & { id: string })[],
+  getCanvasRefs: (projectId: string) => CanvasHeldAssetRefs | undefined
+): (() => { images: string[]; videos: string[] }) => {
+  const scans = new WeakMap<object, ProjectAssetRefs>();
+  const residueScans = new WeakMap<object, ProjectAssetRefs>();
+  let last: { parts: HeldPart[]; result: { images: string[]; videos: string[] } } | null = null;
 
-  for (const [key, value] of Object.entries(projectDocument)) {
-    if (PROJECT_HISTORY_ROOT_KEYS.has(key)) {
-      continue;
+  const collectParts = (node: object, isRoot: boolean, parts: HeldPart[], splitChildren = false): void => {
+    const entries = Array.isArray(node)
+      ? node.map((value, index) => [String(index), value] as const)
+      : Object.entries(node);
+    let residue: Record<string, unknown> | null = null;
+    for (const [key, value] of entries) {
+      if (isHeldSkipKey(key) || (isRoot && PROJECT_HISTORY_ROOT_KEYS.has(key))) {
+        continue;
+      }
+      if (typeof value !== 'object' || value === null) {
+        (residue ??= {})[key] = value;
+      } else if (splitChildren || SPLIT_HELD_KEYS.has(key)) {
+        collectParts(value, false, parts, SPLIT_CHILDREN_HELD_KEYS.has(key));
+      } else {
+        let refs = scans.get(value);
+        if (!refs) {
+          refs = scanHeld(value);
+          scans.set(value, refs);
+        }
+        pushNamed(refs, parts);
+      }
     }
+    if (residue) {
+      let refs = residueScans.get(node);
+      if (!refs) {
+        refs = scanHeld(residue);
+        residueScans.set(node, refs);
+      }
+      pushNamed(refs, parts);
+    }
+  };
 
-    collectFrom(value, refs);
-  }
-
-  return refs;
+  return () => {
+    const parts: HeldPart[] = [];
+    for (const project of getProjects()) {
+      collectParts(project, true, parts);
+      const retained = getCanvasRefs(project.id);
+      if (retained) {
+        parts.push(retained);
+      }
+    }
+    if (last && last.parts.length === parts.length && parts.every((part, index) => part === last!.parts[index])) {
+      return last.result;
+    }
+    const images = new Set<string>();
+    const videos = new Set<string>();
+    for (const part of parts) {
+      part.images.forEach((name) => images.add(name));
+      part.videos.forEach((name) => videos.add(name));
+    }
+    last = { parts, result: { images: [...images], videos: [...videos] } };
+    return last.result;
+  };
 };
 
 /** `{ drop: true }` removes the key, `{ value }` replaces it, `null` recurses into it. */
 type NodeVisit = { drop: true } | { value: unknown } | null;
 
-/**
- * Walk every entry of a project document at every depth, applying `visit`.
- *
- * Subtrees with nothing to change keep their identity, so a document that matches nothing comes
- * back as the very same object rather than a structurally-equal copy.
- */
+/** Preserve structural sharing; unchanged documents return the same object. */
 const mapDocument = (node: unknown, visit: (key: string, value: unknown) => NodeVisit): unknown => {
   if (Array.isArray(node)) {
     let hasChanged = false;
@@ -197,13 +248,7 @@ const mapDocument = (node: unknown, visit: (key: string, value: unknown) => Node
   return hasChanged ? next : node;
 };
 
-/**
- * Drop everything describing *this install* rather than the project, at every depth.
- *
- * Removing a key is the same as clearing it here: every reader already tolerates absence. By key at
- * any depth rather than by walking `widgetInstances`, which covers the legacy `widgetStates.gallery`
- * shape for free and is safe because these keys occur nowhere else in a document.
- */
+/** Strip reserved keys at every depth, covering both persisted widget shapes. */
 export const stripInstallationState = (projectDocument: Record<string, unknown>): Record<string, unknown> =>
   mapDocument(projectDocument, (key, value) => {
     if (INSTALLATION_STATE_KEYS.has(key)) {
@@ -218,12 +263,7 @@ export interface ProjectAssetMappings {
   videos: ReadonlyMap<string, string>;
 }
 
-/**
- * Rewrite every asset reference in the document through the mapping for its
- * kind. Names absent from their mapping are left alone, and subtrees with
- * nothing to rewrite keep their identity, so empty mappings return the document
- * unchanged.
- */
+/** Use kind-specific mappings; preserve unmapped names and unchanged subtree identity. */
 export const remapAssetRefs = (
   projectDocument: Record<string, unknown>,
   mappings: ProjectAssetMappings
@@ -258,8 +298,7 @@ const readGalleryRecentImageName = (projectDocument: Record<string, unknown>): s
       continue;
     }
 
-    // `recentImages` is persisted newest-first and bounded (see
-    // `getBoundedRecentImages`), so index 0 is the project's latest result.
+    // recentImages must be newest-first for index zero to identify the latest result.
     for (const image of values.recentImages) {
       if (isRecord(image) && typeof image.imageName === 'string' && image.imageName !== '') {
         return image.imageName;
@@ -300,11 +339,6 @@ const readTopmostCanvasImageName = (projectDocument: Record<string, unknown>): s
   return null;
 };
 
-/**
- * The image that best stands for this project: its newest generated result,
- * falling back to the top-most canvas layer with pixels. `null` for a project
- * that has neither, which is the permanent state for one that has produced
- * nothing — `ProjectCover` renders a glyph for exactly that case.
- */
+/** Prefer the newest result, then the topmost raster, otherwise null. */
 export const selectCoverImageName = (projectDocument: Record<string, unknown>): string | null =>
   readGalleryRecentImageName(projectDocument) ?? readTopmostCanvasImageName(projectDocument);

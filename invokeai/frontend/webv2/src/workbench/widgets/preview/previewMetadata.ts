@@ -1,8 +1,6 @@
 /**
- * Tolerant display parser for image metadata (`GET /images/i/{name}/metadata`).
- * The payload is untyped and varies by generation path (generate, canvas,
- * workflow, upscale), so every field is optional and unknown shapes are simply
- * skipped — the raw record is still available for the panel's JSON disclosure.
+ * Parse variable untyped image metadata tolerantly; skip unknown fields while retaining the complete raw record
+ * for JSON display.
  */
 
 export interface PreviewMetadataEntry {

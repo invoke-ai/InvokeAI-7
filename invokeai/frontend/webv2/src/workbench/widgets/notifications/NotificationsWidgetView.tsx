@@ -89,16 +89,16 @@ const NotificationsPanel = () => {
                   <HStack gap="2" minW="0">
                     <Icon as={IconComponent} color={`${kindColorPalette[notification.kind]}.300`} boxSize="3.5" />
                     <Text fontSize="2xs" fontWeight="700">
-                      {notification.title}
+                      {notification.titleKey ? t(notification.titleKey) : notification.title}
                     </Text>
                   </HStack>
                   <Badge colorPalette={kindColorPalette[notification.kind]} size="xs">
                     {t(`notifications.kind.${notification.kind}`)}
                   </Badge>
                 </HStack>
-                {notification.message ? (
+                {notification.message || notification.messageKey ? (
                   <Text color="fg.subtle" fontSize="2xs">
-                    {notification.message}
+                    {notification.messageKey ? t(notification.messageKey) : notification.message}
                   </Text>
                 ) : null}
                 <Text color="fg.subtle" fontSize="2xs">

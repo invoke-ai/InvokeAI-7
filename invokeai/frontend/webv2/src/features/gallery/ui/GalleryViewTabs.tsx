@@ -13,12 +13,7 @@ const GALLERY_VIEW_TABS = [
   { labelKey: 'common.assets', value: 'assets' },
 ] satisfies { labelKey: string; value: GalleryView }[];
 
-/**
- * Media / Assets, each carrying `board`'s count for that view so the split is
- * legible before you switch. The same `SegmentTabs` strip the layer panes use;
- * the caller wires the tabpanel by putting `segmentTabsPanelId(idBase)` on its
- * grid container.
- */
+/** Wire the caller's grid to segmentTabsPanelId(idBase); tab counts distinguish Media and Assets before switching. */
 export const GalleryViewSegmentTabs = ({
   activeView,
   board,
@@ -54,8 +49,6 @@ export const GalleryViewSegmentTabs = ({
             <Text as="span" display="flex" gap="1.5">
               {t(labelKey)}
               {count === null ? null : (
-                // Dimmed from the tab's own text colour, so it tracks the
-                // shown/idle swap; 0.8 stays comfortably legible on both.
                 <Text as="span" color="currentColor" fontVariantNumeric="tabular-nums" opacity="0.8">
                   {count}
                 </Text>

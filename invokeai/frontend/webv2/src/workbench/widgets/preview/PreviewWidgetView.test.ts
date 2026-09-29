@@ -34,10 +34,7 @@ describe('mergePreviewBoardItems', () => {
   });
 
   it('preserves relevance order for a ranked list', () => {
-    // A similarity result set is ordered by relevance, not by date. Re-sorting
-    // it here would make the arrows walk a different order from the one on
-    // screen. (Local generations never reach this call in ranked mode — the
-    // caller passes only the selection; see the anchor test below.)
+    // Preserve relevance order; ranked mode receives selection only, not local generations.
     const first = item('image', 'first', '2026-07-21T00:00:01.000Z');
     const second = item('image', 'second', '2026-07-21T00:00:03.000Z', true);
     const third = item('image', 'third', '2026-07-21T00:00:02.000Z');
@@ -60,10 +57,7 @@ describe('mergePreviewBoardItems', () => {
   });
 
   it('anchors a selection that the ranking does not contain, rather than losing the cursor', () => {
-    // A selection can be made outside the result set — an upload, an image-map
-    // click, or stepping off the live tile. Dropping it would leave the cursor
-    // pointing at nothing, which reads as both arrows going dead; keeping it
-    // at the head lets one press move into the ranked list.
+    // Keep out-of-ranking selection at the head so navigation can enter the ranked list.
     const ranked = item('image', 'ranked', '2026-07-21T00:00:01.000Z');
     const outsider = item('image', 'outsider', '2026-07-21T00:00:09.000Z');
 

@@ -1,7 +1,7 @@
 import type { InvocationTemplate, XYPosition } from '@features/workflow/contracts';
 
 import { Box, HStack, Icon, Menu, Text } from '@chakra-ui/react';
-import { invalidateWorkflowLibraryCache, updateLibraryWorkflow } from '@features/workflow/queries';
+import { updateLoadedWorkflowNodes } from '@features/workflow/data/templates';
 import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCommands';
 import {
   buildConnectorNode,
@@ -10,73 +10,86 @@ import {
   buildNotesNode,
   CONNECTOR_INPUT_HANDLE,
   CONNECTOR_OUTPUT_HANDLE,
-  createProjectGraph,
   createWorkflowId,
   getCompatibleInputTemplate,
   getCompatibleOutputTemplate,
+  hasMultipleWorkflowReturnNodes,
   LOOP_LINKAGE_FIELD,
   resolveConnectorSource,
   shouldAddForReturnLoopLinkage,
   parseWorkflowJson,
-  serializeWorkflowJson,
 } from '@features/workflow/utility';
-import {
-  assertAccountScopeCurrent,
-  captureAccountScope,
-  isAccountScopeCurrent,
-} from '@platform/state/accountLifecycle';
-import { Button, IconButton, ConfirmDialog, Tooltip } from '@platform/ui';
+import { useMountEffect } from '@platform/react/useMountEffect';
+import { Button, IconButton, RenameDialog, Tooltip } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
-import { CloudAlertIcon, CloudCheckIcon, CloudUploadIcon, LibraryIcon, PlusIcon, RefreshCwIcon } from 'lucide-react';
-import { useCallback, useEffect, useRef, type ChangeEvent } from 'react';
+import {
+  BookmarkIcon,
+  CloudAlertIcon,
+  CloudCheckIcon,
+  CloudIcon,
+  LibraryIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  TriangleAlertIcon,
+} from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ElementType } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { WorkflowWidgetLabelProps, WorkflowWidgetViewProps } from './contracts';
+import type { WorkflowProjectPersistence } from './WorkflowUiContext';
 
 import { AddNodeDialog } from './editor/AddNodeDialog';
+import { CallSavedWorkflowSyncRuntime } from './editor/CallSavedWorkflowSyncRuntime';
 import { getWorkflowFlowInstance } from './editor/flowInstanceStore';
-import { createLibraryAutosaver, type LibrarySyncStatus } from './library/libraryAutosave';
-import { registerLibraryGraphSyncedHandler, releaseLibraryGraphSyncedHandler } from './library/librarySyncBridge';
-import { useSaveWorkflowToLibrary } from './library/useSaveWorkflowToLibrary';
+import { releaseWorkflowViewportsExcept } from './editor/workflowViewportStore';
+import { isUpdatableSource } from './library/projectWorkflowEntries';
 import { WorkflowLibraryDialog } from './library/WorkflowLibraryDialog';
-import { setWorkflowLibrarySyncStatus, workflowLibrarySyncStore } from './library/workflowLibrarySyncStore';
-import { PendingLibraryWorkflowLoader } from './PendingLibraryWorkflowLoader';
+import { WorkflowPublicationHost } from './library/WorkflowPublicationHost';
+import { PendingWorkflowLoader } from './PendingLibraryWorkflowLoader';
 import { copyWorkflowJson, downloadWorkflowJson } from './workflowTransfer';
 import {
   useWorkflowHostCommands,
   useWorkflowNotifications,
+  useWorkflowPersistenceSelector,
   useWorkflowProjectSelector,
   useWorkflowUi,
 } from './WorkflowUiContext';
 import {
+  openWorkflowLibraryAtProjectWorkflow,
   requestWorkflowImport,
+  requestWorkflowRename,
+  requestWorkflowPublication,
   setAddNodeOpen,
-  setNewWorkflowConfirmOpen,
   setWorkflowLibraryOpen,
   workflowUiStore,
 } from './workflowUiStore';
 
 /**
- * The workflow widget's frame chrome. The label renders the `Workflow / [name]`
- * title, where the name is the library trigger; quick actions (add node,
- * library, save status) are header icon buttons; everything else contributes to the
- * shared widget actions menu via the manifest's `headerMenu`. Dialogs live here
- * (always mounted) and are driven through `workflowUiStore`.
+ * Keep dialogs mounted here and drive them through workflowUiStore; manifest slots contribute label, quick
+ * actions, and shared menu actions.
  */
 
-/** Icon + tooltip for each library sync status, shared by the sync control's error and non-error presentations. */
-const SYNC_STATUS_VIEW: Record<LibrarySyncStatus, { icon: typeof CloudCheckIcon; tooltipKey: string }> = {
-  dirty: { icon: RefreshCwIcon, tooltipKey: 'widgets.workflow.librarySyncSaving' },
-  error: { icon: CloudAlertIcon, tooltipKey: 'widgets.workflow.librarySyncError' },
-  idle: { icon: CloudCheckIcon, tooltipKey: 'widgets.workflow.librarySyncSaved' },
-  saved: { icon: CloudCheckIcon, tooltipKey: 'widgets.workflow.librarySyncSaved' },
-  saving: { icon: RefreshCwIcon, tooltipKey: 'widgets.workflow.librarySyncSaving' },
+/** How the project's own persistence is shown beside the library actions. */
+const PERSISTENCE_VIEW: Record<
+  WorkflowProjectPersistence['status'],
+  { color: string; icon: ElementType; labelKey: string }
+> = {
+  conflict: { color: 'fg.warning', icon: TriangleAlertIcon, labelKey: 'widgets.workflow.persistenceConflict' },
+  error: { color: 'fg.error', icon: CloudAlertIcon, labelKey: 'widgets.workflow.persistenceError' },
+  pending: { color: 'fg.subtle', icon: CloudIcon, labelKey: 'widgets.workflow.persistencePending' },
+  saved: { color: 'fg.subtle', icon: CloudCheckIcon, labelKey: 'widgets.workflow.persistenceSaved' },
+  saving: { color: 'fg.subtle', icon: RefreshCwIcon, labelKey: 'widgets.workflow.persistenceSaving' },
 };
 
 export const WorkflowWidgetLabel = ({ region }: WorkflowWidgetLabelProps) => {
   const { t } = useTranslation();
   const workflowName = useWorkflowProjectSelector((project) => project.projectGraph.name);
-  const openWorkflowLibrary = useCallback(() => setWorkflowLibraryOpen(true), []);
+  const projectId = useWorkflowProjectSelector((project) => project.id);
+  const activeWorkflowId = useWorkflowProjectSelector((project) => project.activeWorkflowId);
+  const openProjectWorkflows = useCallback(
+    () => openWorkflowLibraryAtProjectWorkflow(projectId, activeWorkflowId),
+    [activeWorkflowId, projectId]
+  );
 
   if (region !== 'center') {
     return (
@@ -86,11 +99,7 @@ export const WorkflowWidgetLabel = ({ region }: WorkflowWidgetLabelProps) => {
     );
   }
 
-  // In the center the region's view selector already names the widget, so the
-  // label slot contributes only the `/ [name]` continuation. The name opens the
-  // library rather than editing in place: switching workflows is the thing
-  // reached for from a header, and renaming already lives in the details tab —
-  // an inline field here only invited stray keystrokes into the graph's name.
+  // Center chrome already names the widget; the workflow name opens the project's workflows with this one selected.
   const displayName = workflowName || t('widgets.workflow.untitled');
 
   return (
@@ -98,14 +107,17 @@ export const WorkflowWidgetLabel = ({ region }: WorkflowWidgetLabelProps) => {
       <Text color="fg.subtle" flexShrink={0} fontSize="xs">
         /
       </Text>
-      <Tooltip content={t('widgets.workflow.library')}>
+      <Tooltip content={t('widgets.workflow.projectWorkflows')}>
         <Button
-          aria-label={t('widgets.workflow.openLibrary', { name: displayName })}
+          aria-label={t('widgets.workflow.openProjectWorkflows', { name: displayName })}
+          // The button recipe refuses to shrink; the name must give way before the actions island overlaps it.
+          flexShrink={1}
           maxW="16rem"
           minW="0"
+          overflow="hidden"
           size="2xs"
           variant="ghost"
-          onClick={openWorkflowLibrary}
+          onClick={openProjectWorkflows}
         >
           <Icon as={LibraryIcon} boxSize="3.5" flexShrink={0} />
           <MiddleTruncate color={workflowName ? undefined : 'fg.subtle'} fontWeight="600" minW="0" text={displayName} />
@@ -120,19 +132,50 @@ export const WorkflowMenuItems = (_props: WorkflowWidgetViewProps) => {
   const { t } = useTranslation();
   const { getProjectGraph } = useWorkflowUi();
   const { widgets } = useWorkflowHostCommands();
+  const { createWorkflow } = useProjectGraphCommands();
   const notify = useWorkflowNotifications();
+  const activeWorkflowId = useWorkflowProjectSelector((project) => project.activeWorkflowId);
+  const source = useWorkflowProjectSelector((project) => project.activeWorkflow.source);
+  const canUpdateSource = isUpdatableSource(source);
 
   const openDetailsPanel = useCallback(() => {
     widgets.open({ region: 'left', widgetId: 'workflow' });
     widgets.patchValues('workflow', { editTab: 'details', panelMode: 'edit' });
   }, [widgets]);
-  const exportWorkflow = useCallback(() => downloadWorkflowJson(getProjectGraph()), [getProjectGraph]);
+  const exportWorkflow = useCallback(() => {
+    const projectGraph = getProjectGraph();
+
+    if (hasMultipleWorkflowReturnNodes(projectGraph)) {
+      notify.error(t('projects.exportFailed'), t('workflowLibrary.multipleWorkflowReturnNodesForTransfer'));
+      return;
+    }
+
+    downloadWorkflowJson(projectGraph);
+  }, [getProjectGraph, notify, t]);
   const copyWorkflow = useCallback(() => {
-    copyWorkflowJson(getProjectGraph())
+    const projectGraph = getProjectGraph();
+
+    if (hasMultipleWorkflowReturnNodes(projectGraph)) {
+      notify.error(t('widgets.workflow.copyJsonFailed'), t('workflowLibrary.multipleWorkflowReturnNodesForTransfer'));
+      return;
+    }
+
+    copyWorkflowJson(projectGraph)
       .then(() => notify.success(t('widgets.workflow.copyJsonSuccess')))
       .catch(() => notify.error(t('widgets.workflow.copyJsonFailed')));
   }, [getProjectGraph, notify, t]);
-  const createNewWorkflow = useCallback(() => setNewWorkflowConfirmOpen(true), []);
+  const saveToLibrary = useCallback(
+    () => requestWorkflowPublication({ kind: 'save-as-new', workflowId: activeWorkflowId }),
+    [activeWorkflowId]
+  );
+  const updateTemplate = useCallback(
+    () => requestWorkflowPublication({ kind: 'update-source', workflowId: activeWorkflowId }),
+    [activeWorkflowId]
+  );
+  const openLibrary = useCallback(() => setWorkflowLibraryOpen(true), []);
+  const renameActiveWorkflow = useCallback(() => requestWorkflowRename(activeWorkflowId), [activeWorkflowId]);
+  // Nothing is replaced: a new workflow is added beside the others, so no confirmation stands in the way.
+  const newWorkflow = useCallback(() => createWorkflow(), [createWorkflow]);
 
   return (
     <Menu.ItemGroup>
@@ -142,6 +185,20 @@ export const WorkflowMenuItems = (_props: WorkflowWidgetViewProps) => {
       <Menu.Item value="details" onClick={openDetailsPanel}>
         {t('widgets.workflow.detailsWithEllipsis')}
       </Menu.Item>
+      <Menu.Item value="rename" onClick={renameActiveWorkflow}>
+        {t('widgets.workflow.renameWithEllipsis')}
+      </Menu.Item>
+      <Menu.Item value="library" onClick={openLibrary}>
+        {t('widgets.workflow.libraryWithEllipsis')}
+      </Menu.Item>
+      <Menu.Item value="save-to-library" onClick={saveToLibrary}>
+        {t('widgets.workflow.saveToLibraryWithEllipsis')}
+      </Menu.Item>
+      {canUpdateSource ? (
+        <Menu.Item value="update-template" onClick={updateTemplate}>
+          {t('widgets.workflow.updateTemplateWithEllipsis')}
+        </Menu.Item>
+      ) : null}
       <Menu.Item value="import" onClick={requestWorkflowImport}>
         {t('widgets.workflow.importJsonWithEllipsis')}
       </Menu.Item>
@@ -151,21 +208,32 @@ export const WorkflowMenuItems = (_props: WorkflowWidgetViewProps) => {
       <Menu.Item value="copy" onClick={copyWorkflow}>
         {t('widgets.workflow.copyJson')}
       </Menu.Item>
-      <Menu.Item data-danger="" value="new" onClick={createNewWorkflow}>
-        {t('widgets.workflow.newWorkflowWithEllipsis')}
+      <Menu.Item value="new" onClick={newWorkflow}>
+        {t('widgets.workflow.newWorkflow')}
       </Menu.Item>
     </Menu.ItemGroup>
   );
 };
 
+const selectPersistenceView = (persistence: WorkflowProjectPersistence) => ({
+  hasLocalRecovery: persistence.hasLocalRecovery,
+  status: persistence.status,
+});
+
 export const WorkflowHeaderActions = ({ region }: WorkflowWidgetViewProps) => {
   const { t } = useTranslation();
-  const libraryWorkflowId = useWorkflowProjectSelector((project) => project.projectGraph.libraryWorkflowId);
-  const syncStatus = workflowLibrarySyncStore.useSelector((snapshot) => snapshot.status);
-  const { saveToLibrary } = useSaveWorkflowToLibrary();
+  const activeWorkflowId = useWorkflowProjectSelector((project) => project.activeWorkflowId);
+  const { hasLocalRecovery, status } = useWorkflowPersistenceSelector(selectPersistenceView);
   const openAddNode = useCallback(() => setAddNodeOpen(true), []);
   const openWorkflowLibrary = useCallback(() => setWorkflowLibraryOpen(true), []);
-  const handleSaveToLibrary = useCallback(() => void saveToLibrary(), [saveToLibrary]);
+  const saveToLibrary = useCallback(
+    () => requestWorkflowPublication({ kind: 'save-as-new', workflowId: activeWorkflowId }),
+    [activeWorkflowId]
+  );
+  const view = PERSISTENCE_VIEW[status];
+  // A pending save without browser recovery has no safety net at all; say so rather than showing the same cloud.
+  const persistenceLabel =
+    status === 'pending' && !hasLocalRecovery ? t('widgets.workflow.persistencePendingNoRecovery') : t(view.labelKey);
 
   return (
     <HStack gap="0.5">
@@ -182,10 +250,8 @@ export const WorkflowHeaderActions = ({ region }: WorkflowWidgetViewProps) => {
           </IconButton>
         </Tooltip>
       ) : null}
-      {/* Center already reaches the library through the header label, which
-          names the current workflow; a second identical trigger beside it would
-          be pure duplication. Other regions render a plain `Workflow` label, so
-          they still need this. */}
+      {/* Center labels already open the project's workflows; other regions need this separate trigger and leave
+          publication and persistence to the editor header. */}
       {region === 'center' ? null : (
         <Tooltip content={t('widgets.workflow.library')}>
           <IconButton
@@ -199,129 +265,99 @@ export const WorkflowHeaderActions = ({ region }: WorkflowWidgetViewProps) => {
           </IconButton>
         </Tooltip>
       )}
-      {libraryWorkflowId ? (
-        <Tooltip content={t(SYNC_STATUS_VIEW[syncStatus].tooltipKey)}>
-          {syncStatus === 'error' ? (
+      {region === 'center' ? (
+        <>
+          <Tooltip content={t('widgets.workflow.saveToLibraryWithEllipsis')}>
             <IconButton
-              aria-label={t('widgets.workflow.librarySyncState')}
-              color="fg.error"
+              aria-label={t('widgets.workflow.saveToLibraryWithEllipsis')}
+              color="fg.muted"
               size="2xs"
               variant="ghost"
-              onClick={handleSaveToLibrary}
+              onClick={saveToLibrary}
             >
-              <Icon as={SYNC_STATUS_VIEW.error.icon} boxSize="3.5" />
+              <Icon as={BookmarkIcon} boxSize="3.5" />
             </IconButton>
-          ) : (
+          </Tooltip>
+          <Tooltip content={persistenceLabel}>
             <Box
               alignItems="center"
-              aria-label={t(SYNC_STATUS_VIEW[syncStatus].tooltipKey)}
+              aria-label={persistenceLabel}
               boxSize="6"
-              color="fg.subtle"
+              color={view.color}
+              data-persistence-status={status}
               display="flex"
               justifyContent="center"
               role="status"
             >
-              <Icon as={SYNC_STATUS_VIEW[syncStatus].icon} boxSize="3.5" />
+              <Icon as={view.icon} boxSize="3.5" />
             </Box>
-          )}
-        </Tooltip>
-      ) : (
-        <Tooltip content={t('widgets.workflow.saveToLibrary')}>
-          <IconButton
-            aria-label={t('widgets.workflow.saveToLibrary')}
-            color="fg.muted"
-            size="2xs"
-            variant="ghost"
-            onClick={handleSaveToLibrary}
-          >
-            <Icon as={CloudUploadIcon} boxSize="3.5" />
-          </IconButton>
-        </Tooltip>
-      )}
+          </Tooltip>
+        </>
+      ) : null}
     </HStack>
   );
 };
 
 export const WorkflowDialogHost = () => {
-  const { editGraph, replace } = useProjectGraphCommands();
+  const { addWorkflow, editGraph, renameWorkflow } = useProjectGraphCommands();
   const { project: projectStore } = useWorkflowUi();
   const notify = useWorkflowNotifications();
+  const { t } = useTranslation();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const addNodeConnection = workflowUiStore.useSelector((snapshot) => snapshot.addNodeConnection);
   const addNodePosition = workflowUiStore.useSelector((snapshot) => snapshot.addNodePosition);
   const importRequestCount = workflowUiStore.useSelector((snapshot) => snapshot.importRequestCount);
   const isAddNodeOpen = workflowUiStore.useSelector((snapshot) => snapshot.isAddNodeOpen);
   const isLibraryOpen = workflowUiStore.useSelector((snapshot) => snapshot.isLibraryOpen);
-  const isNewWorkflowConfirmOpen = workflowUiStore.useSelector((snapshot) => snapshot.isNewWorkflowConfirmOpen);
   const lastImportRequestRef = useRef(importRequestCount);
+  // A rename request opens the dialog once, for the workflow it named, and only while that workflow is the active
+  // one; closing records the request as handled.
+  const renameRequest = workflowUiStore.useSelector((snapshot) => snapshot.renameRequest);
+  const [handledRenameRequestId, setHandledRenameRequestId] = useState(0);
+  const activeWorkflowId = useWorkflowProjectSelector((project) => project.activeWorkflowId);
+  const renameTargetId = renameRequest?.workflowId ?? null;
+  const renameTargetName = useWorkflowProjectSelector(
+    (project) => project.workflows.find((entry) => entry.document.id === renameTargetId)?.document.name ?? ''
+  );
+  const isRenameOpen =
+    renameRequest !== null &&
+    renameRequest.requestId > handledRenameRequestId &&
+    renameRequest.workflowId === activeWorkflowId;
 
-  // Library autosave: bound graphs save themselves back after edits settle.
-  //
-  // The autosaver is created AND disposed inside one mount effect, held in a
-  // ref. A `useState` initializer runs once per fiber while its disposal lived
-  // in a separate effect's cleanup, so StrictMode's mount→cleanup→mount
-  // simulation disposed the one live instance without recreating it — autosave
-  // silently no-oped for the rest of the session.
-  //
-  // `read()` pulls from `projectStore.getSnapshot()` rather than a
-  // component-owned ref, so it is current whenever the debounce or `flush()`
-  // calls it. The same effect subscribes to the store to poke the autosaver
-  // (skipping the initial snapshot, so loading is not an edit) — a plain
-  // subscription, since nothing here re-renders on graph edits.
-  //
-  // `hostScope` guards `onStatus`: account rotation aborts the in-flight
-  // save's signal and synchronously resets the (account-owned)
-  // `workflowLibrarySyncStore` back to 'idle', but the aborted write's
-  // rejection lands a tick later, after that reset. Without this guard,
-  // `runSave()`'s `.catch` would still write 'error' into the *next*
-  // account's store — `save()`'s own `assertAccountScopeCurrent` throw stops
-  // the write from being trusted, but does not by itself stop that throw's
-  // `onStatus('error')` from landing. `hostScope` is captured once per mount
-  // — safe because this host remounts every account epoch (keyed by
-  // `session.accountEpoch` above it in the tree), so a mount-captured scope
-  // never outlives the account it was captured for.
-  useEffect(() => {
-    const hostScope = captureAccountScope();
-    const autosaver = createLibraryAutosaver({
-      onStatus: (status) => {
-        if (isAccountScopeCurrent(hostScope)) {
-          setWorkflowLibrarySyncStatus(status);
-        }
-      },
-      read: () => {
-        const graph = projectStore.getSnapshot().projectGraph;
-        return { libraryWorkflowId: graph.libraryWorkflowId, serialized: serializeWorkflowJson(graph) };
-      },
-      save: async (workflowId, serialized) => {
-        // Same scope discipline as the manual save paths: never let a
-        // debounced write land in the next account's library.
-        const owner = captureAccountScope();
-        await updateLibraryWorkflow(workflowId, serialized, owner.signal);
-        assertAccountScopeCurrent(owner);
-        // The library dialog serves cached payloads and pages; a save changes both.
-        invalidateWorkflowLibraryCache();
-      },
-    });
-
-    let lastGraph = projectStore.getSnapshot().projectGraph;
-    const unsubscribe = projectStore.subscribe(() => {
-      const graph = projectStore.getSnapshot().projectGraph;
-      if (graph !== lastGraph) {
-        lastGraph = graph;
-        autosaver.notifyGraphChanged();
+  // A request whose workflow stopped being active is over; it must not come back when that workflow returns.
+  if (renameRequest !== null && renameRequest.requestId > handledRenameRequestId && !isRenameOpen) {
+    setHandledRenameRequestId(renameRequest.requestId);
+  }
+  const closeRename = useCallback(
+    () => setHandledRenameRequestId(renameRequest?.requestId ?? 0),
+    [renameRequest?.requestId]
+  );
+  const submitRename = useCallback(
+    (name: string) => {
+      if (renameTargetId !== null) {
+        renameWorkflow(renameTargetId, name);
       }
+    },
+    [renameTargetId, renameWorkflow]
+  );
+
+  // Editor session state (viewports) is keyed by workflow; release it once its workflow leaves the project.
+  useMountEffect(() => {
+    let lastMembership = '';
+
+    return projectStore.subscribe(() => {
+      const snapshot = projectStore.getSnapshot();
+      const liveWorkflowIds = snapshot.workflows.map((entry) => entry.document.id);
+      const membership = `${snapshot.id}\0${liveWorkflowIds.join('\0')}`;
+
+      if (membership === lastMembership) {
+        return;
+      }
+
+      lastMembership = membership;
+      releaseWorkflowViewportsExcept(snapshot.id, liveWorkflowIds);
     });
-
-    const handler = (serialized: Record<string, unknown>) => autosaver.markSynced(serialized);
-
-    registerLibraryGraphSyncedHandler(handler);
-
-    return () => {
-      unsubscribe();
-      releaseLibraryGraphSyncedHandler(handler);
-      autosaver.dispose();
-    };
-  }, [projectStore]);
+  });
 
   useEffect(() => {
     if (importRequestCount > lastImportRequestRef.current) {
@@ -480,27 +516,33 @@ export const WorkflowDialogHost = () => {
     editGraph({ node: buildCurrentImageNode(getInsertPosition()), type: 'addNode' });
   }, [editGraph, getInsertPosition]);
 
+  // A file is portable: whatever id it carries names nothing this project may write to.
   const importFile = useCallback(
     (file: File) => {
       file
         .text()
         .then((text) => {
-          const { document, warnings } = parseWorkflowJson(JSON.parse(text));
+          const { document: parsed, warnings: parseWarnings } = parseWorkflowJson(JSON.parse(text));
+          const { document, warnings: updateWarnings } = updateLoadedWorkflowNodes(parsed, t);
+          const warnings = [...parseWarnings, ...updateWarnings];
 
-          replace(document, `Imported "${file.name}"`);
+          addWorkflow(document, {
+            label: t('widgets.workflow.importedLabel', { name: file.name }),
+            reusePlaceholder: true,
+          });
 
           for (const warning of warnings) {
-            notify.info('Workflow import warning', warning);
+            notify.info(t('widgets.workflow.importWarning'), warning);
           }
         })
         .catch((error: unknown) => {
           notify.error(
-            'Failed to import workflow',
-            error instanceof Error ? error.message : 'The file is not a valid workflow JSON.'
+            t('widgets.workflow.importFailed'),
+            error instanceof Error ? error.message : t('widgets.workflow.importInvalid')
           );
         });
     },
-    [notify, replace]
+    [addWorkflow, notify, t]
   );
   const handleImportFile = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
@@ -514,13 +556,10 @@ export const WorkflowDialogHost = () => {
     },
     [importFile]
   );
-  const closeNewWorkflowConfirm = useCallback(() => setNewWorkflowConfirmOpen(false), []);
-  const confirmNewWorkflow = useCallback(() => {
-    replace(createProjectGraph(createWorkflowId('workflow')), 'New workflow');
-  }, [replace]);
 
   return (
     <>
+      <CallSavedWorkflowSyncRuntime />
       <input ref={fileInputRef} accept=".json,application/json" hidden type="file" onChange={handleImportFile} />
       <AddNodeDialog
         connectionFilter={addNodeConnection}
@@ -532,15 +571,18 @@ export const WorkflowDialogHost = () => {
         onOpenChange={setAddNodeOpen}
       />
       <WorkflowLibraryDialog isOpen={isLibraryOpen} onOpenChange={setWorkflowLibraryOpen} />
-      <PendingLibraryWorkflowLoader />
-      <ConfirmDialog
-        body="Replace the project graph with an empty workflow? You can undo this change during this session. Save the current workflow to the library first if you need a permanent copy."
-        confirmLabel="New workflow"
-        isOpen={isNewWorkflowConfirmOpen}
-        title="New workflow"
-        onClose={closeNewWorkflowConfirm}
-        onConfirm={confirmNewWorkflow}
+      <RenameDialog
+        key={renameRequest?.requestId ?? 0}
+        initialName={renameTargetName}
+        isOpen={isRenameOpen}
+        label={t('workflowLibrary.workflowName')}
+        submitLabel={t('workflowLibrary.rename')}
+        title={t('workflowLibrary.renameTitle')}
+        onClose={closeRename}
+        onSubmit={submitRename}
       />
+      <WorkflowPublicationHost />
+      <PendingWorkflowLoader />
     </>
   );
 };

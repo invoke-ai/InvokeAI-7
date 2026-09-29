@@ -15,6 +15,7 @@ import type { Rect } from '@workbench/canvas-engine/types';
 import { getDocumentLayer, isNodeAbsent } from '@workbench/canvas-engine/document/documentIndex';
 import { createControlLayer } from '@workbench/canvas-engine/document/layerFactories';
 import { LayerFilterOutputDimensionError } from '@workbench/canvas-engine/filterError';
+import { collectHistoryMediaRefs } from '@workbench/canvas-engine/history/history';
 
 import type { CanvasMutationContext } from './mutationContext';
 
@@ -143,6 +144,7 @@ export class FilterResultController {
         publish(after, o.ctx.preparePixels(liveLayer.id, rect, pixels), { discardPersistence: true, persist: false });
         o.ctx.history.push({
           bytes: beforePixels.rect.width * beforePixels.rect.height * 4 + rect.width * rect.height * 4 + 256,
+          heldAssetRefs: collectHistoryMediaRefs(before, after),
           label: 'Replace layer with filter result',
           redo: () => apply(after, afterPixels, { discardPersistence: true, persist: false }),
           replayFailureAtomic: true,
@@ -210,6 +212,7 @@ export class FilterResultController {
       apply();
       o.ctx.history.push({
         bytes: rect.width * rect.height * 4 + 256,
+        heldAssetRefs: collectHistoryMediaRefs(copy),
         label: 'Copy layer filter result',
         redo: apply,
         replayFailureAtomic: true,

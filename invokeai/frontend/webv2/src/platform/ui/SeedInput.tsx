@@ -32,15 +32,9 @@ export interface SeedModeMenuProps {
   contentClassName?: string;
 }
 
-/**
- * How the seed moves from one submission to the next. A menu rather than a
- * toggle because the choice has four answers, and each needs a line of
- * explanation the first time it is read.
- */
 export const SeedModeMenu = ({ contentClassName, description, onChange, value }: SeedModeMenuProps) => {
   const { t } = useTranslation();
-  // Shared ids let the tooltip ride the menu trigger without wrapping it
-  // (wrapping `Menu.Trigger` swallows the anchor ref — see RoutingControl).
+  // Share trigger IDs; wrapping Menu.Trigger loses its anchor ref.
   const triggerId = useId();
   const triggerIds = useMemo(() => ({ trigger: triggerId }), [triggerId]);
   const label = t('common.seedMode.label');
@@ -139,12 +133,7 @@ export interface SeedInputProps {
   onCommit: (patch: SeedInputPatch) => void;
 }
 
-/**
- * The seed control every seeded host shares: the number input with the
- * one-shot new-seed action inside it, the mode menu beside it, and the
- * stepping preview underneath. Random quiets the input and the dice but keeps
- * the value on show, so it is there again the moment the mode changes back.
- */
+/** Random mode disables editing without discarding the displayed seed. */
 export const SeedInput = ({
   ariaLabel,
   className,
@@ -160,16 +149,13 @@ export const SeedInput = ({
   const { t } = useTranslation();
   const previewId = useId();
   const isRandom = seedMode === 'random';
-  // Inside a Field the input stays described by the field's helper and error text, and the preview
-  // joins that list. Ark 5.39 moved the error id from `ariaDescribedby` to its input props' error message.
+  // Preserve Field helper/error descriptions alongside the seed preview; error IDs come from Ark input props.
   const field = useFieldContext();
   const describedBy =
     [field?.ariaDescribedby, field?.getInputProps()['aria-errormessage'], plan ? previewId : undefined]
       .filter(Boolean)
       .join(' ') || undefined;
-  // The host's id goes through zag's id map, never onto the element: zag syncs the DOM value
-  // by looking the input up under its own id, so an overriding `id` leaves an external change
-  // (the dice, a recall, an advance) invisible until the next keystroke.
+  // Pass host IDs through Zag's ID map; overriding the DOM ID breaks external value synchronization.
   const inputIds = useMemo(() => (id ? { input: id } : undefined), [id]);
   const stepperTranslations = useMemo(
     () => ({ decrementLabel: t('common.decreaseValue'), incrementLabel: t('common.increaseValue') }),
@@ -205,8 +191,7 @@ export const SeedInput = ({
             onDoubleClick={selectInputText}
           />
         </NumberInput.Root>
-        {/* The tooltip is the visible hint; the accessible name stays on the button because a
-            tooltip only describes its trigger while open. */}
+        {/* Keep the button's accessible name independent of the tooltip's open state. */}
         <Tooltip content={t('common.newSeed')}>
           <IconButton
             aria-label={t('common.newSeed')}

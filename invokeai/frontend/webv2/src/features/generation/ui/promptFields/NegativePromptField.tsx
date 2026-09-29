@@ -79,15 +79,7 @@ export const NegativePromptField = ({
     [setDraftValue]
   );
 
-  // Same textarea, read-only, as on the positive side — swapping in a different
-  // component would reset the resizer's mounted height.
-  //
-  // An empty string here is a template that carries no negative side, which is
-  // most of them: `null` means no template at all. Neither has anything to show,
-  // and treating the empty one as something to view turned this field read-only
-  // and rendered the authored text with the merge's trailing space hanging off
-  // it. Gating on the toggle alone would be worse still — view mode can be on
-  // with no template applied, which leaves the prompt perfectly editable.
+  // Preserve textarea identity; read-only requires nonempty negative template content.
   const viewedTemplatePrompt = isTemplateViewMode && templateNegativePrompt ? templateNegativePrompt : null;
   const isViewingMerged = viewedTemplatePrompt !== null;
 
@@ -167,10 +159,7 @@ export const NegativePromptField = ({
   );
   const exitViewMode = useCallback(() => onTemplateViewModeChange?.(false), [onTemplateViewModeChange]);
 
-  // Collapsed, the field is a quiet affordance rather than an empty editor: a
-  // ghost "Negative prompt…" row, carrying a truncated preview when disabled text exists
-  // so switched-off terms stay discoverable. Presence reads as enablement while
-  // `negativePromptEnabled` persists unchanged underneath.
+  // Keep collapsed previews discoverable without changing persisted negativePromptEnabled.
   if (!isEnabled) {
     return (
       <Button

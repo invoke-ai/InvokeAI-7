@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { getActiveProjectGraph } from './projectWorkflows';
 import { createInitialWorkbenchState, workbenchReducer } from './workbenchState.testing';
 
 const preferenceOff = { autoSwitchInvocationRoute: false };
@@ -30,7 +31,7 @@ describe('auto invocation route switching with the preference off', () => {
           },
           type: 'addNode',
         },
-        type: 'applyProjectGraphAction',
+        type: 'applyWorkflowAction',
       },
       preferenceOff
     );
@@ -65,16 +66,14 @@ describe('auto invocation route switching with the preference off', () => {
       },
       preferenceOff
     );
-    const projectGraph = state.projects.find((project) => project.id === state.activeProjectId)?.projectGraph;
-
-    expect(projectGraph).toBeDefined();
+    const projectGraph = getActiveProjectGraph(state.projects.find((project) => project.id === state.activeProjectId)!);
 
     state = workbenchReducer(
       state,
       {
-        document: { ...projectGraph!, id: 'replacement-graph' },
+        document: { ...projectGraph, id: 'replacement-graph' },
         label: 'Preference-off replacement',
-        type: 'replaceProjectGraph',
+        type: 'addProjectWorkflow',
       },
       preferenceOff
     );
@@ -90,7 +89,7 @@ describe('auto invocation route switching with the preference off', () => {
 
     const project = state.projects.find((candidate) => candidate.id === state.activeProjectId);
 
-    expect(project?.projectGraph.nodes).toHaveLength(1);
+    expect(getActiveProjectGraph(project!).nodes).toHaveLength(1);
     expect(project?.invocation).toMatchObject({ destination: 'gallery', sourceId: 'generate' });
   });
 });
@@ -180,8 +179,7 @@ describe('auto invocation route switching on widget reveal', () => {
     const region = getRegion(state, 'left');
 
     expect(region.instanceIds).toEqual([]);
-    // The route is left where it was rather than pointed at the emptied rail;
-    // route validation refuses an unmounted source separately.
+    // Leave the route unchanged; validation separately rejects an unmounted source.
     expect(region.instanceIds).not.toContain(getInvocation(state).sourceId);
   });
 
@@ -199,8 +197,6 @@ describe('auto invocation route switching on widget reveal', () => {
     const before = state;
     const beforeProject = getProject(state);
 
-    // The work surface refuses to give up its last view; the whole dispatch
-    // must therefore change nothing, including the invoke route.
     state = workbenchReducer(state, { region: 'center', type: 'toggleRegionWidget', widgetId: centerIds[0]! });
 
     expect(state).toBe(before);

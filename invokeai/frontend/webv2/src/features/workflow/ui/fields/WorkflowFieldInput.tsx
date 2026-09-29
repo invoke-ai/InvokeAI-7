@@ -7,12 +7,12 @@ import {
   Badge,
   Box,
   createListCollection,
+  Field,
   Flex,
   HStack,
   Icon,
   Image,
   Input,
-  NumberInput,
   SimpleGrid,
   Stack,
   Switch,
@@ -34,6 +34,23 @@ import { invalidateGallery } from '@features/gallery/queries';
 import { galleryImageUrls, galleryVideoUrls } from '@features/gallery/utility';
 import { DEFAULT_LORA_WEIGHT_CONFIG, sanitizeBatchCount, SCHEDULER_OPTIONS } from '@features/generation/settings';
 import { isInvocationNode } from '@features/workflow/contracts';
+import {
+  buildSavedWorkflowOptions,
+  getSavedWorkflowDisplayState,
+  getSavedWorkflowListItemFromRecord,
+  getSavedWorkflowPickerOwnedQuery,
+  getSavedWorkflowPickerSharedQuery,
+  getSavedWorkflowSelectionOption,
+  getSavedWorkflowSelectionState,
+  mergeSavedWorkflowPickerItems,
+  MISSING_WORKFLOW_OPTION_VALUE,
+  shouldFetchNextSavedWorkflowPickerPage,
+} from '@features/workflow/data/savedWorkflowFieldUtils';
+import {
+  getWorkflowPagesItems,
+  savedWorkflowDetailQueryOptions,
+  savedWorkflowPickerQueryOptions,
+} from '@features/workflow/data/savedWorkflowQueries';
 import { isSeedInputField } from '@features/workflow/graph';
 import {
   getWorkflowMediaFieldDropId,
@@ -41,10 +58,20 @@ import {
   getWorkflowMediaFieldDropItems,
   type WorkflowMediaKind,
 } from '@features/workflow/ui/fields/mediaFieldDnd';
+import {
+  finiteNumberOrUndefined,
+  invalidProps,
+  NumericInput,
+  useFocusedDraft,
+} from '@features/workflow/ui/fields/NumericInput';
 import { useWorkflowProjectSelector, useWorkflowUi } from '@features/workflow/ui/WorkflowUiContext';
 import {
   getResolvedWorkflowEdges,
   isLoraFieldCollectionEntry,
+  isLoraFieldWeightValid,
+  isWorkflowCollectionItemValid,
+  isWorkflowGeneratorFieldTypeName,
+  LORA_FIELD_WEIGHT_RANGE,
   toLoraFieldCollectionList,
 } from '@features/workflow/utility';
 import { planSeedSubmission, type SeedMode, wrapSeed } from '@platform/core/seed';
@@ -72,19 +99,19 @@ import {
 } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { SeedInput } from '@platform/ui/SeedInput';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { FilmIcon, ImageIcon, ImagePlusIcon, Trash2Icon, XIcon } from 'lucide-react';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
+import { FilmIcon, ImageIcon, ImagePlusIcon, PlusIcon, RotateCcwIcon, Trash2Icon, XIcon } from 'lucide-react';
 import {
   lazy,
   Suspense,
   useCallback,
+  useDeferredValue,
   useEffect,
   useId,
   useMemo,
   useRef,
   useState,
   type ChangeEvent,
-  type MouseEvent,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -94,20 +121,33 @@ const MODEL_SELECT_FALLBACK = (
     Loading models…
   </Button>
 );
+const RECORD_PICKER_FALLBACK = (
+  <Button disabled size="xs" w="full">
+    Loading…
+  </Button>
+);
+// Generator settings load with their node; a plain workflow never pays for them.
+const GeneratorFieldInput = lazy(() =>
+  import('./GeneratorFieldInput').then((module) => ({ default: module.GeneratorFieldInput }))
+);
+
+// Record pickers load with their node so the system-prompt query stays out of the editor's boot graph.
+const StylePresetInput = lazy(() =>
+  import('./RecordPickerInput').then((module) => ({ default: module.StylePresetInput }))
+);
+const SystemPromptInput = lazy(() =>
+  import('./RecordPickerInput').then((module) => ({ default: module.SystemPromptInput }))
+);
 
 export const getWorkflowSelectedGalleryImage = getSelectedGalleryImageFromValues;
-
-/**
- * Direct-input controls for workflow fields, shared between the node editor
- * and the Linear UI panel. Renders by template field type; connection-only
- * and unsupported types fall through to a muted note.
- */
 
 export interface WorkflowFieldInputProps {
   id?: string;
   invalid?: boolean;
   /** Owning invocation node, when known — lets widgets read sibling fields (e.g. the frame scrubber's companion video). */
   nodeId?: string;
+  /** Owning project workflow, when known — an upload that finishes after a switch still lands in this one. */
+  workflowId?: string;
   template: FieldInputTemplate;
   value: unknown;
   onChange: (value: unknown) => void;
@@ -116,36 +156,27 @@ export interface WorkflowFieldInputProps {
   onSeedModeChange?: (seedMode: SeedMode) => void;
 }
 
-const invalidProps = (invalid: boolean | undefined) => (invalid ? { 'aria-invalid': true } : {});
-
 // The media well's hover, matching DropZone's pointer-hover accent preview.
 const MEDIA_INPUT_HOVER_PROPS = { borderColor: 'accent.solid' };
 
-const toFiniteNumber = (raw: string): number | null => {
-  if (raw.trim() === '') {
-    return null;
-  }
+/** A row of a list names itself by position; a scalar field is named by its title. */
+type ScalarInputProps = WorkflowFieldInputProps & { ariaLabel?: string };
 
-  const parsed = Number(raw);
-
-  return Number.isFinite(parsed) ? parsed : null;
-};
-
-const StringInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
-  const text = typeof value === 'string' ? value : '';
-  const onTextareaChange = useCallback(
-    (event: ChangeEvent<HTMLTextAreaElement>) => onChange(event.currentTarget.value),
-    [onChange]
-  );
-  const onInputChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => onChange(event.currentTarget.value),
-    [onChange]
+const StringInput = ({ ariaLabel, id, invalid, onChange, template, value }: ScalarInputProps) => {
+  const [draft, setDraft, clearDraft] = useFocusedDraft();
+  const text = draft ?? (typeof value === 'string' ? value : '');
+  const onTextChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      setDraft(event.currentTarget.value);
+      onChange(event.currentTarget.value);
+    },
+    [onChange, setDraft]
   );
 
   if (template.uiComponent === 'textarea') {
     return (
       <ResizableTextarea
-        aria-label={template.title}
+        aria-label={ariaLabel ?? template.title}
         className="nodrag nowheel"
         defaultHeightPx={96}
         fontFamily="mono"
@@ -156,69 +187,30 @@ const StringInput = ({ id, invalid, onChange, template, value }: WorkflowFieldIn
         value={text}
         w="full"
         {...invalidProps(invalid)}
-        onChange={onTextareaChange}
+        onBlur={clearDraft}
+        onChange={onTextChange}
       />
     );
   }
 
   return (
     <Input
-      aria-label={template.title}
+      aria-label={ariaLabel ?? template.title}
       className="nodrag"
       id={id ? `${id}-input` : undefined}
       size="xs"
       value={text}
       w="full"
       {...invalidProps(invalid)}
-      onChange={onInputChange}
-    />
-  );
-};
-
-/** A double-click anywhere in the box selects the whole value, not just the word under the pointer. */
-const selectInputText = (event: MouseEvent<HTMLInputElement>) => event.currentTarget.select();
-
-const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
-  const isInteger = template.type.name === 'IntegerField';
-  const numericValue = typeof value === 'number' && Number.isFinite(value) ? value : '';
-  const min = template.minimum ?? template.exclusiveMinimum ?? undefined;
-  const max = template.maximum ?? template.exclusiveMaximum ?? undefined;
-  const onInputChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const parsed = toFiniteNumber(event.currentTarget.value);
-
-      if (parsed !== null) {
-        onChange(isInteger ? Math.round(parsed) : parsed);
-      }
-    },
-    [isInteger, onChange]
-  );
-
-  return (
-    <Input
-      aria-label={template.title}
-      className="nodrag"
-      id={id ? `${id}-number-input` : undefined}
-      max={max !== undefined ? String(max) : undefined}
-      min={min !== undefined ? String(min) : undefined}
-      size="xs"
-      step={template.multipleOf !== null ? String(template.multipleOf) : isInteger ? '1' : 'any'}
-      type="number"
-      value={numericValue}
-      w="full"
-      {...invalidProps(invalid)}
-      onChange={onInputChange}
-      onDoubleClick={selectInputText}
+      onBlur={clearDraft}
+      onChange={onTextChange}
     />
   );
 };
 
 /**
- * The shared seed control under a workflow row. The workflow owns the value
- * and its run count, so the stepping preview is planned here from the
- * workflow's own iterations; an empty field runs from the template default,
- * as the plan does. `nokey` keeps xyflow's node key handling out of the row
- * and the portaled menu: arrows would nudge the node and Backspace delete it.
+ * Plan stepping previews from workflow iterations and template defaults; nokey prevents node shortcuts inside the
+ * row and portalled menu.
  */
 const WorkflowSeedInput = ({
   id,
@@ -315,10 +307,11 @@ const SelectInput = ({
   value: unknown;
 }) => {
   const collection = useMemo(() => createListCollection({ items: options }), [options]);
-  const selectedValue = useMemo(
-    () => (typeof value === 'string' && options.some((option) => option.value === value) ? [value] : []),
-    [options, value]
-  );
+  const selectedValue = useMemo(() => {
+    const key =
+      typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : null;
+    return key !== null && options.some((option) => option.value === key) ? [key] : [];
+  }, [options, value]);
   const selectIds = useMemo(() => (id ? { trigger: `${id}-select` } : undefined), [id]);
   const onSelectValueChange = useCallback(
     ({ value: next }: { value: string[] }) => {
@@ -351,10 +344,17 @@ const EnumInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInpu
   const options = useMemo(
     () =>
       (template.options ?? []).map((option) => ({
-        label: template.uiChoiceLabels?.[option] ?? option,
-        value: option,
+        label: template.uiChoiceLabels?.[String(option)] ?? String(option),
+        value: String(option),
       })),
     [template.options, template.uiChoiceLabels]
+  );
+  const onOptionChange = useCallback(
+    (nextValue: string) => {
+      const option = template.options?.find((candidate) => String(candidate) === nextValue);
+      onChange(option ?? nextValue);
+    },
+    [onChange, template.options]
   );
 
   if (template.name === 'scheduler') {
@@ -367,13 +367,20 @@ const EnumInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInpu
         options={options}
         size="xs"
         value={typeof value === 'string' ? value : null}
-        onValueChange={onChange}
+        onValueChange={onOptionChange}
       />
     );
   }
 
   return (
-    <SelectInput id={id} invalid={invalid} options={options} title={template.title} value={value} onChange={onChange} />
+    <SelectInput
+      id={id}
+      invalid={invalid}
+      options={options}
+      title={template.title}
+      value={value}
+      onChange={onOptionChange}
+    />
   );
 };
 
@@ -384,15 +391,14 @@ const ModelIdentifierInput = ({ id, invalid, onChange, template, value }: Workfl
     typeof (value as { key?: unknown } | null)?.key === 'string' ? (value as { key: string }).key : null;
   const modelTypes = (template.uiModelType ?? DEFAULT_MODEL_TYPES) as ModelTaxonomyType[];
   const allowedBases = template.uiModelBase;
-  // ui_model_format narrows further within a base/type — e.g. a loader's main-model field
-  // that accepts only diffusers-folder installs while its override fields take the
-  // single-file checkpoints. Offering the wrong format here would enqueue a graph that
-  // fails deep inside the model loader instead of at selection time.
+  // Filter by model format as well as base/type so loaders cannot receive unsupported component layouts.
   const allowedFormats = template.uiModelFormat;
   const filter = useCallback(
     (model: ModelConfig) =>
       (allowedBases ? allowedBases.includes(model.base) : true) &&
-      (allowedFormats ? allowedFormats.includes(model.format) : true),
+      // A components-only folder carries no transformer, so it can only fill a field that asks for
+      // folders explicitly (e.g. a loader's Components field), never a format-agnostic model field.
+      (allowedFormats ? allowedFormats.includes(model.format) : model.components_only !== true),
     [allowedBases, allowedFormats]
   );
   const onModelChange = useCallback(
@@ -407,7 +413,7 @@ const ModelIdentifierInput = ({ id, invalid, onChange, template, value }: Workfl
     <Suspense fallback={MODEL_SELECT_FALLBACK}>
       <ModelSelect
         className="nodrag nowheel"
-        filter={allowedBases || allowedFormats ? filter : undefined}
+        filter={filter}
         id={id ? `${id}-model-combobox` : undefined}
         invalid={invalid}
         isClearable={false}
@@ -542,12 +548,8 @@ const VIDEO_ONLY = ['video'] as const;
 const MEDIA_INPUT_FOCUS_PROPS = { outline: '2px solid {colors.accent.focusRing}', outlineOffset: '2px' } as const;
 
 /**
- * Upload: file picker -> gallery upload -> adopt the uploaded items. The
- * adoption is pinned to this widget instance AND the project it started in:
- * `onUploaded` dispatches into the *active* project, so a completion arriving
- * after a project switch (or after this node was deleted, which unmounts the
- * widget) must not be applied - the upload itself still succeeded, so the
- * gallery is refreshed and the user is pointed there instead.
+ * Apply uploads only to their originating mounted widget/project. Late successes still refresh Gallery and direct
+ * users there instead of mutating another project.
  */
 const useMediaUpload = ({
   kind,
@@ -714,12 +716,59 @@ const ImageCollectionTile = ({
   );
 };
 
-/**
- * Direct input for `ImageField` collections (Image Collection primitive, Image
- * Batch): a thumbnail grid with per-item removal, a multi-select gallery
- * picker, a multi-item gallery drop target, and multi-file upload.
- */
-const ImageCollectionInput = ({ id, invalid, nodeId, onChange, template, value }: WorkflowFieldInputProps) => {
+const ImageCollectionDropMonitor = ({ dropId, onDrop }: { dropId: string; onDrop: (names: string[]) => void }) => {
+  const onDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      if (event.over?.id === dropId) {
+        onDrop(getWorkflowMediaFieldDropItems(event.active.data.current, 'image').map((item) => item.name));
+      }
+    },
+    [dropId, onDrop]
+  );
+
+  useDndMonitor({ onDragEnd });
+
+  return null;
+};
+
+const MediaDropMonitor = ({
+  dropId,
+  kind,
+  onDrop,
+}: {
+  dropId: string;
+  kind: WorkflowMediaKind;
+  onDrop: (item: { name: string }) => void;
+}) => {
+  const onDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      if (event.over?.id !== dropId) {
+        return;
+      }
+
+      const item = getWorkflowMediaFieldDropItem(event.active.data.current, kind);
+
+      if (item) {
+        onDrop(item);
+      }
+    },
+    [dropId, kind, onDrop]
+  );
+
+  useDndMonitor({ onDragEnd });
+
+  return null;
+};
+
+const ImageCollectionInput = ({
+  id,
+  invalid,
+  nodeId,
+  onChange,
+  template,
+  value,
+  workflowId,
+}: WorkflowFieldInputProps) => {
   const { t } = useTranslation();
   const { project } = useWorkflowUi();
   const names = useMemo(() => getImageCollectionNames(value), [value]);
@@ -728,7 +777,16 @@ const ImageCollectionInput = ({ id, invalid, nodeId, onChange, template, value }
   // to the list this render saw.
   const appendNames = useCallback(
     (added: string[]) => {
-      const node = project.getSnapshot().projectGraph.nodes.find((candidate) => candidate.id === nodeId);
+      const snapshot = project.getSnapshot();
+      const document = workflowId
+        ? snapshot.workflows.find((entry) => entry.document.id === workflowId)?.document
+        : snapshot.projectGraph;
+
+      if (!document) {
+        return;
+      }
+
+      const node = document.nodes.find((candidate) => candidate.id === nodeId);
       const current = getImageCollectionNames(
         node && isInvocationNode(node) ? node.data.inputs[template.name]?.value : value
       );
@@ -738,7 +796,7 @@ const ImageCollectionInput = ({ id, invalid, nodeId, onChange, template, value }
         onChange(next.map((image_name) => ({ image_name })));
       }
     },
-    [nodeId, onChange, project, template.name, value]
+    [nodeId, onChange, project, template.name, value, workflowId]
   );
   const removeAt = useCallback(
     (index: number) => onChange(names.filter((_, i) => i !== index).map((image_name) => ({ image_name }))),
@@ -751,17 +809,6 @@ const ImageCollectionInput = ({ id, invalid, nodeId, onChange, template, value }
   const { active } = useDndContext();
   const acceptsActiveDrag = getWorkflowMediaFieldDropItems(active?.data.current, 'image').length > 0;
   const { isOver, setNodeRef } = useDroppable({ disabled: !acceptsActiveDrag, id: dropId });
-  const onDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      if (event.over?.id === dropId) {
-        appendNames(getWorkflowMediaFieldDropItems(event.active.data.current, 'image').map((item) => item.name));
-      }
-    },
-    [appendNames, dropId]
-  );
-
-  useDndMonitor({ onDragEnd });
-
   const { fileInputRef, isUploading, onFileChange, onUploadClick } = useMediaUpload({
     kind: 'image',
     multiple: true,
@@ -780,6 +827,7 @@ const ImageCollectionInput = ({ id, invalid, nodeId, onChange, template, value }
 
   return (
     <Box position="relative" w="full" {...invalidAriaProps}>
+      <ImageCollectionDropMonitor dropId={dropId} onDrop={appendNames} />
       <Box
         ref={setNodeRef}
         boxShadow={invalid ? '0 0 0 1px {colors.red.solid}' : undefined}
@@ -874,11 +922,6 @@ const ImageCollectionInput = ({ id, invalid, nodeId, onChange, template, value }
   );
 };
 
-/**
- * Direct input for `ImageField` / `VideoField`: shows the current item with a
- * thumbnail, opens the gallery picker, accepts a single-item gallery drag
- * onto the row, and uploads a local file to the gallery's selected board.
- */
 const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputProps & { kind: WorkflowMediaKind }) => {
   const { t } = useTranslation();
   const config = MEDIA_FIELD_CONFIG[kind];
@@ -888,31 +931,12 @@ const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputPr
       : null;
   const invalidAriaProps = useMemo(() => (invalid ? { 'aria-invalid': true } : {}), [invalid]);
 
-  // dnd: the whole input row is a drop target for a single gallery item of the
-  // matching kind. The instance-unique suffix keeps ids distinct when the node
-  // editor and the Linear UI panel render the same field at once.
+  // Use instance-unique drop IDs because editor and Linear UI can render the same field simultaneously.
   const instanceId = useId();
   const dropId = getWorkflowMediaFieldDropId(`${id ?? 'field'}:${instanceId}`);
   const { active } = useDndContext();
   const acceptsActiveDrag = getWorkflowMediaFieldDropItem(active?.data.current, kind) !== null;
   const { isOver, setNodeRef } = useDroppable({ disabled: !acceptsActiveDrag, id: dropId });
-  const onDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      if (event.over?.id !== dropId) {
-        return;
-      }
-
-      const item = getWorkflowMediaFieldDropItem(event.active.data.current, kind);
-
-      if (item) {
-        onChange({ [config.nameKey]: item.name });
-      }
-    },
-    [config.nameKey, dropId, kind, onChange]
-  );
-
-  useDndMonitor({ onDragEnd });
-
   const onUploaded = useCallback(
     (names: string[]) => onChange({ [config.nameKey]: names[0] }),
     [config.nameKey, onChange]
@@ -925,15 +949,11 @@ const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputPr
   );
   const onClearClick = useCallback(() => onChange(undefined), [onChange]);
 
-  // A stale value (media deleted since the workflow was saved) 404s the
-  // thumbnail; degrade to a media icon rather than the broken-image glyph. A
-  // new value retries.
+  // Replace failed stale thumbnails with media icons; retry when the value changes.
   const [failedThumbnail, setFailedThumbnail] = useState<string | null>(null);
   const onThumbnailError = useCallback(() => setFailedThumbnail(mediaName), [mediaName]);
 
-  // Resolve the item's details for the dimensions/duration badge (the legacy
-  // editor's widget shows the same). Best-effort: the preview works from the
-  // name alone, so a failed lookup just drops the badge.
+  // Resolve badge metadata best-effort; name-based preview remains usable if lookup fails.
   const { data: mediaItem } = useQuery({
     enabled: mediaName !== null && mediaName !== '',
     queryFn: ({ signal }) => galleryItems.resolve({ kind, name: mediaName ?? '' }, signal),
@@ -951,9 +971,14 @@ const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputPr
   const FallbackIcon = kind === 'video' ? FilmIcon : ImageIcon;
   const pickerAccept = kind === 'video' ? VIDEO_ONLY : IMAGE_ONLY;
   const pickerLabel = t(kind === 'video' ? 'widgets.gallery.picker.chooseVideo' : 'widgets.gallery.picker.chooseImage');
+  const onMediaDrop = useCallback(
+    (item: { name: string }) => onChange({ [config.nameKey]: item.name }),
+    [config.nameKey, onChange]
+  );
 
   return (
     <Box position="relative" w="full" {...invalidAriaProps}>
+      <MediaDropMonitor dropId={dropId} kind={kind} onDrop={onMediaDrop} />
       {/* The whole preview area is the drop target, like the legacy editor's widget. */}
       <Box
         ref={setNodeRef}
@@ -1077,15 +1102,8 @@ const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputPr
 const COMPANION_VIDEO_FIELD_NAME = 'video';
 
 /**
- * Integer input for `ui_component=video-frame-index` fields (`frame_index` on
- * Frame from Video; `start_frame`/`end_frame` on Frame Range from Video): the
- * standard number input plus a live frame preview and a scrubber slider, all
- * writing the same field value. The preview is a muted `<video>` element
- * seeked to `frame / fps` — browsers display the frame natively without a
- * canvas roundtrip.
- *
- * Degrades to the plain number input (plus a hint) when the companion video
- * field is unset/connection-driven or the video has no probed frame rate.
+ * Share one frame value across input, scrubber, and native video preview. Fall back to plain input when the
+ * companion video/rate cannot resolve.
  */
 const VideoFrameIndexInput = (props: WorkflowFieldInputProps) => {
   const { nodeId, onChange, value } = props;
@@ -1127,9 +1145,8 @@ const VideoFrameIndexInput = (props: WorkflowFieldInputProps) => {
   const videoItem: GalleryItem | undefined = data;
   const video = videoItem && videoItem.kind === 'video' && videoItem.name === videoName ? videoItem : null;
 
-  // Frame count is the slider's upper bound. duration*fps can be off-by-one for
-  // VFR containers, but the slider is for visual scrubbing — the backend
-  // re-resolves indices against the authoritative decoder count at invoke time.
+  // Use estimated frame count only for scrubbing bounds; backend invocation resolves authoritative decoder
+  // indices.
   const fps = video?.fps ?? null;
   const frameCount =
     video && fps && video.durationSeconds > 0 ? Math.max(1, Math.round(video.durationSeconds * fps)) : null;
@@ -1191,9 +1208,7 @@ const FrameScrubber = ({
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // Seek whenever the resolved index changes. The half-frame nudge lands the
-  // seek inside the frame's display window — some codecs decode the exact
-  // boundary as black on first paint without it.
+  // Seek inside each frame's display interval to avoid boundary decoding artifacts.
   useEffect(() => {
     const el = videoRef.current;
 
@@ -1262,12 +1277,7 @@ const FrameScrubber = ({
   );
 };
 
-/**
- * Workflow `ColorField` values carry alpha as a `[0, 255]` integer, unlike
- * every other color in the app (and unlike `RgbaColor`, whose alpha is a unit
- * float). The scaling stays local to this adapter rather than pushing a second
- * alpha convention into `@platform/ui`'s color helpers.
- */
+/** Convert workflow alpha integers 0–255 locally; platform RgbaColor uses unit alpha. */
 const toColorFieldValue = (color: string): Record<string, number> => {
   const { a, b, g, r } = parseHexColor(color);
 
@@ -1303,14 +1313,8 @@ const ColorInput = ({ invalid, onChange, value }: WorkflowFieldInputProps) => {
 const LORA_MODEL_TYPES: ModelTaxonomyType[] = ['lora'];
 
 /**
- * The `Apply LoRA Collection` loaders take `LoRAField | list[LoRAField]`. Rather than making the
- * user wire up one `Select LoRA` node per LoRA and collect them, this edits the list in place: pick
- * a LoRA from the model picker to append it, then tune each weight on its own row.
- *
- * Rows address entries by index, not by model key. The picker keeps the user from adding a
- * duplicate, but an imported workflow can already contain one, and a key-based edit would hit every
- * copy at once. Indexing also keeps entries this widget cannot read (`null` holes from
- * `normalizeLoraFieldCollectionValue`) in place instead of dropping them on the next edit.
+ * Edit LoRA collections by index so imported duplicate keys and unreadable entries remain independent and
+ * preserved.
  */
 const LoRACollectionInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
   // The raw list, unreadable items included — see `toLoraFieldCollectionList`.
@@ -1325,9 +1329,7 @@ const LoRACollectionInput = ({ id, invalid, onChange, template, value }: Workflo
     (model: ModelConfig) => (allowedBases ? allowedBases.includes(model.base) : true),
     [allowedBases]
   );
-  // An emptied list is written back as `undefined` rather than `[]`: it is the loaders' own default,
-  // so the node returns to "no LoRAs" instead of sitting on a value that is equal in effect but
-  // different from its default.
+  // Write emptied collections as undefined to restore the loaders' actual default.
   const commit = useCallback((next: unknown[]) => onChange(next.length === 0 ? undefined : next), [onChange]);
   const onAdd = useCallback(
     (model: ModelConfig | null) => {
@@ -1354,7 +1356,7 @@ const LoRACollectionInput = ({ id, invalid, onChange, template, value }: Workflo
     [commit, entries]
   );
   const onWeightChange = useCallback(
-    (index: number, weight: number) =>
+    (index: number, weight: number | null) =>
       commit(
         entries.map((entry, entryIndex) =>
           entryIndex === index && isLoraFieldCollectionEntry(entry) ? { ...entry, weight } : entry
@@ -1397,6 +1399,31 @@ const LoRACollectionInput = ({ id, invalid, onChange, template, value }: Workflo
   );
 };
 
+/** The weight column edits a bounded float; the range is the same one the Generate LoRA controls use. */
+const LORA_WEIGHT_TEMPLATE: FieldInputTemplate = {
+  default: undefined,
+  description: '',
+  exclusiveMaximum: null,
+  exclusiveMinimum: null,
+  fieldKind: 'input',
+  input: 'direct',
+  maximum: LORA_FIELD_WEIGHT_RANGE.max,
+  minimum: LORA_FIELD_WEIGHT_RANGE.min,
+  multipleOf: null,
+  name: 'weight',
+  options: null,
+  required: true,
+  title: 'Weight',
+  type: { batch: false, cardinality: 'SINGLE', name: 'FloatField' },
+  uiChoiceLabels: null,
+  uiComponent: null,
+  uiHidden: false,
+  uiModelBase: null,
+  uiModelFormat: null,
+  uiModelType: null,
+  uiOrder: null,
+};
+
 const LoRACollectionRow = ({
   entry,
   id,
@@ -1408,30 +1435,16 @@ const LoRACollectionRow = ({
   id?: string;
   index: number;
   onRemove: (index: number) => void;
-  onWeightChange: (index: number, weight: number) => void;
+  onWeightChange: (index: number, weight: number | null) => void;
 }) => {
   const label = entry ? entry.lora.name : 'Unreadable entry';
-  // The committed value is a number, so re-rendering from it alone would rewrite a half-typed
-  // "0." to "0" mid-keystroke and turn the next digit into "05" — a 10x wrong weight from a
-  // plausible typing sequence. The draft holds the raw text until the field is left; blur drops
-  // it so the row picks up the committed (and range-clamped) value again.
-  const [draft, setDraft] = useState<string | null>(null);
   const onRemoveClick = useCallback(() => onRemove(index), [index, onRemove]);
+  // The shared numeric control commits as typed; a cleared or out-of-range weight stays on screen and blocks
+  // invoking through the field's own reason instead of being clamped.
   const onValueChange = useCallback(
-    ({ value: valueAsText, valueAsNumber }: NumberInput.ValueChangeDetails) => {
-      setDraft(valueAsText);
-
-      if (Number.isFinite(valueAsNumber)) {
-        onWeightChange(index, valueAsNumber);
-      }
-    },
+    (weight: unknown) => onWeightChange(index, typeof weight === 'number' ? weight : null),
     [index, onWeightChange]
   );
-  const onFocusChange = useCallback(({ focused }: NumberInput.FocusChangeDetails) => {
-    if (!focused) {
-      setDraft(null);
-    }
-  }, []);
 
   return (
     <HStack gap="1" minW="0" w="full">
@@ -1439,28 +1452,17 @@ const LoRACollectionRow = ({
         <MiddleTruncate color={entry ? undefined : 'fg.error'} flex="1" fontSize="2xs" minW="0" text={label} />
       </Tooltip>
       {entry ? (
-        <NumberInput.Root
-          className="nodrag"
-          // Stated rather than left to the default: `min`/`max` are otherwise advisory here, and a
-          // mistyped 999 would run — the backend takes an unbounded float and nothing downstream
-          // rejects it.
-          clampValueOnBlur
-          flexShrink="0"
-          max={DEFAULT_LORA_WEIGHT_CONFIG.numberInputMax}
-          min={DEFAULT_LORA_WEIGHT_CONFIG.numberInputMin}
-          size="xs"
-          step={DEFAULT_LORA_WEIGHT_CONFIG.coarseStep}
-          value={draft ?? String(entry.weight)}
-          w="16"
-          onFocusChange={onFocusChange}
-          onValueChange={onValueChange}
-        >
-          <NumberInput.Input
-            aria-label={`${label} weight`}
-            fontVariantNumeric="tabular-nums"
-            id={id ? `${id}-lora-${index}-weight` : undefined}
+        <Field.Root flexShrink="0" invalid={!isLoraFieldWeightValid(entry.weight)} w="16">
+          <NumericInput
+            ariaLabel={`${label} weight`}
+            id={id ? `${id}-lora-${index}` : undefined}
+            invalid={!isLoraFieldWeightValid(entry.weight)}
+            step={DEFAULT_LORA_WEIGHT_CONFIG.coarseStep}
+            template={LORA_WEIGHT_TEMPLATE}
+            value={entry.weight ?? undefined}
+            onChange={onValueChange}
           />
-        </NumberInput.Root>
+        </Field.Root>
       ) : null}
       <IconButton
         aria-label={`Remove ${label}`}
@@ -1477,21 +1479,337 @@ const LoRACollectionRow = ({
   );
 };
 
+const ScalarCollectionInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
+  const { t } = useTranslation();
+  const items = useMemo<readonly unknown[]>(() => (Array.isArray(value) ? value : []), [value]);
+  const isString = template.type.name === 'StringField';
+  // Each row edits one scalar on a single line, whatever the list's own ui_component says.
+  const itemTemplate = useMemo<FieldInputTemplate>(
+    () => ({ ...template, type: { ...template.type, cardinality: 'SINGLE' }, uiComponent: null }),
+    [template]
+  );
+  // Emptying the list restores the template's own default, so the reset affordance stays quiet.
+  const clearsToUndefined = template.default === undefined && !template.required;
+  const commit = useCallback(
+    (next: unknown[]) => onChange(next.length === 0 && clearsToUndefined ? undefined : next),
+    [clearsToUndefined, onChange]
+  );
+  const onAdd = useCallback(
+    () => commit([...items, isString ? '' : (finiteNumberOrUndefined(template.minimum) ?? 0)]),
+    [commit, isString, items, template.minimum]
+  );
+  const addButtonRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  // Rows are keyed by position, so a removal only unmounts the last row's controls. Move keyboard focus off
+  // anything about to unmount before the commit lands, or it falls to the canvas and its delete shortcut.
+  const onClear = useCallback(() => {
+    addButtonRef.current?.focus();
+    commit([]);
+  }, [commit]);
+  const onRemove = useCallback(
+    (index: number) => {
+      if (index === items.length - 1) {
+        const removeButtons = listRef.current?.querySelectorAll<HTMLButtonElement>('[data-collection-remove]');
+
+        (index > 0 ? removeButtons?.[index - 1] : addButtonRef.current)?.focus();
+      }
+
+      commit(items.filter((_, itemIndex) => itemIndex !== index));
+    },
+    [commit, items]
+  );
+  // A cleared or unparseable number row is kept as null: the list keeps its shape and the row reports itself.
+  const onItemChange = useCallback(
+    (index: number, next: unknown) =>
+      commit(items.map((item, itemIndex) => (itemIndex === index ? (next === undefined ? null : next) : item))),
+    [commit, items]
+  );
+
+  return (
+    <Stack gap="1" w="full">
+      {items.length > 0 ? (
+        <Stack
+          ref={listRef}
+          borderWidth="1px"
+          boxShadow={invalid ? '0 0 0 1px {colors.red.solid}' : undefined}
+          className="nowheel"
+          gap="1"
+          maxH="40"
+          overflowY="auto"
+          p="1"
+          rounded="sm"
+          w="full"
+        >
+          {items.map((item, index) => (
+            <ScalarCollectionRow
+              key={index}
+              id={id}
+              index={index}
+              itemTemplate={itemTemplate}
+              value={item}
+              onItemChange={onItemChange}
+              onRemove={onRemove}
+            />
+          ))}
+        </Stack>
+      ) : null}
+      <HStack gap="1.5" w="full">
+        <Button ref={addButtonRef} className="nodrag" size="2xs" variant="outline" onClick={onAdd}>
+          <Icon as={PlusIcon} boxSize="3" />
+          {t('nodes.addItem')}
+        </Button>
+        {items.length > 0 ? (
+          <Button className="nodrag" size="2xs" variant="ghost" onClick={onClear}>
+            {t('common.clear')}
+          </Button>
+        ) : null}
+        {items.length > 0 ? (
+          <Text color="fg.subtle" fontSize="2xs" ms="auto">
+            {t('nodes.collectionItemCount', { count: items.length })}
+          </Text>
+        ) : null}
+      </HStack>
+    </Stack>
+  );
+};
+
+const ScalarCollectionRow = ({
+  id,
+  index,
+  itemTemplate,
+  onItemChange,
+  onRemove,
+  value,
+}: {
+  id?: string;
+  index: number;
+  itemTemplate: FieldInputTemplate;
+  onItemChange: (index: number, next: unknown) => void;
+  onRemove: (index: number) => void;
+  value: unknown;
+}) => {
+  const { t } = useTranslation();
+  const onChange = useCallback((next: unknown) => onItemChange(index, next), [index, onItemChange]);
+  const onRemoveClick = useCallback(() => onRemove(index), [index, onRemove]);
+  const Control = itemTemplate.type.name === 'StringField' ? StringInput : NumericInput;
+  const invalid = !isWorkflowCollectionItemValid(itemTemplate, value);
+  const removeLabel = t('nodes.removeItem', { field: itemTemplate.title, index: index + 1 });
+
+  return (
+    <HStack gap="1" w="full">
+      <Text color="fg.subtle" flexShrink="0" fontSize="2xs" fontVariantNumeric="tabular-nums" minW="4" textAlign="end">
+        {index + 1}.
+      </Text>
+      {/* The host's Field.Root marks every control inside it invalid; a row scopes its own validity instead. */}
+      <Field.Root flex="1" invalid={invalid} minW="0">
+        <Control
+          ariaLabel={t('nodes.collectionItemLabel', { field: itemTemplate.title, index: index + 1 })}
+          id={id ? `${id}-item-${index}` : undefined}
+          invalid={invalid}
+          template={itemTemplate}
+          value={value}
+          onChange={onChange}
+        />
+      </Field.Root>
+      <Tooltip content={removeLabel}>
+        <IconButton
+          aria-label={removeLabel}
+          className="nodrag"
+          color="fg.muted"
+          data-collection-remove=""
+          flexShrink="0"
+          size="2xs"
+          variant="ghost"
+          onClick={onRemoveClick}
+        >
+          <Trash2Icon />
+        </IconButton>
+      </Tooltip>
+    </HStack>
+  );
+};
+
 const CONNECTION_ONLY_FALLBACK = (
   <Text color="fg.subtle" fontSize="2xs">
     Connection only
   </Text>
 );
 
+const SavedWorkflowInput = ({ nodeId, onChange, template, value }: WorkflowFieldInputProps) => {
+  const { t } = useTranslation();
+  const { commands } = useWorkflowUi();
+  const [search, setSearch] = useState('');
+  const deferredSearch = useDeferredValue(search);
+  const ownedParams = useMemo(() => getSavedWorkflowPickerOwnedQuery(deferredSearch), [deferredSearch]);
+  const sharedParams = useMemo(() => getSavedWorkflowPickerSharedQuery(deferredSearch), [deferredSearch]);
+  const ownedQuery = useInfiniteQuery(savedWorkflowPickerQueryOptions(ownedParams));
+  const sharedQuery = useInfiniteQuery(savedWorkflowPickerQueryOptions(sharedParams));
+  const ownedItems = getWorkflowPagesItems(ownedQuery.data);
+  const sharedItems = getWorkflowPagesItems(sharedQuery.data);
+  const items = useMemo(() => mergeSavedWorkflowPickerItems(ownedItems, sharedItems), [ownedItems, sharedItems]);
+  const workflowId = typeof value === 'string' ? value : '';
+  const selectedInList = items.some((item) => item.workflow_id === workflowId);
+  const detailQuery = useQuery({
+    ...savedWorkflowDetailQueryOptions(workflowId),
+    enabled: workflowId !== '' && !selectedInList,
+  });
+  const selectedWorkflow = detailQuery.data ? getSavedWorkflowListItemFromRecord(detailQuery.data) : undefined;
+  const selectionState = useMemo(
+    () => getSavedWorkflowSelectionState(items, workflowId, selectedWorkflow),
+    [items, selectedWorkflow, workflowId]
+  );
+  const selectedOption = useMemo(() => {
+    const option = getSavedWorkflowSelectionOption(selectionState);
+
+    return option?.value === MISSING_WORKFLOW_OPTION_VALUE
+      ? { ...option, label: t('nodes.savedWorkflowMissing') }
+      : option;
+  }, [selectionState, t]);
+  const options = useMemo(() => {
+    const base = buildSavedWorkflowOptions(items);
+
+    if (selectedOption && !base.some((option) => option.value === selectedOption.value)) {
+      return [selectedOption, ...base];
+    }
+
+    return base;
+  }, [items, selectedOption]);
+  const displayState = getSavedWorkflowDisplayState(selectionState);
+  const clearSelection = useCallback(() => onChange(''), [onChange]);
+  const onWorkflowChange = useCallback(
+    (nextValue: string | null) => {
+      if (nodeId && nextValue === workflowId && workflowId) {
+        commands.editGraph({ nodeId, type: 'retryCallSavedWorkflow' });
+        return;
+      }
+
+      onChange(nextValue);
+    },
+    [commands, nodeId, onChange, workflowId]
+  );
+  const retrySelection = useCallback(() => {
+    if (nodeId && workflowId) {
+      commands.editGraph({ nodeId, type: 'retryCallSavedWorkflow' });
+    }
+  }, [commands, nodeId, workflowId]);
+  const fetchNextPage = useCallback(() => {
+    if (shouldFetchNextSavedWorkflowPickerPage(ownedQuery)) {
+      void ownedQuery.fetchNextPage();
+    }
+
+    if (shouldFetchNextSavedWorkflowPickerPage(sharedQuery)) {
+      void sharedQuery.fetchNextPage();
+    }
+  }, [ownedQuery, sharedQuery]);
+  const isLoading = ownedQuery.isLoading || sharedQuery.isLoading;
+  const isFetching = ownedQuery.isFetching || sharedQuery.isFetching;
+  const statusText =
+    displayState.statusLabel === 'choose'
+      ? t('nodes.savedWorkflowChoose')
+      : displayState.statusLabel === 'missing'
+        ? t('nodes.savedWorkflowMissing')
+        : null;
+
+  return (
+    <Stack gap="1" minW="0" w="full">
+      <HStack gap="1" minW="0" w="full">
+        <Combobox
+          aria-label={template.title}
+          flex="1"
+          noResultsText={t('nodes.noMatchingWorkflows')}
+          options={options}
+          searchPlaceholder={isLoading ? t('nodes.savedWorkflowListLoading') : t('nodes.savedWorkflowSearch')}
+          value={selectedOption?.value ?? null}
+          onInputValueChange={setSearch}
+          onItemReselect={retrySelection}
+          onListScrollToBottom={fetchNextPage}
+          onValueChange={onWorkflowChange}
+        />
+        {nodeId && workflowId && detailQuery.isError ? (
+          <IconButton
+            aria-label={t('common.retry')}
+            className="nodrag"
+            size="xs"
+            variant="ghost"
+            onClick={retrySelection}
+          >
+            <RotateCcwIcon />
+          </IconButton>
+        ) : null}
+        {workflowId ? (
+          <IconButton
+            aria-label={t('nodes.savedWorkflowClear')}
+            className="nodrag"
+            size="xs"
+            variant="ghost"
+            onClick={clearSelection}
+          >
+            <XIcon />
+          </IconButton>
+        ) : null}
+      </HStack>
+      {selectionState.status === 'selected' ? (
+        <HStack flexWrap="wrap" gap="1" minW="0">
+          <Text color="fg.muted" fontSize="2xs" minW="0" truncate>
+            {selectionState.workflow.name}
+          </Text>
+          {displayState.badges.includes('unsupported') ? (
+            <Badge fontSize="2xs">{t('nodes.savedWorkflowUnsupported')}</Badge>
+          ) : null}
+          {displayState.badges.includes('default') ? (
+            <Badge fontSize="2xs">{t('nodes.savedWorkflowDefaultBadge')}</Badge>
+          ) : null}
+          {displayState.badges.includes('shared') ? (
+            <Badge fontSize="2xs">{t('nodes.savedWorkflowShared')}</Badge>
+          ) : null}
+        </HStack>
+      ) : (
+        <Badge alignSelf="flex-start" fontSize="2xs">
+          {statusText}
+        </Badge>
+      )}
+      {displayState.compatibility?.message ? (
+        <Text color="fg.subtle" fontSize="2xs">
+          {displayState.compatibility.message}
+        </Text>
+      ) : null}
+      {isFetching ? (
+        <Text color="fg.subtle" fontSize="2xs">
+          {t('nodes.savedWorkflowUpdating')}
+        </Text>
+      ) : null}
+    </Stack>
+  );
+};
+
 export const WorkflowFieldInput = (props: WorkflowFieldInputProps) => {
-  // COLLECTION fields hold arrays; only image lists have a list widget. Other
+  // COLLECTION fields hold arrays; only image and scalar lists have a list widget. Other
   // collections stay connection-only even when a migrated linear-form element
   // points at them, since the single-value widget would write a bare value.
   if (props.template.type.cardinality === 'COLLECTION') {
-    return props.template.type.name === 'ImageField' ? <ImageCollectionInput {...props} /> : CONNECTION_ONLY_FALLBACK;
+    switch (props.template.type.name) {
+      case 'ImageField':
+        return <ImageCollectionInput {...props} />;
+      case 'FloatField':
+      case 'IntegerField':
+      case 'StringField':
+        return <ScalarCollectionInput {...props} />;
+      default:
+        return CONNECTION_ONLY_FALLBACK;
+    }
+  }
+
+  if (isWorkflowGeneratorFieldTypeName(props.template.type.name)) {
+    return (
+      <Suspense fallback={RECORD_PICKER_FALLBACK}>
+        <GeneratorFieldInput {...props} />
+      </Suspense>
+    );
   }
 
   switch (props.template.type.name) {
+    case 'SavedWorkflowField':
+      return <SavedWorkflowInput {...props} />;
     case 'StringField':
       return <StringInput {...props} />;
     case 'IntegerField':
@@ -1522,6 +1840,18 @@ export const WorkflowFieldInput = (props: WorkflowFieldInputProps) => {
       return <ModelIdentifierInput {...props} />;
     case 'SchedulerField':
       return <SchedulerInput {...props} />;
+    case 'StylePresetField':
+      return (
+        <Suspense fallback={RECORD_PICKER_FALLBACK}>
+          <StylePresetInput {...props} />
+        </Suspense>
+      );
+    case 'SystemPromptField':
+      return (
+        <Suspense fallback={RECORD_PICKER_FALLBACK}>
+          <SystemPromptInput {...props} />
+        </Suspense>
+      );
     case 'BoardField':
       return <BoardInput {...props} />;
     case 'ImageField':

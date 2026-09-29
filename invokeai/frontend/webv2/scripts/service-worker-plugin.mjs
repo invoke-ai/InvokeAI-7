@@ -5,11 +5,8 @@ import { resolve } from 'node:path';
 const MANIFEST_PLACEHOLDER = 'self.__SW_MANIFEST__';
 
 /**
- * Emits `sw.js` at the bundle root from the source worker in
- * `src/platform/pwa/sw.js`, injecting the build's asset manifest: the emitted
- * `assets/*` file names plus a version hash derived from them. The worker uses
- * the list for cache-first serving and stale-entry pruning; deriving the
- * version from the same list keeps rebuilds of identical output byte-stable.
+ * Inject emitted asset names and their content-derived version into sw.js; identical output must produce the same
+ * version.
  */
 export const serviceWorkerPlugin = ({ projectRoot }) => ({
   apply: 'build',
@@ -22,8 +19,7 @@ export const serviceWorkerPlugin = ({ projectRoot }) => ({
     const source = await readFile(resolve(projectRoot, 'src/platform/pwa/sw.js'), 'utf8');
     const occurrences = source.split(MANIFEST_PLACEHOLDER).length - 1;
 
-    // Exactly one: zero means the placeholder was renamed away, more than one
-    // means a stray mention (e.g. in a comment) would swallow the injection.
+    // Require one placeholder so injection cannot silently miss or replace a stray occurrence.
     if (occurrences !== 1) {
       throw new Error(`Service worker source must contain ${MANIFEST_PLACEHOLDER} exactly once, found ${occurrences}.`);
     }

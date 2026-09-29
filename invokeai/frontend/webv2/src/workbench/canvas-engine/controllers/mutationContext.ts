@@ -17,10 +17,8 @@ import { EMPTY_STACKS } from '@workbench/canvas-engine/document/documentTree';
 import { captureInsertionAnchor, captureRestoreAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 
 /**
- * The shared mutation substrate handed to canvas controllers: the guarded
- * document-mutation protocol (the edit-concurrency surface, prepared-cache
- * dispatch with reducer/mirror postconditions, layer-cache replacement install),
- * plus the small set of engine services every mutating controller needs.
+ * Shared guarded mutation protocol: edit permits, prepared-cache dispatch with reducer/mirror postconditions,
+ * cache replacement, and required engine services.
  */
 export interface CanvasMutationContext extends CanvasEditConcurrency {
   readonly history: History;
@@ -65,10 +63,8 @@ export interface CanvasMutationContextDeps {
 }
 
 /**
- * Creates the shared mutation substrate. Owns the document-edit permit epoch
- * machine (subscribed to the editing-lock store until {@link dispose}) and the
- * prepared-mutation dispatch postcondition protocol; everything else delegates
- * to the engine through `deps`.
+ * Owns edit-permit epochs and prepared-dispatch postconditions. The editing-lock subscription lasts until {@link
+ * dispose}; other services delegate to `deps`.
  */
 export const createCanvasMutationContext = (
   deps: CanvasMutationContextDeps
@@ -117,11 +113,8 @@ export const createCanvasMutationContext = (
         throw new Error('Canvas document mutation was rejected');
       }
     } catch (error) {
-      // Store subscribers run after the reducer has accepted an action. A
-      // faulty observer must not strand an applied document mutation before
-      // its matching engine state and history are published. Preserve real
-      // reducer/dispatch failures by swallowing only when the exact intended
-      // postcondition is visible in the authoritative reducer state.
+      // Ignore observer throws only when authoritative reducer state proves the exact mutation landed, so matching
+      // engine state/history can publish. Preserve actual dispatch failures.
       if (!isApplied()) {
         throw error;
       }

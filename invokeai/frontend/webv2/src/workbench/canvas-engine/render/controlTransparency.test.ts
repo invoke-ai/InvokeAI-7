@@ -72,11 +72,7 @@ interface FakeSurface extends RasterSurface {
   readonly putImageDataCalls: ImageData[];
 }
 
-/**
- * A minimal but faithful `RasterBackend` for `renderControlTransparency`: every
- * surface's `getImageData` returns a fresh copy of `sourcePixels`, and its
- * `putImageData` is recorded so the transform's output can be inspected.
- */
+/** Backend readbacks copy source pixels; recorded writes expose the transparency transform's output. */
 const createFakeBackend = (sourcePixels: Uint8ClampedArray): RasterBackend & { readonly created: FakeSurface[] } => {
   const created: FakeSurface[] = [];
 

@@ -213,12 +213,8 @@ const AlignButton = ({
 };
 
 /**
- * Displayed values: an open editing session's live source, else the selected
- * text layer, else the tool defaults — with color from the active foreground
- * when neither a session nor a selection owns one, so there is no second
- * global text color. Style edits update the defaults, then restyle the live
- * session (folded into its single commit) or commit one history entry on the
- * selected layer; color edits with nothing to own them edit the pair.
+ * Prefer live text session, selected text, then defaults. Style edits update defaults and the current owner;
+ * unowned color edits change the foreground pair.
  */
 const useTextEditor = (engine: ToolFormProps['engine']) => {
   const { t } = useTranslation();
@@ -304,9 +300,7 @@ const useTextEditor = (engine: ToolFormProps['engine']) => {
       t,
     ]
   );
-  // The chip names what applyEdit actually writes: the SESSION when one is
-  // open (its layer's name, or the new-text placeholder in create mode), else
-  // the selected text layer, else the defaults.
+  // Name the actual edit target: live session, selected text layer, or defaults.
   const sessionLayerName = useActiveProjectSelector((project): string | null => {
     if (!session?.layerId) {
       return null;
@@ -317,10 +311,6 @@ const useTextEditor = (engine: ToolFormProps['engine']) => {
   return { active, applyEdit, content, targetName };
 };
 
-/**
- * A live specimen of the active face — family, style, weight, axes and color —
- * with the target chip: the one place the form shows what its values add up to.
- */
 export const TextPreview = ({ engine }: ToolPreviewProps) => {
   const { active, content, targetName } = useTextEditor(engine);
   // The instanced face the canvas rasterizes with; the engine keeps the

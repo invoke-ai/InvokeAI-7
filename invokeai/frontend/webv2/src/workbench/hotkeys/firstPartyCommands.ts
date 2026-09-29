@@ -76,8 +76,14 @@ export const FIRST_PARTY_APP_COMMAND_IDS = [
 ] as const;
 
 export const FIRST_PARTY_IMAGE_RECALL_COMMAND_IDS = Object.keys(imageRecallCommands);
+/** Loads the selected image's embedded workflow; shares the recall commands' selected-image lookup. */
+const LOAD_WORKFLOW_COMMAND_ID = 'viewer.loadWorkflow';
 
-export const FIRST_PARTY_COMMAND_IDS = [...FIRST_PARTY_APP_COMMAND_IDS, ...Object.keys(imageRecallCommands)] as const;
+export const FIRST_PARTY_COMMAND_IDS = [
+  ...FIRST_PARTY_APP_COMMAND_IDS,
+  ...Object.keys(imageRecallCommands),
+  LOAD_WORKFLOW_COMMAND_ID,
+] as const;
 
 const getAvailableModels = () => {
   const snapshot = getModelsSnapshot();
@@ -106,6 +112,47 @@ export const useRegisterFirstPartyCommands = () => {
     await submitActiveInvocation({ commands, destinationOverride, getModels: getAvailableModels, queries });
   };
 
+  const notifyNoImageSelected = () =>
+    notifications.add({
+      kind: 'info',
+      message: 'Select an image in Gallery or Preview first.',
+      title: 'No image selected',
+    });
+
+  const loadSelectedImageWorkflow = async () => {
+    const owner = captureAccountScope();
+    const [{ executeLoadImageWorkflow }, { getSelectedGalleryImage }] = await Promise.all([
+      import('@workbench/image-actions/executeImageRecall'),
+      import('@workbench/image-actions/selectedImage'),
+    ]);
+
+    if (!isAccountScopeCurrent(owner)) {
+      return;
+    }
+
+    const activeProject = queries.getSnapshot().activeProject;
+    const image = getSelectedGalleryImage(activeProject);
+
+    if (!image) {
+      notifyNoImageSelected();
+      return;
+    }
+
+    await executeLoadImageWorkflow({
+      image,
+      isProjectActive: () => queries.isActiveProject(activeProject.id),
+      notifications,
+      openWorkflowEditor: () =>
+        openWidgetPlacement({
+          getWidgetsForRegion,
+          options: { preferredRegions: ['center'], requireCenterView: true },
+          typeId: 'workflow',
+          widgets,
+        }).ok,
+      t,
+    });
+  };
+
   const recallSelectedImage = async (kind: ImageRecallKind) => {
     const owner = captureAccountScope();
 
@@ -120,11 +167,7 @@ export const useRegisterFirstPartyCommands = () => {
       const image = getSelectedGalleryImage(activeProject);
 
       if (!image) {
-        notifications.add({
-          kind: 'info',
-          message: 'Select an image in Gallery or Preview first.',
-          title: 'No image selected',
-        });
+        notifyNoImageSelected();
         return;
       }
 
@@ -378,6 +421,11 @@ export const useRegisterFirstPartyCommands = () => {
       ...Object.entries(imageRecallCommands).map(([id, kind]) =>
         commandApi.register({ handler: () => recallSelectedImage(kind), id, title: id })
       ),
+      commandApi.register({
+        handler: () => loadSelectedImageWorkflow(),
+        id: LOAD_WORKFLOW_COMMAND_ID,
+        title: 'Load workflow from image',
+      }),
     ];
 
     return () => {

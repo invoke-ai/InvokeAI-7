@@ -1,7 +1,7 @@
 /* eslint-disable react-perf/jsx-no-jsx-as-prop, react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-object-as-prop */
 import type { FoundModel } from '@features/models/core/types';
 
-import { Checkbox, HStack, Icon, Stack, Text } from '@chakra-ui/react';
+import { HStack, Icon, Stack, Text } from '@chakra-ui/react';
 import { ResultsListHeader } from '@features/models/ui/shared/ResultsListHeader';
 import { InstallSourceButton, SourceListItem } from '@features/models/ui/shared/SourceListItem';
 import { useInstalledSourceKeys } from '@features/models/ui/shared/useInstalledSources';
@@ -10,22 +10,28 @@ import { IconButton } from '@platform/ui';
 import { XIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { InstallOptions } from './InstallOptions';
+
 const pathOf = (result: FoundModel): string => result.path;
 
 export const ScanResults = ({
+  fp8Storage,
   inplace,
   onClear,
   onInstall,
   onInstallAll,
+  onSetFp8Storage,
   onSetInplace,
   pendingSources,
   scan,
 }: {
+  fp8Storage: boolean;
   inplace: boolean;
   onClear: () => void;
   onInstall: (path: string) => void;
   /** Bulk path: the parent queues silently and emits one summary toast. */
   onInstallAll: (paths: string[]) => void;
+  onSetFp8Storage: (fp8Storage: boolean) => void;
   onSetInplace: (inplace: boolean) => void;
   pendingSources: ReadonlySet<string>;
   scan: { path: string; results: FoundModel[] };
@@ -61,16 +67,12 @@ export const ScanResults = ({
     <Stack gap="1.5">
       <ResultsListHeader
         extra={
-          <Checkbox.Root
-            checked={inplace}
-            colorPalette="accent"
-            size="xs"
-            onCheckedChange={(event) => onSetInplace(event.checked === true)}
-          >
-            <Checkbox.HiddenInput />
-            <Checkbox.Control />
-            <Checkbox.Label fontSize="2xs">{t('models.installInPlace')}</Checkbox.Label>
-          </Checkbox.Root>
+          <InstallOptions
+            fp8Storage={fp8Storage}
+            inplace={inplace}
+            onSetFp8Storage={onSetFp8Storage}
+            onSetInplace={onSetInplace}
+          />
         }
         installAllDisabled={installable.length === 0}
         installAllLabel={t('models.installAllCount', { count: installable.length })}

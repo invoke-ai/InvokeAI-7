@@ -44,6 +44,19 @@ krea2_turbo_gguf_q4_k_m = StarterModel(
     dependencies=[qwen_image_vae, qwen3_vl_encoder_4b],
 )
 
+krea2_turbo_nvfp4 = StarterModel(
+    name="Krea-2 Turbo (NVFP4)",
+    base=BaseModelType.Krea2,
+    source="https://huggingface.co/Comfy-Org/Krea-2/resolve/main/diffusion_models/krea2_turbo_nvfp4.safetensors",
+    description="Krea-2 Turbo transformer in Comfy-Org's nvfp4 build: under a third of the full-precision "
+    "transformer's memory (~7.7GB), about the size of the Q4_K_M GGUF. It saves memory, not time - the weights are "
+    "decoded every step. Ships only the transformer, so the Qwen-Image VAE and Qwen3-VL encoder are installed as "
+    "dependencies.",
+    type=ModelType.Main,
+    variant=Krea2VariantType.Turbo,
+    dependencies=[qwen_image_vae, qwen3_vl_encoder_4b],
+)
+
 krea2_turbo_gguf_q8_0 = StarterModel(
     name="Krea-2 Turbo (Q8_0 GGUF)",
     base=BaseModelType.Krea2,

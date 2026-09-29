@@ -38,11 +38,8 @@ interface SelectedGradient {
 }
 
 /**
- * Kind, angle and the stop strip. Displayed values follow the selected
- * gradient layer, else the tool defaults — where the built-in FG→BG preset
- * shows the live pair (resolved for real at gesture start) and editing a stop
- * switches to explicit custom stops, independent of later pair edits. Edits
- * commit to a selected gradient layer (stop gestures once on release).
+ * Edit selected gradients or creation defaults; FG-to-BG follows the live pair until explicit stop edits switch to
+ * custom colors. Stop gestures commit once on release.
  */
 const useGradientEditor = (engine: ToolFormProps['engine']) => {
   const { t } = useTranslation();
@@ -125,12 +122,7 @@ const useGradientEditor = (engine: ToolFormProps['engine']) => {
 
 const STRIP_CHECKER = 'repeating-conic-gradient(#00000022 0% 25%, transparent 0% 50%) 0 0 / 10px 10px';
 
-/**
- * The stop strip: a ramp with draggable stop handles. Click an empty spot to
- * add a stop with the ramp's color there; drag or arrow-key a handle to move
- * it. Gestures preview locally and commit once on release, so a selected
- * gradient records one history entry per gesture.
- */
+/** Add stops from ramp colors and move by drag/keyboard; preview locally and commit one history entry on release. */
 const GradientStopStrip = ({
   onCommit,
   onSelect,

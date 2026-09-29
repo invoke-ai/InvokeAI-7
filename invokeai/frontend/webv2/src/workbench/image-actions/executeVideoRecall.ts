@@ -1,14 +1,18 @@
 import type { GalleryVideoItem } from '@features/gallery';
 import type { ModelConfig } from '@features/models';
-import type { VideoReferenceItem } from '@features/video';
+import type { VideoReferenceItem, VideoWidgetValues } from '@features/video';
 import type { AccountScope } from '@platform/state/accountLifecycle';
 import type { WorkbenchCommands } from '@workbench/workbenchStore';
 
 import { galleryImages, galleryItems, galleryVideos } from '@features/gallery';
 import {
   createDefaultVideoWidgetValues,
+  createVideoConditioningClip,
+  createVideoReferenceEntry,
   createVideoSourceClip,
   getDefaultReferenceConditioning,
+  getInitialVideoPatch,
+  getReferencesPatch,
   getVideoModelPolicy,
   isVideoReferenceConditioning,
   normalizeVideoWidgetValues,
@@ -76,6 +80,28 @@ export const getCurrentVideoValues = ({
   return syncVideoWidgetValuesWithModels(normalized, models);
 };
 
+interface VideoRecallNotice {
+  message: string;
+  title: string;
+}
+
+const reportVideoRecallError = (
+  commands: Pick<WorkbenchCommands, 'notifications'>,
+  owner: AccountScope,
+  error: unknown,
+  projectId: string | undefined
+): false => {
+  if (isAccountScopeCurrent(owner)) {
+    commands.notifications.reportError({
+      area: 'video-recall',
+      message: toErrorMessage(error),
+      namespace: 'generation',
+      projectId,
+    });
+  }
+  return false;
+};
+
 export const executeVideoRecall = async ({
   commands,
   getVideoValues,
@@ -100,28 +126,113 @@ export const executeVideoRecall = async ({
     return false;
   }
 
-  try {
-    const metadata = await loadVideoMetadata(item.name, owner);
+  let metadata: unknown;
 
+  try {
+    metadata = await loadVideoMetadata(item.name, owner);
+  } catch (error: unknown) {
+    return reportVideoRecallError(commands, owner, error, projectId);
+  }
+
+  return applyVideoRecallMetadata({
+    commands,
+    emptyNotice: {
+      message: 'This video does not include supported Video metadata.',
+      title: 'No recallable video data',
+    },
+    getVideoValues,
+    kind,
+    metadata,
+    models,
+    owner,
+    projectId,
+  });
+};
+
+/**
+ * Apply a video metadata record — read from a gallery video, or sent by the external recall API — to the Video
+ * panel: build the values, hydrate the media it names from the gallery, drop media the resulting model cannot use,
+ * and commit. Resolves whether anything was applied.
+ */
+export const applyVideoRecallMetadata = async ({
+  commands,
+  emptyNotice,
+  getVideoValues,
+  kind,
+  metadata,
+  models,
+  owner,
+  partial = false,
+  projectId,
+  requireGenerationMode = true,
+}: {
+  commands: Pick<WorkbenchCommands, 'notifications' | 'widgets'>;
+  /** Shown when nothing in the record applies. */
+  emptyNotice: VideoRecallNotice;
+  getVideoValues: () => Record<string, unknown>;
+  kind: VideoRecallKind;
+  metadata: unknown;
+  models: readonly ModelConfig[];
+  owner: AccountScope;
+  /** See `buildVideoRecallSettings`. */
+  partial?: boolean;
+  projectId?: string;
+  /** See `buildVideoRecallSettings`. */
+  requireGenerationMode?: boolean;
+}): Promise<boolean> => {
+  try {
     assertAccountScopeCurrent(owner);
     // Snapshot the panel AFTER the fetch: an edit made while the metadata
     // loaded must survive into the base the recall applies on top of.
     const currentValues = getCurrentVideoValues({ models, videoValues: getVideoValues() });
-    const result = buildVideoRecallSettings({ currentValues, kind, metadata, models });
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind,
+      metadata,
+      models,
+      partial,
+      requireGenerationMode,
+    });
 
     if (!result) {
-      commands.notifications.add({
-        kind: 'info',
-        message: 'This video does not include supported Video metadata.',
-        title: 'No recallable video data',
-      });
+      commands.notifications.add({ kind: 'info', ...emptyNotice });
       return false;
     }
 
-    // Conditioning media re-hydrates against the gallery: the metadata records
-    // only names, and the panel needs dimensions/probe data — plus deleted
-    // media must drop rather than resurrect as broken references.
+    // A partial recall names media on top of the panel's own. One the panel's model cannot use would still displace
+    // the held media it conflicts with before the mode check below dropped it, so it is dropped up front instead.
+    if (partial && result.values.model) {
+      const policy = getVideoModelPolicy(result.values.model, result.values);
+      const modes = policy.modes;
+      const names = result.mediaNames;
+
+      if (!modes.includes('reference')) {
+        names.references = [];
+      }
+      if (!modes.includes('first-frame') && !modes.includes('first-last')) {
+        names.firstFrameName = null;
+      }
+      if (!modes.includes('last-frame') && !modes.includes('first-last')) {
+        names.lastFrameName = null;
+      }
+      if (!modes.includes('extend') && !policy.references?.extend) {
+        names.sourceVideoName = null;
+        names.sourceVideoTrim = null;
+      }
+      if (
+        names.conditioningClip &&
+        !modes.includes(names.conditioningClip.role === 'audio' ? 'audio-to-video' : 'video-to-audio')
+      ) {
+        names.conditioningClip = null;
+      }
+    }
+
+    // Resolve media names against the gallery for dimensions/probe data and drop deleted references.
     if (result.fields.includes('media')) {
+      // A full recall that cleared held media changed the panel even if nothing named below hydrates.
+      const clearedMedia = (
+        ['conditioningClip', 'firstFrameImage', 'lastFrameImage', 'references', 'sourceVideo'] as const
+      ).some((slot) => result.values[slot] !== currentValues[slot]);
       let recalledMedia = false;
       const { firstFrameName, lastFrameName, sourceVideoName } = result.mediaNames;
       const frameNames = [firstFrameName, lastFrameName].filter((name): name is string => name !== null);
@@ -149,6 +260,41 @@ export const executeVideoRecall = async ({
         recalledMedia = true;
       }
 
+      const { conditioningClip } = result.mediaNames;
+
+      if (conditioningClip) {
+        try {
+          const clipItem = await galleryItems.resolve({ kind: 'video', name: conditioningClip.name }, owner.signal);
+
+          assertAccountScopeCurrent(owner);
+          if (clipItem?.kind === 'video') {
+            // The recorded role, not the one a fresh drop would default to: the run held that
+            // modality clean, and the other role is a different generation entirely.
+            result.values = {
+              ...result.values,
+              conditioningClip: {
+                ...createVideoConditioningClip({
+                  durationSeconds: clipItem.durationSeconds,
+                  fps: clipItem.fps,
+                  height: clipItem.height,
+                  name: clipItem.name,
+                  width: clipItem.width,
+                }),
+                role: conditioningClip.role,
+              },
+              firstFrameImage: null,
+              lastFrameImage: null,
+              references: [],
+              sourceVideo: null,
+            };
+            recalledMedia = true;
+          }
+        } catch {
+          assertAccountScopeCurrent(owner);
+          // The clip is gone; the rest of the recall still applies.
+        }
+      }
+
       if (sourceVideoName) {
         try {
           const sourceItem = await galleryItems.resolve({ kind: 'video', name: sourceVideoName }, owner.signal);
@@ -162,9 +308,7 @@ export const executeVideoRecall = async ({
               name: sourceItem.name,
               width: sourceItem.width,
             });
-            // Restore the recorded trim, clamped to the fresh estimate (which
-            // can differ from the run's own) — the default trim would extend
-            // from a completely different frame than the run did.
+            // Restore recorded trim against the fresh estimate; default trim would select different frames.
             const trim = rebuiltClip.numFrames >= 2 ? result.mediaNames.sourceVideoTrim : null;
             const startFrame = trim
               ? Math.min(Math.max(trim.startFrame, 0), rebuiltClip.numFrames - 2)
@@ -187,9 +331,7 @@ export const executeVideoRecall = async ({
       }
 
       if (result.mediaNames.references.length > 0) {
-        // Ordered re-hydration: resolve every recorded reference against the gallery,
-        // dropping deleted media while PRESERVING the survivors' order (order is part of
-        // the request contract).
+        // Hydrate references in recorded order, dropping deleted media without reordering survivors.
         const imageNames = result.mediaNames.references
           .filter((reference): reference is typeof reference & { kind: 'image' } => reference.kind === 'image')
           .map((reference) => reference.name);
@@ -232,10 +374,8 @@ export const executeVideoRecall = async ({
             const endFrame = recorded.trim
               ? Math.min(Math.max(recorded.trim.endFrame, startFrame), clip.numFrames - 1)
               : clip.numFrames - 1;
-            // A recorded conditioning is what the run actually used, so it wins -- ALL THREE
-            // values of it, tested as a set. Only when the metadata recorded nothing usable
-            // does this fall back to the default the add path would pick, which for a
-            // wrapped audio upload is its soundtrack rather than a picture of its waveform.
+            // Any valid recorded conditioning wins; otherwise use add-path defaults, including soundtrack
+            // conditioning for wrapped audio.
             const conditioning = isVideoReferenceConditioning(recorded.conditioning)
               ? recorded.conditioning
               : getDefaultReferenceConditioning(item.mediaOrigin);
@@ -254,29 +394,42 @@ export const executeVideoRecall = async ({
             lastFrameImage: null,
             references,
             // A source video recorded alongside references is reference-extend
-            // state (hydrated above) — keep it; clear only a leftover.
-            sourceVideo: result.mediaNames.sourceVideoName ? result.values.sourceVideo : null,
+            // state (hydrated above) — keep it; clear only a leftover. A partial
+            // recall keeps the panel's own, subject to the mode check below.
+            sourceVideo: result.mediaNames.sourceVideoName || partial ? result.values.sourceVideo : null,
           };
           recalledMedia = true;
         }
       }
 
-      if (!recalledMedia) {
+      if (!recalledMedia && !clearedMedia) {
         result.fields = result.fields.filter((field) => field !== 'media');
       }
 
-      // What survived hydration can imply a mode the effective model rejects
-      // — a deleted first frame leaves an interpolate recall holding only its
-      // last frame (no Wan mode), and an uninstalled recorded model leaves
-      // i2v media on whatever main the panel kept. Reconcile with the same
-      // rules the model-selection transition applies, so the recall never
-      // assembles an un-generatable panel behind a success toast.
+      // Reconcile hydrated media with the effective model's modes; deleted frames or unavailable models must not
+      // leave an ungeneratable panel.
       const effectiveModel = result.values.model;
 
       if (effectiveModel) {
         const policy = getVideoModelPolicy(effectiveModel, result.values);
         const modes = policy.modes;
         const referenceExtend = Boolean(policy.references?.extend);
+
+        // A partial recall can replace the references or the initial video alone, which on a reference-extend panel
+        // would orphan the clip's continuity reference or leave it pointing at the previous clip. Relink it the way
+        // the panel's Initial Video field does, dropping the clip when no reference slot is left for it.
+        if (partial && referenceExtend && result.values.sourceVideo) {
+          const linked = getInitialVideoPatch({
+            maxVideos: policy.references?.maxVideos ?? 0,
+            numFrames: result.values.numFrames,
+            referenceExtend,
+            references: result.values.references,
+            sourceVideo: result.values.sourceVideo,
+          });
+
+          result.values = linked ? { ...result.values, ...linked } : { ...result.values, sourceVideo: null };
+        }
+
         let { firstFrameImage, lastFrameImage, sourceVideo } = result.values;
         let references = result.values.references;
 
@@ -321,22 +474,12 @@ export const executeVideoRecall = async ({
     }
 
     if (result.fields.length === 0) {
-      commands.notifications.add({
-        kind: 'info',
-        message: 'This video does not include supported Video metadata.',
-        title: 'No recallable video data',
-      });
+      commands.notifications.add({ kind: 'info', ...emptyNotice });
       return false;
     }
 
-    // Prompts are Video's own widget values now, not the draft Generate and
-    // Upscale share — but a prompts-only recall must still write ONLY the prompt
-    // keys. `result.values` is the panel re-snapshotted through
-    // `syncVideoWidgetValuesWithModels`, so writing it wholesale would push an
-    // unrelated model-family transition into the store behind a toast that says
-    // "prompts" (uninstall the recorded main, recall prompts, and the panel's
-    // frames/fps/resolution/LoRAs all reset). It would also widen the
-    // lost-update window against a concurrent recall still awaiting its media.
+    // Commit only prompt keys: resnapshotted values may contain an unrelated model-family transition and would
+    // widen the lost-update window for concurrent media recall.
     if (result.fields.every((field) => field === 'prompts')) {
       commands.widgets.patchValues(
         'video',
@@ -357,16 +500,107 @@ export const executeVideoRecall = async ({
     });
     return true;
   } catch (error: unknown) {
-    if (!isAccountScopeCurrent(owner)) {
-      return false;
-    }
-
-    commands.notifications.reportError({
-      area: 'video-recall',
-      message: toErrorMessage(error),
-      namespace: 'generation',
-      projectId,
-    });
-    return false;
+    return reportVideoRecallError(commands, owner, error, projectId);
   }
+};
+
+// Placing a gallery video in the Video panel. Kept in this module rather than a file of its own: the gallery's actions
+// load it on every editor route, and a new module there is a new entry in the routes' pinned source-owner sets.
+
+/** What placing a video needs to know about it; gallery items and the external recall event both carry it. */
+export interface PlaceableVideo {
+  durationSeconds: number;
+  fps?: number;
+  height: number;
+  mediaOrigin?: string;
+  name: string;
+  width: number;
+}
+
+export type InitialVideoPlacement =
+  | {
+      patch: Partial<VideoWidgetValues>;
+      status: 'placed';
+      /** Whether the panel's model can generate from an initial video; the slot is filled either way. */
+      usable: boolean;
+    }
+  | { status: 'full' };
+
+/** Set the video as the Video panel's Initial Video, exactly as the panel's own Initial Video field would. */
+export const placeInitialVideo = ({
+  models,
+  video,
+  videoValues,
+}: {
+  models: readonly ModelConfig[];
+  video: PlaceableVideo;
+  videoValues: Record<string, unknown>;
+}): InitialVideoPlacement => {
+  const values = getCurrentVideoValues({ models, videoValues });
+  const policy = values.model ? getVideoModelPolicy(values.model, values) : null;
+  const referenceExtend = Boolean(policy?.references?.extend);
+  const patch = getInitialVideoPatch({
+    maxVideos: policy?.references?.maxVideos ?? 0,
+    numFrames: values.numFrames,
+    referenceExtend,
+    references: values.references,
+    sourceVideo: createVideoSourceClip(video),
+  });
+
+  return patch
+    ? { patch, status: 'placed', usable: Boolean(policy && (policy.modes.includes('extend') || referenceExtend)) }
+    : { status: 'full' };
+};
+
+export type ReferenceVideoPlacement =
+  | { patch: Partial<VideoWidgetValues>; status: 'appended' }
+  | { status: 'full' | 'unsupported' };
+
+const getReferenceVideoRoom = (values: VideoWidgetValues): 'available' | 'full' | 'unsupported' => {
+  const policy = values.model ? getVideoModelPolicy(values.model, values) : null;
+
+  if (!policy?.references || !policy.modes.includes('reference')) {
+    return 'unsupported';
+  }
+
+  return values.references.filter((entry) => entry.kind === 'video').length < policy.references.maxVideos
+    ? 'available'
+    : 'full';
+};
+
+/** Whether the Video panel's model takes reference videos and has room for another. */
+export const canAppendReferenceVideo = ({
+  models,
+  videoValues,
+}: {
+  models: readonly ModelConfig[];
+  videoValues: Record<string, unknown>;
+}): boolean => getReferenceVideoRoom(getCurrentVideoValues({ models, videoValues })) === 'available';
+
+/** Append the video to the Video panel's references with the defaults the References field gives a new video. */
+export const appendReferenceVideo = ({
+  models,
+  video,
+  videoValues,
+}: {
+  models: readonly ModelConfig[];
+  video: PlaceableVideo;
+  videoValues: Record<string, unknown>;
+}): ReferenceVideoPlacement => {
+  const values = getCurrentVideoValues({ models, videoValues });
+  const room = getReferenceVideoRoom(values);
+
+  if (room !== 'available') {
+    return { status: room };
+  }
+
+  const referenceExtend = Boolean(values.model && getVideoModelPolicy(values.model, values).references?.extend);
+
+  return {
+    patch: getReferencesPatch({
+      referenceExtend,
+      references: [...values.references, createVideoReferenceEntry(video)],
+    }),
+    status: 'appended',
+  };
 };

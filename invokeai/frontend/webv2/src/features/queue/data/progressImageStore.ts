@@ -5,24 +5,8 @@ import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createExternalStore, createKeyedTransientStore } from '@platform/state/externalStore';
 
 /**
- * The most recent denoising preview image from `invocation_progress` events,
- * as a b64 data URL. Cleared when the run settles so consumers (the editor's
- * Current Image node, progress surfaces) fall back to the last real output.
- *
- * Next to the live frames, two small bounded sets of frames are *held* per
- * local queue item when one of its backend items completes:
- *
- * - the bridge frame, shown while the batch's next slot is live but has not
- *   produced a frame of its own yet (model load, text encoding) — a sequential
- *   batch used to drop to an empty card between items;
- * - the swap frame, shown in place of the finished image until the browser has
- *   decoded it, so the denoise→done boundary changes only the pixels inside
- *   the frame. Consumed on that first decode and expired shortly after, so
- *   browsing back to the image later never replays the low-resolution frame.
- *
- * Everything here survives a socket drop on purpose: the run continues on the
- * backend and its durable outcome is reconciled over HTTP, so wiping the last
- * frame on disconnect only ever produced a blank card until the next event.
+ * Hold bounded bridge frames between batch slots and swap frames until image decode. Retain frames across
+ * disconnects while HTTP reconciles the continuing run.
  */
 
 export type ProgressImageSnapshot = QueueProgressImage;
@@ -34,10 +18,7 @@ export type LatestProgressImageSnapshot = ProgressImageSnapshot & { target?: Pro
 /** Held frames are latent-grid JPEG data URLs, a few KB each. */
 const HELD_FRAME_LIMIT = 8;
 
-/**
- * Long enough to cover the finished image's fetch and decode on a slow link,
- * short enough that a later deliberate visit to the image never hits it.
- */
+/** Allow time for slow fetch/decode without replaying held frames on later visits. */
 export const SWAP_FRAME_TTL_MS = 10_000;
 
 const latestSnapshotStore = createExternalStore<{ latestSnapshot: LatestProgressImageSnapshot | null }>({
@@ -138,10 +119,8 @@ export const progressImageStore = {
     targetsByKey.delete(targetKey);
 
     if (didClearLatest) {
-      // Another slot may still be live: a video rendering for minutes next to a
-      // quick image batch. Falling to null here left the single-frame preview
-      // blank until the video's next step, while the gallery cell — which reads
-      // its own slot — kept showing the frame.
+      // Fall back to another live slot's frame when one clears; concurrent long-running sessions must not go
+      // blank.
       latestSnapshotStore.patchSnapshot({ latestSnapshot: getMostRecentSnapshot() });
     }
   },
@@ -160,11 +139,7 @@ export const progressImageStore = {
     dropBridge(queueItemId);
     dropSwap(queueItemId);
   },
-  /**
-   * Copy the slot's current frame into both held sets. The live frame itself
-   * stays until the slot is cleared, so the single-slot preview keeps showing
-   * it while the finished image is fetched.
-   */
+  /** Hold the final frame for bridging and swapping; retain the live slot until result fetch completes. */
   hold(target: ProgressImageTarget): void {
     const image = snapshotsByTarget.get(getTargetKey(target));
 

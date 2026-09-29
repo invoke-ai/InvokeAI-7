@@ -91,8 +91,7 @@ describe('queue realtime runtime', () => {
     runtime.start();
     vi.advanceTimersByTime(50);
 
-    // Multi-GPU emits one progress stream per running session, each tagged with its
-    // device. Without the tag the UI cannot label a tile or row with its GPU.
+    // Preserve device tags so concurrent progress tiles can identify their accelerator.
     handlers.get('invocation_progress')?.({
       device: 'cuda:1',
       item_id: 42,

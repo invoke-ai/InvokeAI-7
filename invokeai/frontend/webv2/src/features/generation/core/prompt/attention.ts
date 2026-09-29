@@ -103,8 +103,7 @@ const flattenNodes = (nodes: PromptAstNode[], leaves: WeightedLeaf[], weight = N
       flattenNodes(node.children, leaves, inherited);
     } else {
       const previous = leaves.at(-1);
-      // Compel separates fragments at parentheses even without literal whitespace.
-      // Keep that word boundary when the delimiters disappear during regrouping.
+      // Preserve Compel's implicit word boundaries when removing parentheses.
       if (previous?.node.type === 'word' && node.type === 'word' && previous.node.range.end < node.range.start) {
         leaves.push({
           node: { type: 'whitespace', value: ' ', range: { start: previous.node.range.end, end: node.range.start } },
@@ -124,8 +123,7 @@ const selectLeaves = (leaves: WeightedLeaf[], selection: PromptRange): void => {
     }
     return;
   }
-  // At a token boundary prefer content over punctuation/whitespace, then the token
-  // starting at the caret. A collapsed selection must never edit both neighbours.
+  // Prefer content over punctuation/whitespace, then the token starting at the caret; edit only one neighbor.
   let best: WeightedLeaf | undefined;
   let bestRank = -1;
   for (const leaf of leaves) {

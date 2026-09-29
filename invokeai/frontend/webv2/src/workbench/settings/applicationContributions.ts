@@ -1,5 +1,6 @@
 import type { SettingDefinition, SettingsContribution, SettingsText } from '@platform/ui/settings/contracts';
 
+import { intermediatesSettingsContribution } from '@features/intermediates/settingsContribution';
 import { WORKBENCH_LANGUAGE_OPTIONS } from '@platform/i18n/languages';
 
 const text =
@@ -14,12 +15,18 @@ const preference = (id: string, label: string, keywords?: string): SettingDefini
   kind: 'boolean',
   scope: 'preference',
 });
-const custom = (id: string, label: string, scope: SettingDefinition['scope'] = 'preference'): SettingDefinition => ({
+const custom = (
+  id: string,
+  label: string,
+  scope: SettingDefinition['scope'] = 'preference',
+  options: { fill?: boolean } = {}
+): SettingDefinition => ({
   id,
   label: text(`${id}.label`, label),
   description: text(`${id}.description`),
   kind: 'custom',
   scope,
+  ...options,
 });
 const section = (id: string, label: string, fields: readonly SettingDefinition[]): SettingsContribution => ({
   id,
@@ -49,7 +56,9 @@ export const behaviorSettings = section('behavior', 'Behavior', [
   preference('preferNumericAttentionStyle', 'Prefer numeric attention style', 'generate prompt editor'),
   preference('showPromptSyntaxHighlighting', 'Highlight prompt syntax', 'generate prompt editor'),
 ]);
-export const hotkeysSettings = section('hotkeys', 'Keyboard shortcuts', [custom('hotkeys', 'Keyboard shortcuts')]);
+export const hotkeysSettings = section('hotkeys', 'Keyboard shortcuts', [
+  custom('hotkeys', 'Keyboard shortcuts', 'preference', { fill: true }),
+]);
 export const projectSettings = section('project', 'Project', [
   {
     ...preference('useCpuNoise', 'Use CPU noise'),
@@ -114,8 +123,10 @@ export const developerSettings = section('developer', 'Developer', [
       label: text(`options.${value}`, value.charAt(0).toUpperCase() + value.slice(1)),
     })),
   },
+  preference('developerConsoleOutputEnabled', 'Mirror logs to the browser console', 'console devtools'),
   preference('developerPerformanceTimingsEnabled', 'Collect performance timings', 'diagnostics'),
   custom('developerLogNamespaces', 'Log namespaces'),
+  custom('developerLoggingReset', 'Reset logging defaults', 'preference'),
 ]);
 export const serverSettings = section('server', 'Server', [
   custom('generationDevices', 'Generation devices', 'server'),
@@ -136,6 +147,7 @@ export const applicationSettingsContributions = [
   developerSettings,
   serverSettings,
   workspaceSettings,
+  intermediatesSettingsContribution,
   aboutSettings,
 ];
 /** These are the same descriptors rendered in settings and used by palette preference actions. */

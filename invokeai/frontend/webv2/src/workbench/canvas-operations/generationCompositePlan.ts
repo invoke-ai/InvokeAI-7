@@ -79,11 +79,8 @@ const isInpaintMaskWithContent = (layer: CanvasLayerContract): layer is CanvasIn
   layer.type === 'inpaint_mask' && layer.mask.bitmap !== null;
 
 /**
- * A raster layer whose regenerate region is enabled and whose source can both
- * hold pixels and rasterize: the layer's OWN content alpha joins the inpaint
- * mask. Invoke flushes paint uploads before planning, so a stroked layer always
- * carries its bitmap; a pointless polygon shape has no raster and would fail
- * the snapshot capture, so it never enters the plan.
+ * Regenerate regions use their raster layer's own alpha. Include only pixel-bearing, rasterizable sources; paint
+ * uploads flush before planning.
  */
 const isRegionRasterWithContent = (layer: CanvasLayerContract): layer is CanvasRasterLayerContractV2 =>
   layer.type === 'raster' &&
@@ -99,12 +96,7 @@ const stableSourceKey = (value: unknown): string =>
       : entry
   );
 
-/**
- * A region ref's pixel-identity fragment. Unlike the base plan — where
- * parametric sources never reach a dedupe key — a region can sit on a text,
- * shape, or gradient layer, so their pixel-determining fields must be part of
- * the key or an edited layer would reuse the previous mask upload.
- */
+/** Include text, shape, and gradient pixel parameters in region keys so edits invalidate mask uploads. */
 const regionSourceRef = (source: CanvasLayerSourceContract): string => {
   switch (source.type) {
     case 'image':
@@ -202,16 +194,9 @@ const deriveMaskKey = (kind: string, bbox: Rect, layers: CompositeMaskLayerRef[]
   `${kind}|${rectKey(bbox)}|${layers.map(maskLayerKey).join('|')}`;
 
 /**
- * Plans the composites required to invoke `document` over `bbox`:
- * - one `base-raster` entry (the initial image);
- * - one `inpaint-mask` entry (grayscale denoise-limit mask) when enabled inpaint
- *   masks with content exist — an absent OR DISABLED `denoise` modifier resolves
- *   to the legacy default (1.0, full denoise) — or when a contributing raster
- *   layer carries an enabled regenerate region (its own content alpha joins the
- *   mask at full denoise);
- * - one `noise-mask` entry when at least one such mask carries an ENABLED
- *   `noise` modifier (absent and disabled are equivalent, mirroring legacy —
- *   they must NOT be treated as noise 0). Regions never add noise.
+ * Plan a base raster plus inpaint masks with content. Missing/disabled denoise means full denoise; enabled
+ * regenerate regions add their own alpha at full denoise. Add a noise mask only for enabled noise modifiers;
+ * absent/disabled noise is not zero, and regions add none.
  */
 export const planComposites = (document: CanvasDocumentContractV3, bbox: Rect): CompositePlan => {
   const entries: CompositeEntry[] = [planBaseRasterComposite(document, bbox)];
@@ -271,11 +256,8 @@ const controlContentRect = (
 };
 
 /**
- * Projects a control layer into a standalone composite contribution. Opacity is
- * forced to 1 and blend mode to `normal` (the layer's DISPLAY opacity/blend and
- * transparency effect never alter the control image sent to the backend — legacy
- * rasterizes control at opacity 1, no filters), so display tweaks don't churn the
- * entry key.
+ * Force control contributions to opacity 1 and normal blend; display opacity, blend, and transparency effects must
+ * not affect backend pixels or dedupe keys.
  */
 const toControlLayerRef = (layer: CanvasControlLayerContract, doc: CanvasDocumentContractV3): CompositeLayerRef => {
   const rect = controlContentRect(layer, doc);
@@ -303,12 +285,8 @@ export interface ControlCompositeEntry {
 }
 
 /**
- * Plans one composite per enabled control layer WITH content — each composited
- * separately over `bbox` (legacy parity: control images are never blended
- * together). Empty control layers (no source / blank paint) are excluded (they
- * carry no control content and are rejected upstream with a "no control" reason).
- * Control layers never contribute to the `base-raster` composite, so they never
- * paint into the img2img/inpaint source.
+ * Plan separate bbox composites for enabled controls with content. Never blend controls together or include them
+ * in base-raster content.
  */
 export const planControlComposites = (document: CanvasDocumentContractV3, bbox: Rect): ControlCompositeEntry[] =>
   contributingLayers(document, isControlLayerWithContent).map((layer) => {
@@ -338,11 +316,8 @@ const regionalMaskContentRect = (
 };
 
 /**
- * Projects a regional-guidance layer into a standalone ALPHA composite
- * contribution (opacity 1, normal blend) — the executor composites the mask's
- * alpha coverage over the bbox and uploads it, so `alpha_mask_to_tensor` can read
- * the region's alpha. Display opacity/blend never alter the mask sent to the
- * backend (mirrors control layers).
+ * Use opacity 1 and normal blend for regional alpha masks; display settings must not affect alpha_mask_to_tensor
+ * input.
  */
 const toRegionalMaskRef = (layer: CanvasRegionalGuidanceLayerContract): CompositeLayerRef => {
   const rect = regionalMaskContentRect(layer);
@@ -370,11 +345,8 @@ export interface RegionalMaskCompositeEntry {
 }
 
 /**
- * Plans one alpha-mask composite per enabled regional-guidance layer WITH mask
- * content — each composited separately over `bbox` (a region's mask feeds its own
- * `alpha_mask_to_tensor`; regions are never combined). Regions without mask
- * content carry no region and are skipped (they'd be rejected upstream with a
- * "no region" reason). Regional layers never contribute to `base-raster`.
+ * Plan separate alpha masks for enabled regions with content; omit empty regions and exclude all regions from
+ * base-raster.
  */
 export const planRegionalMaskComposites = (
   document: CanvasDocumentContractV3,

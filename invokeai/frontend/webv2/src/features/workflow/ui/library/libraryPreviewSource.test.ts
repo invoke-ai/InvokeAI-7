@@ -121,9 +121,7 @@ describe('buildLibraryGraphPreviewSource', () => {
 
   it('surfaces a compile failure as an invalid reason instead of throwing', () => {
     const { doc } = buildDocument();
-    // A malformed cached document (the shape a corrupted library record could
-    // produce) — `nodes` is not an array, so compilation throws instead of
-    // silently producing an empty graph.
+    // Malformed cached node collections must exercise compilation failure rather than an empty successful graph.
     const corrupt = { ...doc, nodes: null } as unknown as ProjectGraphState;
 
     const result = buildLibraryGraphPreviewSource(corrupt, templates);

@@ -2,22 +2,12 @@ import type { RefusedWorkbenchProject } from '@workbench/projectContracts';
 
 import { MIN_SUPPORTED_CANVAS_SCHEMA_VERSION } from '@workbench/canvasSchemaVersion';
 
-/**
- * What an `.invk` is called and how reading one can fail.
- *
- * Split from `manifest.ts`, which owns the zod schemas, because these are needed *eagerly* — the
- * picker names the extension and every call site translates the error's reason. That is what keeps
- * zod and the ZIP codec behind the lazy import.
- */
+/** Keep format/error constants eager and zod/ZIP dependencies lazy. */
 
 export const INVK_EXTENSION = '.invk';
 export const INVK_MIME_TYPE = 'application/zip';
 
-/**
- * Workbench projects are version 2; version 1 is the previous frontend's canvas project, refused by
- * name. Board membership did not bump this — webv2 has not shipped, so no v2 archive predating
- * `board.json` exists outside dev builds, and an archive without the entry names no board.
- */
+/** Version 2 is supported. Version 1 receives a named refusal; board.json is optional in v2. */
 export const INVK_VERSION = 2;
 
 /** Fixed entry paths. `cover` varies by image format and is named in the manifest. */
@@ -27,12 +17,7 @@ export const INVK_DOCUMENT_ENTRY = 'project.json';
 /** The project board's contents; see `board.ts` for why a reader cannot infer them. */
 export const INVK_BOARD_ENTRY = 'board.json';
 
-/**
- * Filed by kind, not pooled: import must know which namespace an entry belongs to, and a folder
- * states it where a shared one would leave it to a file extension. `images/` is byte-identical to
- * the legacy v1 container. `videos/` needed no version bump — `readInvkArchive` ignores entries it
- * does not recognize, so an older reader just leaves those references dangling.
- */
+/** Media uses kind-specific folders; readers tolerate unknown archive entries. */
 export const INVK_IMAGES_PREFIX = 'images/';
 export const INVK_VIDEOS_PREFIX = 'videos/';
 
@@ -55,10 +40,7 @@ export type InvkFormatReason =
   /** The file is larger than the archive budget, or expands past it. */
   | 'too-large';
 
-/**
- * Every way reading an `.invk` can fail, as a value rather than a message. Call
- * sites map `reason` to a translated string; nothing user-facing is built here.
- */
+/** Callers localize typed failure reasons. */
 export class InvkFormatError extends Error {
   readonly reason: InvkFormatReason;
 

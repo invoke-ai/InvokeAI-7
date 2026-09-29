@@ -1,16 +1,20 @@
 import contextlib
+import json
 import logging
 from unittest import mock
 
 import pytest
 import torch
 
+from invokeai.backend.quantization.block_scale_tiles import unblock_scale_grid
 from invokeai.backend.quantization.fp8_scaled import (
     FP8_DTYPE,
+    QUANT_METADATA_KEY,
     Fp8ScaledLayer,
     attach_fp8_scales,
     cast_state_dict,
     count_fp8_weights,
+    decode_mx_block_scales,
     dequantize_fp8_scaled,
     dequantize_weight,
     detach_layer_sidechannel,
@@ -18,6 +22,7 @@ from invokeai.backend.quantization.fp8_scaled import (
     expand_weight_scale,
     extract_comfy_quant_hints,
     extract_fp8_scaled_layers,
+    forget_inconclusive_fp8_matmul_probe,
     is_matmul_usable_scale,
     is_scale_metadata_key,
     iter_weight_scale_pairs,
@@ -28,9 +33,15 @@ from invokeai.backend.quantization.fp8_scaled import (
     scaled_mm_linear,
     set_fp8_matmul_enabled,
     set_full_precision_hints_respected,
+    should_keep_fp8_weights,
     split_fp8_scaled_layers,
     strip_layer_path_prefix,
     warn_on_unattached_scales,
+)
+from tests.fixtures.quantized_payloads import (
+    MX_BLOCK_SIZE,
+    mxfp8_marker,
+    mxfp8_tensors,
 )
 
 cuda_fp8 = pytest.mark.skipif(
@@ -327,10 +338,8 @@ class TestQwen3VLKeyRemap:
     def test_scale_keys_and_hint_paths_land_on_the_same_module(self):
         """attach_fp8_scales resolves hint paths against the *model*, so the state-dict remap and the
         hint remap must agree - otherwise every recovered scale silently matches nothing."""
-        from invokeai.backend.model_manager.load.model_loaders.krea2 import (
-            _qwen3vl_target_key,
-            _remap_qwen3vl_singlefile_keys,
-        )
+        from invokeai.backend.model_manager.load.model_loaders.krea2 import _remap_qwen3vl_singlefile_keys
+        from invokeai.backend.model_manager.util.qwen3_vl import qwen3vl_target_key as _qwen3vl_target_key
 
         q, scale = _fp8_weight(32, 16)
         sd = _remap_qwen3vl_singlefile_keys(
@@ -542,6 +551,18 @@ class TestDequantize:
         layers = {"lin": Fp8ScaledLayer(weight_scale=scale)}
         dequantize_fp8_scaled(sd, layers)
         assert torch.equal(sd["lin.weight"], dequantize_weight(q, scale, torch.bfloat16))
+
+    @pytest.mark.parametrize("grid_dtype", [torch.uint8, getattr(torch, "float8_e8m0fnu", torch.uint8)])
+    def test_an_undecoded_mx_grid_is_refused_not_multiplied(self, grid_dtype: torch.dtype):
+        """`reject_undecoded_mx_scale` keys on the scale's dtype, and this is the one caller that
+        used to cast the scale to the compute dtype first — which erases the evidence. An exponent
+        byte multiplied in as a linear factor is ~127x, paired with the wrong rows besides: the
+        finite-but-wrong noise the whole MX decode exists to prevent."""
+        q = torch.randn(256, 8, dtype=torch.bfloat16).to(FP8_DTYPE)
+        grid = torch.full((256, 8), 127, dtype=grid_dtype)
+
+        with pytest.raises(NotImplementedError, match="MXFP8"):
+            dequantize_weight(q, grid, torch.bfloat16)
 
 
 class TestAttach:
@@ -998,7 +1019,9 @@ class TestProbeFailureCaching:
         with _probe_on_cpu():
             with mock.patch("torch._scaled_mm", side_effect=torch.OutOfMemoryError("transient")):
                 assert device_supports_fp8_matmul(device) is False
-            # A momentary OOM must not disable fp8 for the rest of the process.
+            # A momentary OOM must not disable fp8 for the rest of the process. The next *load* is
+            # what gives it another go; the forwards in between are answered from the record.
+            forget_inconclusive_fp8_matmul_probe(device)
             with mock.patch("torch._scaled_mm", return_value=torch.zeros(1)):
                 assert device_supports_fp8_matmul(device) is True
         reset_fp8_matmul_support_cache()
@@ -1015,26 +1038,51 @@ class TestProbeFailureCaching:
         reset_fp8_matmul_support_cache()
 
 
-class TestMxfp8IsRefused:
-    """MXFP8 block scales are refused rather than guessed at.
+class TestMxfp8:
+    """MXFP8 block scales are decoded when the file names them, and refused when it does not.
 
-    Established against a real pair of checkpoints: the MXFP8 and the scaled-fp8 build of
-    `krea2TurboOfficialComfy` share all 174 bf16 tensors bit-for-bit, so the scaled build is an
-    exact reference. Decoding the uint8 exponents as `2**(v-127)` and expanding them 32-wide
-    reaches a correlation of only 0.60 against it and generates a pure-noise image; the measured
-    per-block scale has no monotonic relation to the byte (112 and 116 give the same true scale),
-    which points at a swizzled scale layout.
-
-    Refusing matters because the block-wise expansion is what makes such a file *loadable*: without
-    a guard it produces garbage silently, which is strictly worse than the shape error it used to
-    raise.
+    Both halves matter. The grid is stored in cuBLAS tiles, so reading it row by row pairs blocks
+    with the wrong rows -- an earlier attempt at this decode reached a correlation of 0.60 against a
+    reference build and generated a pure-noise image, with the block-wise expansion making such a
+    file *loadable* rather than raising. And a `uint8` tensor beside an fp8 weight is not
+    self-evidently MXFP8: it is whatever its producer meant, so the layer has to say so.
     """
 
-    def test_a_uint8_block_scale_is_rejected_with_an_actionable_message(self) -> None:
-        sd = {
-            "lin.weight": torch.full((4, 64), 2.0).to(FP8_DTYPE),
-            "lin.weight_scale": torch.full((4, 2), 125, dtype=torch.uint8),
-        }
+    @staticmethod
+    def _mx_layer(exponents: torch.Tensor, marker: dict | None) -> tuple[dict, dict]:
+        """One MXFP8 layer and its hints, the layout coming from the shared builder.
+
+        The hints stay a parameter here because half these cells are about a layer that says the
+        wrong thing about itself, or nothing at all.
+        """
+        tensors, _expected = mxfp8_tensors("lin", exponents)
+        return dict(tensors), ({"lin": marker} if marker else {})
+
+    @staticmethod
+    def _mx_layer_with_expectation(exponents: torch.Tensor) -> tuple[dict, dict, torch.Tensor]:
+        """The well-formed case, plus the decoded scale the builder says to expect."""
+        tensors, expected = mxfp8_tensors("lin", exponents)
+        return dict(tensors), {"lin": mxfp8_marker()}, expected
+
+    def test_the_exponents_are_decoded_and_unswizzled(self) -> None:
+        """Distinct exponents across the grid, so a read in the stored order lands the wrong one on
+        all but a few entries.
+
+        Against the expectation the shared builder returns, not a restatement of it here: that value
+        is derived from the hand-written tile formula and the spec's bias, so it is the one statement
+        of the decode that does not come from the decode.
+        """
+        exponents = torch.arange(128 * 4, dtype=torch.int64).reshape(128, 4) % 8 + 124
+
+        sd, hints, expected = self._mx_layer_with_expectation(exponents)
+        layers = extract_fp8_scaled_layers(sd, layer_hints=hints)
+
+        assert torch.equal(layers["lin"].weight_scale, expected)
+
+    def test_a_grid_no_marker_or_header_names_is_refused(self) -> None:
+        """The dtype alone is not evidence. Reading an unknown producer's uint8 grid as MXFP8 is
+        exactly the guess that generates noise without a log line."""
+        sd, _ = self._mx_layer(torch.full((128, 4), 125, dtype=torch.int64), None)
 
         with pytest.raises(NotImplementedError) as excinfo:
             extract_fp8_scaled_layers(sd)
@@ -1044,8 +1092,149 @@ class TestMxfp8IsRefused:
         assert "MXFP8" in message
         assert "noise" in message, "say what happens if it were loaded anyway"
 
+    def test_the_header_names_it_too(self) -> None:
+        """Comfy-Org's Krea-2 build ships no per-tensor markers at all: every layer is named only in
+        `_quantization_metadata`, and without a `block_size`."""
+        exponents = torch.full((128, 4), 129, dtype=torch.int64)
+
+        sd, _ = self._mx_layer(exponents, None)
+        layers = extract_fp8_scaled_layers(sd, layer_hints={"lin": {"format": "mxfp8"}})
+
+        assert torch.equal(layers["lin"].weight_scale, torch.full((128, 4), 4.0))
+
+    def test_a_declared_block_size_that_contradicts_the_shapes_is_refused(self) -> None:
+        """The width is read off the shapes; the marker only cross-checks it. A producer that
+        changed the block size would otherwise be decoded against the wrong blocks."""
+        sd, hints = self._mx_layer(torch.full((128, 4), 127, dtype=torch.int64), {"format": "mxfp8", "block_size": 16})
+
+        with pytest.raises(ValueError, match="blocks of 16"):
+            extract_fp8_scaled_layers(sd, layer_hints=hints)
+
+    def test_the_reserved_nan_exponent_is_refused(self) -> None:
+        """0xFF is reserved in E8M0. Decoded as an exponent it is 2**128; propagated as NaN it
+        poisons the layer just as quietly. Neither published build contains one."""
+        exponents = torch.full((128, 4), 127, dtype=torch.int64)
+        exponents[7, 2] = 0xFF
+
+        sd, hints = self._mx_layer(exponents, {"format": "mxfp8", "block_size": 32})
+
+        with pytest.raises(ValueError, match="reserved"):
+            extract_fp8_scaled_layers(sd, layer_hints=hints)
+
+    def test_an_mxfp8_layer_is_folded_rather_than_kept_for_the_matmul(self) -> None:
+        """`_scaled_mm` cannot apply block scales before Blackwell and torch 2.8, so these layers
+        have to be widened at load. Driven through the split that actually decides it, not through
+        the predicate underneath: a decode that returned a per-tensor or per-row scale would satisfy
+        the predicate test and still be wrong here."""
+        exponents = torch.full((128, 4), 128, dtype=torch.int64)
+        sd, hints = self._mx_layer(exponents, {"format": "mxfp8", "block_size": 32})
+        layers = extract_fp8_scaled_layers(sd, layer_hints=hints)
+
+        surviving = split_fp8_scaled_layers(sd, layers, torch.float32)
+
+        assert surviving == {}
+        assert sd["lin.weight"].dtype is torch.float32
+
+    def test_the_decoded_scale_folds_into_the_weight(self) -> None:
+        """End to end: the grid widens 32-fold across the row and multiplies the codes."""
+        exponents = torch.tensor([[128, 129, 130, 131]] * 128, dtype=torch.int64)
+
+        sd, hints = self._mx_layer(exponents, {"format": "mxfp8", "block_size": 32})
+        layers = extract_fp8_scaled_layers(sd, layer_hints=hints)
+        dequantize_fp8_scaled(sd, layers, torch.float32)
+
+        expected = torch.cat([torch.full((128, 32), 2.0 ** (e - 127)) for e in (128, 129, 130, 131)], dim=1)
+        assert torch.equal(sd["lin.weight"], expected)
+
+    def test_every_exponent_byte_decodes_the_way_torch_reads_e8m0(self) -> None:
+        """The bias is checked against the specification, not against a restatement of the code.
+
+        `torch.float8_e8m0fnu` *is* the encoding: a byte is a biased exponent and nothing else. So
+        every finite value is decoded here and compared with what torch makes of the same byte. An
+        off-by-one bias, or reading the byte as a linear multiplier — the mistake that shipped once
+        and inflated weights ~470,000x — cannot survive this.
+
+        No checkpoint is needed for it, which matters: the two published MXFP8 builds are Krea-2's
+        and NVIDIA's PiD, and neither is licensed for their weights to be carried in this repo. The
+        de-swizzle is measured against them instead, and the numbers are in the class docstring.
+        """
+        finite = torch.arange(255, dtype=torch.uint8)
+
+        sd, hints = self._mx_layer(finite.reshape(1, 255).expand(128, 255)[:, :4].contiguous().long(), None)
+        decoded = decode_mx_block_scales("lin", sd["lin.weight"], sd["lin.weight_scale"], {"format": "mxfp8"})
+
+        expected = unblock_scale_grid(sd["lin.weight_scale"]).view(torch.float8_e8m0fnu).float()
+        assert torch.equal(decoded, expected)
+
+    def test_a_scale_typed_as_e8m0_decodes_like_the_same_bytes_as_uint8(self) -> None:
+        """safetensors has no E8M0 dtype so producers write `uint8`, but torch grew
+        `float8_e8m0fnu` and another producer may use it. The two must decode identically: the code
+        reinterprets the bytes rather than converting the values, and `scale.to(torch.int32)` on an
+        e8m0 tensor silently yields zeros — every scale would become 2**-127."""
+        exponents = torch.arange(128 * 4, dtype=torch.int64).reshape(128, 4) % 8 + 124
+
+        as_bytes, hints = self._mx_layer(exponents, {"format": "mxfp8"})
+        as_e8m0 = dict(as_bytes)
+        as_e8m0["lin.weight_scale"] = as_bytes["lin.weight_scale"].view(torch.float8_e8m0fnu)
+
+        assert torch.equal(
+            extract_fp8_scaled_layers(as_bytes, layer_hints=hints)["lin"].weight_scale,
+            extract_fp8_scaled_layers(as_e8m0, layer_hints=hints)["lin"].weight_scale,
+        )
+
+    def test_the_header_transport_names_it_too(self) -> None:
+        """Comfy-Org's Krea-2 build — the one file this decode reaches today — ships no per-tensor
+        markers at all: all 256 layers are named only in `_quantization_metadata`, and without a
+        `block_size`. So the header is read here rather than hints being handed in ready-made."""
+        exponents = torch.full((128, 4), 129, dtype=torch.int64)
+        sd, _ = self._mx_layer(exponents, None)
+        metadata = {QUANT_METADATA_KEY: json.dumps({"layers": {"lin": {"format": "mxfp8"}}})}
+
+        layers = extract_fp8_scaled_layers(sd, metadata=metadata)
+
+        assert torch.equal(layers["lin"].weight_scale, torch.full((128, 4), 4.0))
+
+    def test_a_grid_whose_rows_do_not_match_the_weight_is_refused(self) -> None:
+        """Left to `expand_weight_scale`, a short grid is repeat_interleaved along the row axis
+        instead — every row scaled by another row's exponent, loading cleanly."""
+        sd, hints = self._mx_layer(torch.full((128, 4), 127, dtype=torch.int64), {"format": "mxfp8"})
+        sd["lin.weight"] = torch.ones(256, 128).to(FP8_DTYPE)
+
+        with pytest.raises(ValueError, match="matching the weight"):
+            extract_fp8_scaled_layers(sd, layer_hints=hints)
+
+    def test_an_inferred_block_width_the_standard_does_not_use_is_refused(self) -> None:
+        """Krea-2's build declares no `block_size`, so for the one reachable file the width is
+        inferred outright. MX is 32 by definition; anything else is a producer this decode has not
+        seen, and guessing at it is what this whole change exists to stop."""
+        exponents = torch.full((128, 8), 127, dtype=torch.int64)
+        sd, hints = self._mx_layer(exponents, {"format": "mxfp8"})
+        sd["lin.weight"] = torch.ones(128, 128).to(FP8_DTYPE)
+
+        # The message names the width MX is defined at, which is the one the file failed to meet.
+        with pytest.raises(ValueError, match="blocks of 32"):
+            extract_fp8_scaled_layers(sd, layer_hints=hints)
+
+    def test_a_padded_block_axis_cannot_pass_as_a_wider_block(self) -> None:
+        """`to_blocked` pads the *block* axis up to a multiple of 4, which is what makes the tile
+        check pass -- so the tile check can never see that padding. An `in_features` of 192 gives 6
+        real blocks padded to 8, and 192/8 divides evenly at 24, so nothing but the block width
+        itself stands between a padded grid and every scale landing on the wrong 24 elements."""
+        weight = torch.ones(128, 192).to(FP8_DTYPE)
+        grid = torch.full((128, 8), 127, dtype=torch.uint8)
+
+        with pytest.raises(ValueError, match="blocks of 32"):
+            decode_mx_block_scales("lin", weight, grid, {"format": "mxfp8"})
+
+    def test_a_loader_that_folds_without_decoding_refuses_rather_than_multiplying_bytes(self) -> None:
+        """Several loaders fold `weight_scale` into the weight directly instead of going through
+        the extraction. There the exponent bytes would be used as linear multipliers -- ~120-135
+        instead of 2**(v-127) -- which loads cleanly and generates noise."""
+        with pytest.raises(NotImplementedError, match="folds weight scales"):
+            expand_weight_scale(torch.ones(128, 128), torch.full((128, 4), 127, dtype=torch.uint8))
+
     def test_float_scales_are_unaffected(self) -> None:
-        """The guard keys off the dtype, so ordinary scaled-fp8 checkpoints must still load."""
+        """The decode keys off the dtype, so ordinary scaled-fp8 checkpoints must still load."""
         sd = {
             "lin.weight": torch.full((4, 64), 2.0).to(FP8_DTYPE),
             "lin.weight_scale": torch.full((4, 2), 0.25),
@@ -1150,10 +1339,44 @@ class TestProbeTransientFailures:
         with _probe_on_cpu():
             with mock.patch("torch._scaled_mm", side_effect=RuntimeError("CUDA driver reset")):
                 assert device_supports_fp8_matmul(device) is False
-            # Inconclusive, so the next load re-probes rather than the process losing fp8.
+            # Inconclusive, so the next *load* re-probes rather than the process losing fp8.
+            forget_inconclusive_fp8_matmul_probe(device)
             with mock.patch("torch._scaled_mm", return_value=torch.zeros(1)):
                 assert device_supports_fp8_matmul(device) is True
         reset_fp8_matmul_support_cache()
+
+    def test_an_inconclusive_probe_is_not_repeated_on_the_forward_path(self) -> None:
+        """`CustomLinear._can_use_fp8_matmul` asks once per quantized fp8 Linear per step.
+
+        Leaving an inconclusive answer unrecorded meant re-probing every one of them, every step,
+        for the whole generation -- measured on a 4090 at 32 probes/step for 32 Linears, against 1
+        in total once it is recorded. Each probe allocates three device tensors and launches a
+        `_scaled_mm` that is about to fail.
+        """
+        reset_fp8_matmul_support_cache()
+        device = torch.device("cuda", 0)
+        with _probe_on_cpu():
+            with mock.patch("torch._scaled_mm", side_effect=RuntimeError("CUDA driver reset")) as probe:
+                for _ in range(5):
+                    assert device_supports_fp8_matmul(device) is False
+            assert probe.call_count == 1, "the forward path re-probed"
+        reset_fp8_matmul_support_cache()
+
+    def test_a_load_gives_an_inconclusive_probe_another_go(self) -> None:
+        """The retry belongs to the load, which can afford one probe, and not to the forward."""
+        reset_fp8_matmul_support_cache()
+        device = torch.device("cuda", 0)
+        set_fp8_matmul_enabled(True)
+        try:
+            with _probe_on_cpu():
+                with mock.patch("torch._scaled_mm", side_effect=torch.OutOfMemoryError("transient")):
+                    assert should_keep_fp8_weights(device) is False
+                with mock.patch("torch._scaled_mm", return_value=torch.zeros(1)) as probe:
+                    assert should_keep_fp8_weights(device) is True
+                assert probe.call_count == 1
+        finally:
+            set_fp8_matmul_enabled(None)
+            reset_fp8_matmul_support_cache()
 
     def test_a_capability_error_is_cached(self) -> None:
         reset_fp8_matmul_support_cache()
@@ -1307,3 +1530,50 @@ class TestMalformedWeightScale:
         tensor a (32) must match tensor b (7)" from inside the fold, naming neither layer nor file."""
         with pytest.raises(ValueError, match="neither per-tensor nor per-output-channel"):
             expand_weight_scale(torch.ones(32, 16), torch.full((7,), 2.0))
+
+
+class TestTheDecodeWidensTheGridOutsideThisPrediction:
+    """Why this predictor cannot answer about an MXFP8 build, and what does.
+
+    `extract_fp8_scaled_layers` pops every scale key and hands back a mapping, and for an MXFP8 layer
+    it does more than move them: `decode_mx_block_scales` replaces the stored `uint8` exponent grid
+    with a float32 one four times the size. That happens before the caller's `make_room`, so those
+    bytes are resident while the cache decides what to evict -- and this function cannot see them,
+    because it walks the state dict they have left.
+
+    That is a property of its contract rather than a defect in it: it answers about the dict, exactly,
+    and `TestPredictionIsSplitAware` pins the equality. Adding the mapping's bytes here would turn the
+    answer into a peak and redden all three of those parametrizations. The question belongs to
+    `reserve_for_load`, which is handed both halves; `tests/backend/quantization/test_load_plan.py`
+    is where the grid is asserted to be inside the reservation.
+
+    Kept here because the measurement is what motivates that function: on the released 12.6 GiB Krea-2
+    build the grids total 1.455 GiB across 256 layers, more than the ~1.21 GB fold transient of its
+    largest layer, and every seam used to omit them.
+    """
+
+    @staticmethod
+    def _mx_layer(rows: int = 512, blocks: int = 16) -> tuple[dict, dict, torch.nn.Module]:
+        exponents = (torch.arange(rows * blocks, dtype=torch.int64).reshape(rows, blocks) % 8) + 124
+        sd, hints, _expected = TestMxfp8._mx_layer_with_expectation(exponents)
+        model = torch.nn.Module()
+        model.add_module("lin", torch.nn.Linear(blocks * MX_BLOCK_SIZE, rows, bias=False))
+        return sd, hints, model
+
+    def test_the_decode_widens_the_grid_and_this_prediction_does_not_see_it(self) -> None:
+        """The stored grid leaves the state dict and a four-times-larger one takes its place in a
+        mapping this function is handed but, by its contract, does not weigh."""
+        sd, hints, model = self._mx_layer()
+        stored_bytes = sd["lin.weight_scale"].nelement() * sd["lin.weight_scale"].element_size()
+
+        layers = extract_fp8_scaled_layers(sd, layer_hints=hints)
+        grid = layers["lin"].weight_scale
+
+        assert "lin.weight_scale" not in sd
+        assert grid.dtype is torch.float32 and stored_bytes * 4 == grid.nelement() * grid.element_size()
+        # `keep_fp8=True`, the branch where `scaled_layers` and `model` are consulted at all. The MX
+        # layer is charged 2 B/element either way, because a block-wise scale is never matmul-usable.
+        assert (
+            predict_cast_state_dict_size(sd, torch.bfloat16, keep_fp8=True, model=model, scaled_layers=layers)
+            == sd["lin.weight"].nelement() * 2
+        )

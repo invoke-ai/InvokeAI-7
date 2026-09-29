@@ -1,22 +1,7 @@
 /**
- * App-shell service worker. The manifest read below is a placeholder that
- * `scripts/service-worker-plugin.mjs` replaces at build time with
- * `{ version, assets }` — the build's content hash and its emitted asset file
- * names. The placeholder must appear exactly once; the plugin enforces this.
- *
- * Strategy:
- * - Navigations are network-first with the cached shell as offline fallback,
- *   so a plain reload always picks up a new deploy — no update UI needed.
- * - Hashed `assets/*` files are cache-first: their names change when their
- *   content does, so a cache hit is always correct and repeat boots skip the
- *   network entirely.
- * - Locale files are stale-while-revalidate: instant from cache, refreshed in
- *   the background.
- * - Everything else (API, sockets) is untouched.
- *
- * Deliberately no `skipWaiting()`: a new worker prunes assets its manifest no
- * longer lists, and a still-open old tab may yet lazy-load one of them. The
- * new worker activates once the old tabs are gone.
+ * The plugin injects one {version, assets} manifest. Navigation is network-first, hashed assets cache-first,
+ * locales stale-while-revalidate; API/socket traffic is untouched. Do not skipWaiting: old tabs may still need
+ * lazy assets the new worker prunes.
  */
 
 const MANIFEST = self.__SW_MANIFEST__;
@@ -88,8 +73,7 @@ const respondCacheFirst = async (request) => {
 
   const response = await fetch(request);
 
-  // Only current-manifest assets are written back, which keeps the cache
-  // bounded; the activate handler prunes the previous build's entries.
+  // Cache only current-manifest assets; activation prunes old entries.
   if (response.ok && ASSET_URLS.has(request.url)) {
     const cache = await caches.open(ASSET_CACHE);
 

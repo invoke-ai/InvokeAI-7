@@ -13,11 +13,8 @@ import { layerChildRowKey } from '@workbench/layerPanelState';
 export { layerChildRowKey };
 
 /**
- * The Layers panel's projected child rows: per-layer modifiers (reference
- * images, mask noise and denoise limit) presented as rows beneath the layer
- * that owns them. Rows are a pure projection of config the layer already
- * carries — the document keeps its closed node union, and every edit
- * round-trips through the same `patch-config` seam the Properties pane uses.
+ * Project modifier rows from existing layer config without expanding the document node union; edits use the same
+ * patch-config seam as Properties.
  */
 
 export type LayerChildRowKind =
@@ -444,11 +441,7 @@ export const layerChildDropCommand = (
   };
 };
 
-/**
- * The document command a child-row action resolves to, or `null` when the
- * layer or item is gone or the action changes nothing. Both sides of the patch
- * carry the modifier's whole value, exactly as the Properties editors commit.
- */
+/** Resolve child actions to whole-value patches, or null for missing/no-op targets. */
 export const layerChildRowCommand = (
   document: CanvasDocumentContractV3,
   target: Pick<ProjectedChildRow, 'layerId' | 'itemId'>,

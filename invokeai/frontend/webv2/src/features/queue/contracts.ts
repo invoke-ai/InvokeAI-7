@@ -1,7 +1,6 @@
 /**
- * Stable, implementation-free Queue contracts for owners that persist or
- * present Queue state. Keeping this facade separate prevents contract-only
- * consumers from loading the Queue runtime and widget implementation.
+ * Keep contracts implementation-free so persistence and presentation consumers do not load Queue runtime or
+ * widgets.
  */
 export type {
   QueueHistoryItemStatus,
@@ -26,8 +25,6 @@ export type {
   QueueSourceId,
   QueueStatusReadModel,
   QueueSubmissionPresentation,
-  QueueWorkflowRunCompletedEvent,
-  QueueWorkflowRunSink,
   TerminalQueueItemStatus,
 } from './core/types';
 export {
@@ -77,6 +74,7 @@ export {
 } from './data/events';
 
 export {
+  getFollowedProgressSession,
   getQueueActiveSessions,
   getQueueProgressSessions,
   isGalleryProgressItem,

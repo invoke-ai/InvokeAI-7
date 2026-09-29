@@ -1,15 +1,6 @@
 /**
- * The color-picker tool: while held down (usually via the alt-hold temp-tool
- * switch the pointer pipeline already drives — see `input/pointerPipeline.ts`),
- * it samples the composited document color under the cursor and hands it to
- * `resolveColorSample` — in the app that lands in the active
- * foreground/background target, so releasing alt drops the user right back
- * into painting with the picked color. Sampling reads the layer cache directly
- * through {@link sampleDocumentColor} — this tool never dispatches and never
- * touches pixels.
- *
- * Each engine builds its own instance so cursor-ring state is per-engine.
- * Zero React, zero import-time side effects.
+ * Samples composited cached color while pressed and routes it to the active color target. Alt-hold restoration
+ * returns to the prior tool; the picker neither dispatches nor edits pixels. State is per engine.
  */
 
 import type { PointerInput } from '@workbench/canvas-engine/types';
@@ -31,11 +22,7 @@ const updateCursorRing = (ctx: ToolContext, input: PointerInput): void => {
   ctx.invalidate({ overlay: true });
 };
 
-/**
- * Samples the composited color under `input` and offers it through
- * `resolveColorSample` (one-shot claim, then the workbench router). The brush
- * color option is only the engine-standalone fallback.
- */
+/** Offers sampled color to the one-shot claim then workbench router; standalone fallback updates brush color. */
 const pickColorAt = (ctx: ToolContext, input: PointerInput): void => {
   const doc = ctx.getDocument();
   if (!doc) {

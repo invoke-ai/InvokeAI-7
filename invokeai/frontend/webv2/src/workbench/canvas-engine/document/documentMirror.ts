@@ -18,12 +18,9 @@ export interface DocumentMirrorStore {
 /** Callbacks fired when the mirrored document changes. */
 export interface DocumentMirrorCallbacks {
   /**
-   * One or more leaves were added, removed, replaced, or had their effective state changed by an
-   * ancestor (the `changed` ids). `sourceChanged` is the subset whose rasterization source
-   * (`source` for raster/control layers, `mask.bitmap` for guidance/mask layers) changed, plus any
-   * newly added leaf: the leaves whose cached pixels are now stale. A property, transform, or
-   * ancestor-flag change reports the id in `changed` but not in `sourceChanged`, so the engine
-   * keeps its raster cache.
+   * Reports leaf or ancestor-effective changes. `sourceChanged` contains added leaves and changed raster/control
+   * sources or mask bitmaps whose caches are stale. Property, transform and ancestor-flag changes retain cached
+   * pixels.
    */
   onLayersChanged(changed: string[], sourceChanged: string[]): void;
   /**
@@ -41,10 +38,8 @@ export interface DocumentMirrorCallbacks {
   /** The staging area changed. */
   onStagingChanged(): void;
   /**
-   * The document's `selectedLayerId` changed. A selection-only edit produces a new `document`
-   * object with the same `stacks` reference and an equal `bbox`, so none of the other callbacks
-   * fire for it. The engine uses it to repaint selection-derived chrome and to close per-layer
-   * transient sessions, since the layer panel is the sole authority on which node is active.
+   * Selection-only changes reuse stacks and bbox, requiring a separate callback for selection chrome and per-layer
+   * session cleanup.
    */
   onSelectionChanged?(selectedLayerId: string | null): void;
 }
@@ -65,12 +60,8 @@ const bboxEqual = (a: Bbox, b: Bbox): boolean =>
   a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 
 /**
- * The reference whose change requires re-rasterizing a leaf's cache: the `source` for
- * raster/control layers, the mask's `bitmap` for guidance/mask layers. The reducer preserves this
- * reference across a property-only edit, so comparing it distinguishes a genuine source swap from
- * an opacity/blend/lock/visibility/rename/nudge tweak. For masks the reference is the bitmap, not
- * the whole `mask`: the cache holds only the alpha stencil, so a fill-only change must not clear
- * unflushed strokes that live only in the cache.
+ * Raster invalidation identity is raster/control `source` or mask `bitmap`. Property edits preserve it; mask fill
+ * changes must preserve unflushed alpha-cache strokes.
  */
 const rasterSourceRef = (layer: CanvasLayerContract): unknown =>
   layer.type === 'raster' || layer.type === 'control' ? layer.source : layer.mask.bitmap;
@@ -87,9 +78,8 @@ interface ForestDiff {
 }
 
 /**
- * Diffs two forests by leaf identity and ancestor-effective state. A leaf whose object is unchanged
- * but whose ancestors now enable, lock or hide it differently is reported as changed, because its
- * rendered contribution changed even though nothing about it did.
+ * Diffs leaf identity and ancestor-effective enabled, locked and hidden state, including unchanged leaves affected
+ * by ancestors.
  */
 const diffForests = (prev: CanvasDocumentIndex, next: CanvasDocumentIndex): ForestDiff => {
   const changed = new Set<string>();

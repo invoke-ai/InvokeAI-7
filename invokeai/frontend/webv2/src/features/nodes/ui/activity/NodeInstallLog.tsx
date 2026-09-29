@@ -22,10 +22,6 @@ const STATUS_BADGES: Record<CustomNodeInstallLogEntry['status'], { labelKey: str
   uninstalled: { labelKey: 'nodes.uninstalled', palette: 'orange' },
 };
 
-/**
- * Session install activity for the nodes manager. Tracks install / uninstall
- * outcomes for the current session in a sticky-header table.
- */
 export const NodeInstallLog = () => {
   const { t } = useTranslation();
   const log = useCustomNodeInstallLog();

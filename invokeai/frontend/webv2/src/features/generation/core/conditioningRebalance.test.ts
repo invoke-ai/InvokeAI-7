@@ -48,8 +48,7 @@ describe('parseRebalanceWeights', () => {
   });
 
   it('rejects hex, which Number() accepts but Python float() does not', () => {
-    // The string is forwarded verbatim to the node, so accepting it here would only
-    // move the failure to mid-generation.
+    // Reject malformed values before forwarding them verbatim to the backend.
     expect(parseRebalanceWeights('0x10,1,1,1,1,1,1,1,1,1,1,1')).toBeNull();
     expect(parseRebalanceWeights('0b11,1,1,1,1,1,1,1,1,1,1,1')).toBeNull();
     expect(parseRebalanceWeights('0o17,1,1,1,1,1,1,1,1,1,1,1')).toBeNull();
@@ -143,7 +142,17 @@ describe('getRebalanceSparklinePath', () => {
 
 describe('presets', () => {
   it('ships the backend defaults and a neutral pass', () => {
-    expect(BUILTIN_REBALANCE_PRESETS.map((preset) => preset.id)).toEqual(['default', 'neutral']);
+    expect(BUILTIN_REBALANCE_PRESETS.map((preset) => preset.id)).toEqual([
+      'default',
+      'neutral',
+      'subtle',
+      'strong',
+      'early',
+      'late',
+    ]);
+    for (const preset of BUILTIN_REBALANCE_PRESETS) {
+      expect(isValidKrea2RebalanceWeights(preset.weights), preset.id).toBe(true);
+    }
     expect(BUILTIN_REBALANCE_PRESETS[0]?.weights).toBe(DEFAULT_KREA2_REBALANCE_WEIGHTS);
     expect(BUILTIN_REBALANCE_PRESETS[0]?.multiplier).toBe(DEFAULT_KREA2_REBALANCE_MULTIPLIER);
     expect(BUILTIN_REBALANCE_PRESETS[1]?.multiplier).toBe(1);

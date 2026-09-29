@@ -1,11 +1,17 @@
 import type { GenerationModelCatalogItem as ModelConfig, PromptHistoryItem } from '@features/generation/contracts';
 import type { PromptTemplateSnapshot } from '@features/generation/core/promptTemplates';
-import type { GenerateLora, GenerateModelConfig } from '@features/generation/core/types';
+import type {
+  ExpandPromptSuggestion,
+  GenerateLora,
+  GenerateModelConfig,
+  ImageWithDims,
+} from '@features/generation/core/types';
 import type { DynamicPromptsFieldConfig } from '@features/generation/ui/promptFields/DynamicPromptsPanel';
 import type { DroppedPromptImage } from '@features/generation/ui/promptFields/usePromptImageDrop';
 import type { ChangeEvent, MouseEvent } from 'react';
 
-import { HStack, Icon, Image, Input, Popover, Portal, Separator, Stack, Text } from '@chakra-ui/react';
+import { Checkbox, HStack, Icon, Image, Input, Popover, Portal, Separator, Stack, Text } from '@chakra-ui/react';
+import { galleryImageUrls } from '@features/gallery/utility';
 import { filterPromptHistory } from '@features/generation/core/promptHistory';
 import { resolveSelectedSystemPromptId } from '@features/generation/core/systemPrompts';
 import { llmTaskProgressStore } from '@features/generation/data/llmTaskProgress';
@@ -45,11 +51,7 @@ import { useTranslation } from 'react-i18next';
 const POPOVER_POSITIONING_BOTTOM_END = { placement: 'bottom-end' } as const;
 const TEXT_LLM_MODEL_TYPES = ['text_llm'];
 const LLAVA_MODEL_TYPES = ['llava_onevision'];
-/**
- * The way out of an empty state that needs a model installed. Availability is
- * explained inside the popover rather than by disabling the trigger, so the
- * dead end always has a door.
- */
+/** Keep triggers available so missing-model states can explain recovery. */
 const OpenModelManagerButton = ({ modelType }: { modelType?: string }) => {
   const { t } = useTranslation();
   const { openManager } = useGenerationUi().models;
@@ -65,15 +67,6 @@ const OpenModelManagerButton = ({ modelType }: { modelType?: string }) => {
   );
 };
 
-/**
- * Everything the prompt actions know about the applied template, in one prop.
- *
- * These arrived as six flat props among nineteen, three of them optional and
- * one — `hasPromptTemplate` — restating `activeTemplate !== null` at every call
- * site. Grouping them says what they are: not six settings but one state, which
- * either exists or does not, and which the buttons around it read to decide
- * whether the authored prompt is theirs to rewrite.
- */
 export interface PromptTemplateState {
   /** The applied template, or null when none is. */
   active: PromptTemplateSnapshot | null;
@@ -95,6 +88,8 @@ interface PositivePromptActionsProps {
   dynamicPrompts: DynamicPromptsFieldConfig | null;
   /** The authored prompt wrapped by the active template — what actually expands. */
   effectivePositivePrompt: string;
+  /** Absent on surfaces whose model family has no prompt enhancer of its own. */
+  expandPromptSuggestion?: ExpandPromptSuggestion | null;
   loras: GenerateLora[];
   isPromptTriggerPickerOpen: boolean;
   onUsePrompt: (prompt: PromptHistoryItem) => void;
@@ -113,6 +108,7 @@ export const PositivePromptActions = ({
   droppedImage,
   dynamicPrompts,
   effectivePositivePrompt,
+  expandPromptSuggestion,
   isPromptTriggerPickerOpen,
   onInsertText,
   onOpenPromptTriggerPicker,
@@ -133,14 +129,11 @@ export const PositivePromptActions = ({
           positivePrompt={effectivePositivePrompt}
           showSyntaxHighlighting={showSyntaxHighlighting}
           onInsertText={onInsertText}
-          // Picking one expansion writes already-merged text into the authored
-          // field, so the template has to come off in the same commit or the next
-          // Invoke would wrap it again.
+          // Applying merged expansion text must remove its template atomically.
           onUsePrompt={template.active ? template.onFlatten : onPositivePromptChangeImmediate}
         />
       ) : null}
-      {/* These three rewrite the authored prompt, which view mode is hiding, so
-          they stay out of reach until the user is looking at their own text. */}
+      {/* Disable authored-text rewrites while merged view hides the authored text. */}
       <AddPromptTriggerButton
         isOpen={isPromptTriggerPickerOpen || template.isViewMode}
         onOpenPromptTriggerPicker={onOpenPromptTriggerPicker}
@@ -149,6 +142,7 @@ export const PositivePromptActions = ({
         isDisabled={template.isViewMode}
         positivePrompt={positivePrompt}
         projectId={projectId}
+        suggestion={expandPromptSuggestion ?? null}
         onPositivePromptChange={onPositivePromptChangeImmediate}
       />
       <ImageToPromptButton
@@ -162,11 +156,7 @@ export const PositivePromptActions = ({
   );
 };
 
-/**
- * Picking a template, and switching between the authored text and the merged
- * result. The second button appears only once there is a template to look
- * through — with nothing applied the two views are the same text.
- */
+/** Show the view toggle only for an applied template. */
 const PromptTemplateControls = ({
   showSyntaxHighlighting,
   template,
@@ -188,10 +178,6 @@ const PromptTemplateControls = ({
   </>
 );
 
-/**
- * Swaps the prompt box between the authored text and the merged result. Quiet
- * states only — the icon changes, nothing tints or animates.
- */
 const TemplateViewModeButton = ({
   isViewMode,
   onChange,
@@ -222,9 +208,7 @@ export const AddPromptTriggerButton = ({
   onOpenPromptTriggerPicker: (anchorElement: HTMLElement) => void;
 }) => {
   const { t } = useTranslation();
-  // Not disabled while open like it used to be: the greyed button read as
-  // broken next to the other action popovers' expanded tint. The guard keeps
-  // the dismiss-then-click sequence from immediately reopening.
+  // Guard dismiss-then-click so the same gesture cannot immediately reopen the popup.
   const handleClick = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
       if (!isOpen) {
@@ -299,8 +283,6 @@ export const PromptTriggerPopover = ({
         <Popover.Positioner>
           <PopoverContent w="22rem">
             <Popover.Body p="2.5">
-              {/* With nothing to search or scroll, the popover hugs its empty
-                  state instead of holding the full list height open. */}
               {options.length === 0 ? (
                 <PromptTriggerEmptyState />
               ) : (
@@ -348,8 +330,6 @@ export const PromptTriggerPopover = ({
 const PromptTriggerEmptyState = () => {
   const { t } = useTranslation();
 
-  // The same anatomy as the image-to-prompt popover's no-model branch:
-  // uppercase title, one subtle line, the model-manager button.
   return (
     <Stack align="start" gap="2.5">
       <Text color="fg.subtle" fontSize="2xs" fontWeight="700" textTransform="uppercase">
@@ -396,10 +376,12 @@ const ExpandPromptButton = ({
   onPositivePromptChange,
   positivePrompt,
   projectId,
+  suggestion,
 }: {
   isDisabled: boolean;
   positivePrompt: string;
   projectId: string;
+  suggestion: ExpandPromptSuggestion | null;
   onPositivePromptChange: (prompt: string) => void;
 }) => {
   const { t } = useTranslation();
@@ -415,13 +397,27 @@ const ExpandPromptButton = ({
   const [taskId, setTaskId] = useState<string | null>(null);
   const [selectedModelKey, setSelectedModelKey] = useState<string | null>(null);
   const [selectedSystemPromptId, setSelectedSystemPromptId] = useState<string | null>(null);
+  // Keyed by image so unticking one frame does not carry over to the next one.
+  const [excludedImageName, setExcludedImageName] = useState<string | null>(null);
   const textLlmModels = models.filter((model) => model.type === 'text_llm');
-  const selectedModel = selectedModelKey ? textLlmModels.find((model) => model.key === selectedModelKey) : null;
+  const suggestedModelKey = suggestion?.modelSource
+    ? (textLlmModels.find((model) => model.source === suggestion.modelSource)?.key ?? null)
+    : null;
+  // An explicit choice wins; otherwise the widget's suggested enhancer, when it is installed.
+  const effectiveModelKey = selectedModelKey ?? suggestedModelKey;
+  const selectedModel = effectiveModelKey ? textLlmModels.find((model) => model.key === effectiveModelKey) : null;
+  const suggestedImage = suggestion?.image ?? null;
+  const canReadImages = selectedModel?.supports_images === true;
+  const isImageIncluded = suggestedImage !== null && excludedImageName !== suggestedImage.image_name;
+  const conditioningImage = suggestedImage && canReadImages && isImageIncluded ? suggestedImage : null;
   // The list is behind the popover, so a closed button has nothing to fetch.
   const systemPrompts = useSystemPrompts({ isEnabled: isOpen });
-  // Resolved rather than stored: the id outlives the record it points at, and an unselected
-  // picker should still expand with the first available prompt rather than none at all.
-  const effectiveSystemPromptId = resolveSelectedSystemPromptId(systemPrompts.prompts, selectedSystemPromptId);
+  const suggestedSystemPromptId = conditioningImage ? suggestion?.imageSystemPromptId : suggestion?.systemPromptId;
+  // Resolve selection at read time after deletion or without an explicit choice.
+  const effectiveSystemPromptId = resolveSelectedSystemPromptId(
+    systemPrompts.prompts,
+    selectedSystemPromptId ?? suggestedSystemPromptId ?? null
+  );
   const selectedSystemPrompt = systemPrompts.prompts.find((prompt) => prompt.id === effectiveSystemPromptId);
 
   // eslint-disable-next-line react/refs
@@ -442,8 +438,8 @@ const ExpandPromptButton = ({
 
     try {
       const result = await expandPrompt({
-        // A structured prompt needs more room than the endpoint's default allows, so the
-        // selected prompt's own cap travels with it. Omitted when it has none.
+        // Forward the selected prompt's optional token cap to expansion.
+        image_name: conditioningImage?.image_name,
         max_tokens: selectedSystemPrompt?.maxTokens ?? undefined,
         model_key: selectedModel.key,
         prompt: positivePrompt,
@@ -468,9 +464,24 @@ const ExpandPromptButton = ({
       setTaskId(null);
       setIsLoading(false);
     }
-  }, [notifications, onPositivePromptChange, positivePrompt, projectId, selectedModel, selectedSystemPrompt, t]);
+  }, [
+    conditioningImage,
+    notifications,
+    onPositivePromptChange,
+    positivePrompt,
+    projectId,
+    selectedModel,
+    selectedSystemPrompt,
+    t,
+  ]);
 
   const popoverIds = useMemo(() => ({ trigger: triggerId }), [triggerId]);
+  const suggestedImageName = suggestedImage?.image_name ?? null;
+  const handleImageIncludedChange = useCallback(
+    (event: { checked: boolean | 'indeterminate' }) =>
+      setExcludedImageName(event.checked === true ? null : suggestedImageName),
+    [suggestedImageName]
+  );
   const handleOpenChange = useCallback((event: { open: boolean }) => setIsOpen(event.open), []);
   const handleModelChange = useCallback((model: ModelConfig | null) => setSelectedModelKey(model?.key ?? null), []);
   const handleRunExpandPrompt = useCallback(() => void runExpandPrompt(), [runExpandPrompt]);
@@ -518,14 +529,32 @@ const ExpandPromptButton = ({
                       modelTypes={TEXT_LLM_MODEL_TYPES}
                       placeholder={t('widgets.generate.selectTextLlm')}
                       size="xs"
-                      value={selectedModelKey}
+                      value={effectiveModelKey}
                       onChange={handleModelChange}
                     />
+                    {suggestion?.modelSource && !suggestedModelKey ? (
+                      <>
+                        <Text color="fg.subtle" fontSize="xs">
+                          {t('widgets.generate.expandSuggestedModelMissing', {
+                            model: suggestion.modelName ?? suggestion.modelSource,
+                          })}
+                        </Text>
+                        <OpenModelManagerButton modelType="text_llm" />
+                      </>
+                    ) : null}
                     <SystemPromptsField
                       catalog={systemPrompts}
                       selectedId={effectiveSystemPromptId}
                       onSelect={setSelectedSystemPromptId}
                     />
+                    {suggestedImage && selectedModel ? (
+                      <ExpandPromptImageOption
+                        canReadImages={canReadImages}
+                        image={suggestedImage}
+                        isIncluded={isImageIncluded}
+                        onIncludedChange={handleImageIncludedChange}
+                      />
+                    ) : null}
                     <LLMTaskProgressDisplay taskId={taskId} />
                     {positivePrompt.trim() ? null : (
                       <Text color="fg.subtle" fontSize="xs">
@@ -533,7 +562,8 @@ const ExpandPromptButton = ({
                       </Text>
                     )}
                     <Button
-                      disabled={!selectedModel || !positivePrompt.trim()}
+                      // The request carries the system prompt's text, so it waits for the list.
+                      disabled={!selectedModel || !positivePrompt.trim() || systemPrompts.isLoading}
                       loading={isLoading}
                       size="xs"
                       onClick={handleRunExpandPrompt}
@@ -548,6 +578,46 @@ const ExpandPromptButton = ({
         </Popover.Positioner>
       </Portal>
     </Popover.Root>
+  );
+};
+
+const ExpandPromptImageOption = ({
+  canReadImages,
+  image,
+  isIncluded,
+  onIncludedChange,
+}: {
+  canReadImages: boolean;
+  image: ImageWithDims;
+  isIncluded: boolean;
+  onIncludedChange: (event: { checked: boolean | 'indeterminate' }) => void;
+}) => {
+  const { t } = useTranslation();
+
+  return (
+    <HStack gap="2">
+      {/* Decorative: the checkbox label or the note beside it names the frame. */}
+      <Image
+        alt=""
+        boxSize="10"
+        flexShrink="0"
+        objectFit="cover"
+        opacity={canReadImages && isIncluded ? 1 : 0.5}
+        rounded="md"
+        src={galleryImageUrls.thumbnail(image.image_name)}
+      />
+      {canReadImages ? (
+        <Checkbox.Root checked={isIncluded} size="sm" onCheckedChange={onIncludedChange}>
+          <Checkbox.HiddenInput />
+          <Checkbox.Control />
+          <Checkbox.Label fontSize="xs">{t('widgets.generate.expandFromFirstFrame')}</Checkbox.Label>
+        </Checkbox.Root>
+      ) : (
+        <Text color="fg.subtle" fontSize="xs">
+          {t('widgets.generate.expandFirstFrameUnreadable')}
+        </Text>
+      )}
+    </HStack>
   );
 };
 
@@ -577,8 +647,7 @@ const ImageToPromptButton = ({
   const [selectedModelKey, setSelectedModelKey] = useState<string | null>(null);
   const llavaModels = models.filter((model) => model.type === 'llava_onevision');
   const selectedModel = selectedModelKey ? llavaModels.find((model) => model.key === selectedModelKey) : null;
-  // A drop names the image outright, which is the whole point of dropping one:
-  // it is how you describe something other than what the gallery has selected.
+  // Dropped images take precedence over gallery selection.
   const image = droppedImage.image ?? selectedImage;
   const droppedImageName = droppedImage.image?.imageName ?? null;
   const clearDroppedImage = droppedImage.onClear;
@@ -590,10 +659,7 @@ const ImageToPromptButton = ({
     void ensureModelsLoaded();
   });
 
-  // Dropping onto the prompt box is the gesture that opens this popover. Keyed
-  // on the name rather than the object so a re-render cannot reopen a popover
-  // the user has just dismissed; closing clears the drop, so the same image
-  // dropped twice still reads as two separate gestures.
+  // Key gestures by image name and clear on close so repeated drops work without rerenders reopening the popup.
   useEffect(() => {
     if (droppedImageName !== null) {
       // eslint-disable-next-line react/set-state-in-effect
@@ -601,9 +667,7 @@ const ImageToPromptButton = ({
     }
   }, [droppedImageName]);
 
-  // Closing hands the popover back to the gallery selection. Every close route
-  // goes through here, including the one after a successful run — a controlled
-  // `open` does not fire `onOpenChange` when it is the code that closes it.
+  // Clear dropped input on every close path; controlled close bypasses onOpenChange.
   const close = useCallback(() => {
     setIsOpen(false);
     clearDroppedImage();

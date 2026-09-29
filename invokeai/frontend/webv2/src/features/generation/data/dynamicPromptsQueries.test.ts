@@ -25,9 +25,7 @@ describe('resolveDynamicPrompts', () => {
     expect(parseDynamicPrompts).toHaveBeenCalledTimes(1);
   });
 
-  // Regression: `ensureQueryData` hands back cached data whenever it exists,
-  // invalidated or not, so editing a wildcard left the submit path enqueueing an
-  // expansion built from the old values.
+  // Invalidated infinite-stale cache entries must refetch.
   it('re-expands after the wildcard catalog is invalidated', async () => {
     await expect(resolveDynamicPrompts(queryClient, request)).resolves.toMatchObject({ prompts: ['a red ball'] });
 

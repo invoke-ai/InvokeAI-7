@@ -1,8 +1,6 @@
 /**
- * Pure selection of what the engine should draw as the canvas staged preview:
- * the selected finished candidate when visible, otherwise the selected
- * placeholder's live denoise-progress frame, otherwise nothing. Kept React-free
- * so the candidate-vs-progress decision is unit-testable in node.
+ * Prefer the visible finished candidate, then the selected placeholder's live progress frame, otherwise no
+ * preview.
  */
 
 import type { CanvasPlacementContract, StagedPreviewInput } from '@workbench/canvas-engine/api';
@@ -24,11 +22,6 @@ export interface StagedPreviewSelection {
   bboxHeight: number;
 }
 
-/**
- * Resolves the staged-preview source. A selected finished candidate wins when
- * candidate previews are visible; otherwise selected-placeholder progress fills
- * the bbox. Returns `null` when neither source is available.
- */
 export const selectStagedPreviewSource = ({
   bboxHeight,
   bboxWidth,
@@ -50,11 +43,7 @@ export const selectStagedPreviewSource = ({
   return null;
 };
 
-/**
- * A stable string key for a {@link StagedPreviewInput}, so a React effect only
- * re-drives the (async, decoding) `setStagedPreview` when the source actually
- * changes — including every new progress frame, but not on unrelated renders.
- */
+/** Key staged preview inputs so decoding reruns for source/progress changes only. */
 export const stagedPreviewKey = (source: StagedPreviewInput | null): string => {
   if (source === null) {
     return 'none';

@@ -9,7 +9,6 @@ import {
   legacyGeneratedImageToGalleryItem,
   toGalleryItemKey,
 } from '@features/gallery';
-import { createVideoSourceClip } from '@features/video';
 import { MenuContent, MenuIconItem } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { useOpenWorkbenchWidget } from '@workbench/useOpenWorkbenchWidget';
@@ -24,6 +23,7 @@ import {
   EyeIcon,
   FileImageIcon,
   FileJsonIcon,
+  FilmIcon,
   FolderIcon,
   ImageIcon,
   ImagesIcon,
@@ -151,11 +151,7 @@ export const getImageContextMenuRecallRequestKey = (image: GalleryImage | null, 
   return `${image.imageName}:${image.width}:${image.height}`;
 };
 
-/**
- * Shared right-click menu for backend images, usable from any widget (gallery
- * grid, preview, ...). Anchored to the cursor through a virtual rect, so it
- * needs no trigger element — set `target` to open it.
- */
+/** Shared image context menu anchored to a cursor rect; setting target opens it without a trigger element. */
 export const ImageContextMenu = ({
   actions,
   boards,
@@ -317,10 +313,6 @@ const SingleItemMenuItems = ({
     [actions, itemRef]
   );
   const handleDelete = useCallback(() => onRequestDeletion([itemRef]), [itemRef, onRequestDeletion]);
-  const { generation, widgets } = useWorkbenchCommands();
-  const openWidget = useOpenWorkbenchWidget();
-  // Video recall availability, fetched from the item's recorded core_metadata
-  // when the menu opens on a video — the video twin of the image menu's flow.
   const [videoRecallCapabilities, setVideoRecallCapabilities] = useState<VideoRecallCapabilities>(
     EMPTY_VIDEO_RECALL_CAPABILITIES
   );
@@ -374,26 +366,15 @@ const SingleItemMenuItems = ({
   const handleVideoRecallPrompts = useMemo(() => makeVideoRecallHandler('prompts'), [makeVideoRecallHandler]);
   const handleVideoRecallSeed = useMemo(() => makeVideoRecallHandler('seed'), [makeVideoRecallHandler]);
   const handleExtendInVideo = useCallback(() => {
-    if (item.kind !== 'video') {
-      return;
+    if (item.kind === 'video') {
+      actions.sendToInitialVideo(item);
     }
-
-    openWidget('video', { preferredRegions: ['left'] });
-    // An initial video, a first frame, and Ref2VA references all claim the same
-    // conditioning slot: extending clears the rivals.
-    widgets.patchValues('video', {
-      firstFrameImage: null,
-      references: [],
-      sourceVideo: createVideoSourceClip({
-        durationSeconds: item.durationSeconds,
-        fps: item.fps,
-        height: item.height,
-        name: item.name,
-        width: item.width,
-      }),
-    });
-    generation.setSource('video');
-  }, [generation, item, openWidget, widgets]);
+  }, [actions, item]);
+  const handleUseAsReferenceVideo = useCallback(() => {
+    if (item.kind === 'video') {
+      actions.useAsReferenceVideo(item);
+    }
+  }, [actions, item]);
 
   return (
     <>
@@ -457,6 +438,13 @@ const SingleItemMenuItems = ({
             label="Extend in Video"
             value="extend-in-video"
             onClick={handleExtendInVideo}
+          />
+          <ContextMenuItem
+            disabled={!actions.canUseAsReferenceVideo}
+            icon={FilmIcon}
+            label="Use as Reference Video"
+            value="use-as-reference-video"
+            onClick={handleUseAsReferenceVideo}
           />
         </>
       ) : null}
@@ -721,6 +709,7 @@ const SingleImageMenuItems = ({
   const handleSelectForCompare = useSelectForCompareHandler(actions, image);
   const handleSavePromptAsTemplate = useCallback(() => void actions.savePromptAsTemplate(image), [actions, image]);
   const handleUseAsReferenceImage = useUseAsReferenceImageHandler(actions, image);
+  const handleLoadWorkflow = useCallback(() => void actions.loadImageWorkflow(image), [actions, image]);
   const { generation, widgets } = useWorkbenchCommands();
   const openWidget = useOpenWorkbenchWidget();
   const handleSendToUpscale = useCallback(() => {
@@ -752,7 +741,13 @@ const SingleImageMenuItems = ({
         <ToggleStarQuickMenuItem actions={actions} image={image} />
       </HStack>
       <Menu.Separator borderColor="border.subtle" />
-      <ContextMenuItem disabled icon={WorkflowIcon} label="Load Workflow" value="load-workflow" />
+      <ContextMenuItem
+        disabled={isLoadingRecallCapabilities || !recallCapabilities.workflow}
+        icon={WorkflowIcon}
+        label="Load Workflow"
+        value="load-workflow"
+        onClick={handleLoadWorkflow}
+      />
       <ContextSubMenu icon={AsteriskIcon} label="Recall Metadata">
         <ContextMenuItem
           disabled={isLoadingRecallCapabilities || !recallCapabilities.all}
@@ -813,8 +808,7 @@ const SingleImageMenuItems = ({
         onClick={handleUseAsReferenceImage}
       />
       <ContextMenuItem
-        // Same signal "Use Prompt" reads, rather than staying enabled and
-        // raising a toast to say the image had no prompt after all.
+        // Use the same availability signal as Use Prompt to disable empty recall upfront.
         disabled={isLoadingRecallCapabilities || !recallCapabilities.prompts}
         icon={TypeIcon}
         label="Use as Prompt Template"

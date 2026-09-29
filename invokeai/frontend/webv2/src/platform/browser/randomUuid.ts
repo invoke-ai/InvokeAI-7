@@ -1,9 +1,4 @@
-/**
- * Generate an RFC 4122 version 4 UUID.
- *
- * `crypto.randomUUID` is applied in secure contexts (HTTPS or `localhost`).
- * `crypto.getRandomValues` is applied in non-secure contexts.
- */
+/** Generate UUIDv4 with randomUUID when available, otherwise getRandomValues. */
 
 /** The subset of `Crypto` the generator relies on, so tests can swap it. */
 export type UuidCryptoSource = Pick<Crypto, 'getRandomValues'> & Partial<Pick<Crypto, 'randomUUID'>>;

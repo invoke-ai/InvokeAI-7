@@ -16,6 +16,7 @@ import type {
   FLUXReduxConfig,
   ImageWithDims,
   IPAdapterConfig,
+  Krea2ReferenceImageConfig,
   MiniMaxH3ReferenceImageConfig,
   QwenImageReferenceImageConfig,
   RasterLayerAdjustments,
@@ -132,6 +133,12 @@ export const initialWanReferenceImage: WanReferenceImageConfig = {
 export const initialMiniMaxH3ReferenceImage: MiniMaxH3ReferenceImageConfig = {
   type: 'minimax_h3_reference_image',
   image: null,
+};
+
+export const initialKrea2ReferenceImage: Krea2ReferenceImageConfig = {
+  type: 'krea2_reference_image',
+  image: null,
+  styleStrength: 1,
 };
 export const initialT2IAdapter: T2IAdapterConfig = {
   type: 't2i_adapter',

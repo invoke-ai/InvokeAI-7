@@ -1,26 +1,22 @@
-import { Badge } from '@chakra-ui/react';
-import { Button } from '@platform/ui';
-import { clearProjectDiagnostics, useProjectDiagnostics } from '@workbench/diagnostics/logger';
-import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
+import { Badge, VisuallyHidden } from '@chakra-ui/react';
+import { useProblemCount } from '@workbench/diagnostics/useProblemCount';
+import { useActiveProjectId } from '@workbench/WorkbenchContext';
 import { BugIcon } from 'lucide-react';
-import { useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 
 export const DiagnosticsHeaderActions = () => {
-  const projectId = useActiveProjectSelector((project) => project.id);
-  const entries = useProjectDiagnostics(projectId);
-  const clearEntries = useCallback(() => clearProjectDiagnostics(projectId), [projectId]);
+  const { t } = useTranslation();
+  const problemCount = useProblemCount(useActiveProjectId());
+
+  if (problemCount === 0) {
+    return null;
+  }
 
   return (
-    <>
-      {entries.length ? (
-        <Badge colorPalette="red" size="xs">
-          <BugIcon />
-          {entries.length}
-        </Badge>
-      ) : null}
-      <Button disabled={entries.length === 0} size="2xs" variant="outline" onClick={clearEntries}>
-        Clear
-      </Button>
-    </>
+    <Badge colorPalette="red" size="xs">
+      <BugIcon />
+      <span aria-hidden>{problemCount}</span>
+      <VisuallyHidden>{t('widgets.diagnostics.chipProblems', { count: problemCount })}</VisuallyHidden>
+    </Badge>
   );
 };

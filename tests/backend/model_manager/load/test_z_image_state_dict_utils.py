@@ -1,7 +1,5 @@
 """Unit tests for the Z-Image GGUF/ComfyUI -> diffusers state-dict converter."""
 
-import json
-
 import pytest
 import torch
 
@@ -14,6 +12,7 @@ from tests.backend.model_manager.load.state_dicts.utils import keys_to_mock_stat
 from tests.backend.model_manager.load.state_dicts.z_image_transformer_comfyui_keys import (
     state_dict_keys as z_image_keys,
 )
+from tests.fixtures.quantized_payloads import comfy_quant_marker
 
 
 class TestConvertZImageGgufToDiffusers:
@@ -73,10 +72,6 @@ class TestConvertZImageGgufToDiffusers:
         assert torch.allclose(out["blk.attention.to_v.weight"], qkv[4:6])
 
 
-def _marker_blob(marker: dict) -> torch.Tensor:
-    return torch.frombuffer(bytearray(json.dumps(marker).encode("utf-8")), dtype=torch.uint8)
-
-
 MARKER = {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": 256}
 
 
@@ -112,7 +107,7 @@ class TestQkvQuantizationSideChannel:
 
     def test_marker_blob_is_copied_not_split(self):
         # `.comfy_quant` is a 1-D JSON byte string describing the layer, not a per-channel vector.
-        blob = torch.frombuffer(b'{"format":"float8_e4m3fn"}', dtype=torch.uint8).clone()
+        blob = comfy_quant_marker({"format": "float8_e4m3fn"})
         out = _convert_z_image_gguf_to_diffusers(
             {
                 "blk.attention.qkv.weight": torch.arange(12, dtype=torch.float32).reshape(6, 2),
@@ -147,7 +142,7 @@ class TestQkvQuantizationSideChannel:
         sd = {
             f"{prefix}.qkv.weight": torch.zeros(3 * 4, 256, dtype=torch.int8),
             f"{prefix}.qkv.weight_scale": torch.ones(3 * 4, 1),
-            f"{prefix}.qkv.comfy_quant": _marker_blob(MARKER),
+            f"{prefix}.qkv.comfy_quant": comfy_quant_marker(MARKER),
             "x_embedder.weight": torch.zeros(2, 2),
         }
         markers = extract_int8_convrot_markers(_convert_z_image_gguf_to_diffusers(sd))

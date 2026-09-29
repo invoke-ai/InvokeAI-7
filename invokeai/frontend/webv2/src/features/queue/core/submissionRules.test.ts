@@ -20,9 +20,7 @@ const makeQueueItem = (sourceId: QueueSourceId, status: QueueHistoryItemStatus):
 
 describe('isBackendSubmittableSourceId', () => {
   it('includes canvas so canvas invocations are actually enqueued (regression: canvas→canvas stall)', () => {
-    // The bug: canvas snapshots carry sourceId 'canvas'; the runtime allow-list
-    // only had 'generate'/'workflow', so canvas items stacked as local pending
-    // rows forever and nothing generated.
+    // Canvas source IDs must be allowed or local pending items never submit.
     expect(isBackendSubmittableSourceId('canvas')).toBe(true);
   });
 

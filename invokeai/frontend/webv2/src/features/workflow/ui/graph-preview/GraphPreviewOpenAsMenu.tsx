@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { Menu, Portal } from '@chakra-ui/react';
 import { previewGraphToDocument } from '@features/workflow/core/graphToDocument';
 import { useInvocationTemplatesSnapshot } from '@features/workflow/react';
-import { useSaveWorkflowToLibrary } from '@features/workflow/ui/library/useSaveWorkflowToLibrary';
+import { useWorkflowPublication } from '@features/workflow/ui/library/useWorkflowPublication';
 import { MenuActionItem } from '@features/workflow/ui/MenuActionItem';
 import {
   useWorkflowGraphPreview,
@@ -29,13 +29,8 @@ interface GraphPreviewOpenAsMenuProps {
 }
 
 /**
- * The graph preview dialog's "Open as" menu — four ways to hand a
- * read-only preview graph off to something that keeps it: convert it into an
- * editable document and load it into the workflow editor, save it to the
- * workflow library without touching the active project, fork it into a fresh
- * project, or download the raw JSON. The trigger button lives in the dialog (it needs `@platform/ui`'s
- * `Button`); this file stays out of that import so it doesn't add to that
- * package's fan-in.
+ * Convert previews into editor/library/project documents or download raw JSON. Keep the trigger in the dialog to
+ * avoid another platform-barrel dependency.
  */
 export const GraphPreviewOpenAsMenu = ({
   children,
@@ -48,7 +43,7 @@ export const GraphPreviewOpenAsMenu = ({
   const { workflows } = useWorkflowHostCommands();
   const graphPreview = useWorkflowGraphPreview();
   const notifications = useWorkflowNotifications();
-  const { saveDocumentAsNew } = useSaveWorkflowToLibrary();
+  const { saveDocumentAsNew } = useWorkflowPublication();
   // A hook (not `getInvocationTemplatesSnapshot()`) so the "Edit in workflow
   // editor" item's disabled state updates live if the menu is opened while
   // templates are still loading.
@@ -70,8 +65,8 @@ export const GraphPreviewOpenAsMenu = ({
       );
     }
 
-    // `replace` emits its own success notification and undo entry.
-    workflows.replace(document, t('graphPreview.openedFromPreview'));
+    // The preview becomes a workflow of its own beside the project's others (or takes over an untouched blank).
+    workflows.addWorkflow(document, { label: t('graphPreview.openedFromPreview'), reusePlaceholder: true });
     graphPreview.openWorkflowEditor();
     onClose();
   }, [graph, templatesSnapshot, notifications, t, workflows, graphPreview, onClose]);
@@ -92,10 +87,15 @@ export const GraphPreviewOpenAsMenu = ({
 
     document.name = graph.label ?? sourceLabel;
 
-    const id = await saveDocumentAsNew(document);
+    // The publication reports its own outcome; a lost answer is retried by the same captured request.
+    const result = await saveDocumentAsNew(document, document.name);
 
-    if (id !== null) {
-      notifications.success(t('graphPreview.savedToLibrary'));
+    if (result.status === 'failed') {
+      const retried = await result.retry();
+
+      if (retried.status === 'failed') {
+        notifications.error(t('graphPreview.saveToLibraryFailed'), retried.message);
+      }
     }
   }, [graph, templatesSnapshot, sourceLabel, saveDocumentAsNew, notifications, t]);
   const handleSaveToLibrary = useCallback(() => void saveToLibrary(), [saveToLibrary]);

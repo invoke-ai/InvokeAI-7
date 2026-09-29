@@ -2,13 +2,7 @@ import { createExternalStore } from '@platform/state/externalStore';
 
 import type { BackendConnectionStatus } from './types';
 
-/**
- * Provider-free connection status for the shared backend socket. The socket hub
- * is the sole writer; surfaces that mount no workbench providers (the Launchpad)
- * read it directly, and the editor mirrors it into workbench state via a bridge
- * in `WorkbenchRuntime`. Lives outside the reducer so the connection signal is
- * available everywhere the socket is, not just inside the editor.
- */
+/** The socket hub alone writes this provider-free store; Launchpad reads directly and Workbench mirrors it. */
 export interface ConnectionSnapshot {
   status: BackendConnectionStatus;
   error?: string;

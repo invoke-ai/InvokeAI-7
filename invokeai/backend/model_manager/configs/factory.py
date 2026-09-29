@@ -3,10 +3,11 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
+    TypeVar,
     Union,
 )
 
-from pydantic import Discriminator, TypeAdapter, ValidationError
+from pydantic import BaseModel, Discriminator, TypeAdapter, ValidationError
 from typing_extensions import Annotated, Any
 
 from invokeai.app.services.config.config_default import get_config
@@ -29,12 +30,14 @@ from invokeai.backend.model_manager.configs.controlnet import (
     ControlNet_Diffusers_SD2_Config,
     ControlNet_Diffusers_SDXL_Config,
 )
+from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
 from invokeai.backend.model_manager.configs.external_api import ExternalApiModelConfig
 from invokeai.backend.model_manager.configs.flux_redux import FLUXRedux_Checkpoint_Config
 from invokeai.backend.model_manager.configs.gemma2_encoder import (
     Gemma2Encoder_Gemma2Encoder_Config,
     Gemma2Encoder_GGUF_Config,
 )
+from invokeai.backend.model_manager.configs.gemma4_encoder import Gemma4Encoder_Gemma4Encoder_LTX2_Config
 from invokeai.backend.model_manager.configs.identification_utils import InvalidMatchError, NotAMatchError
 from invokeai.backend.model_manager.configs.ip_adapter import (
     IPAdapter_Checkpoint_FLUX_Config,
@@ -58,6 +61,7 @@ from invokeai.backend.model_manager.configs.lora import (
     LoRA_LyCORIS_Flux2_Config,
     LoRA_LyCORIS_FLUX_Config,
     LoRA_LyCORIS_Krea2_Config,
+    LoRA_LyCORIS_LTX2_Config,
     LoRA_LyCORIS_MiniMaxH3_Config,
     LoRA_LyCORIS_QwenImage_Config,
     LoRA_LyCORIS_SD1_Config,
@@ -72,9 +76,12 @@ from invokeai.backend.model_manager.configs.lora import (
 from invokeai.backend.model_manager.configs.main import (
     Main_BnBNF4_FLUX_Config,
     Main_Checkpoint_Anima_Config,
+    Main_Checkpoint_ErnieImage_Config,
     Main_Checkpoint_Flux2_Config,
     Main_Checkpoint_FLUX_Config,
+    Main_Checkpoint_Ideogram4_Config,
     Main_Checkpoint_Krea2_Config,
+    Main_Checkpoint_LTX2_Config,
     Main_Checkpoint_MiniMaxH3_Config,
     Main_Checkpoint_QwenImage_Config,
     Main_Checkpoint_SD1_Config,
@@ -89,6 +96,7 @@ from invokeai.backend.model_manager.configs.main import (
     Main_Diffusers_FLUX_Config,
     Main_Diffusers_Ideogram4_Config,
     Main_Diffusers_Krea2_Config,
+    Main_Diffusers_LTX2_Config,
     Main_Diffusers_MiniMaxH3_Config,
     Main_Diffusers_QwenImage_Config,
     Main_Diffusers_SD1_Config,
@@ -133,6 +141,7 @@ from invokeai.backend.model_manager.configs.qwen3_encoder import (
 from invokeai.backend.model_manager.configs.qwen3_vl_encoder import (
     Qwen3VLEncoder_Checkpoint_Config,
     Qwen3VLEncoder_Checkpoint_MiniMaxH3_Config,
+    Qwen3VLEncoder_GGUF_Config,
     Qwen3VLEncoder_Qwen3VLEncoder_Config,
 )
 from invokeai.backend.model_manager.configs.qwen_vl_encoder import (
@@ -176,7 +185,7 @@ from invokeai.backend.model_manager.configs.vae import (
     VAE_Diffusers_Wan_Config,
 )
 from invokeai.backend.model_manager.configs.wan_t5_encoder import WanT5Encoder_WanT5Encoder_Config
-from invokeai.backend.model_manager.model_on_disk import ModelOnDisk
+from invokeai.backend.model_manager.model_on_disk import ModelOnDisk, read_safetensors_header
 from invokeai.backend.model_manager.taxonomy import (
     BaseModelType,
     ModelFormat,
@@ -186,6 +195,101 @@ from invokeai.backend.model_manager.taxonomy import (
 )
 
 logger = logging.getLogger(__name__)
+
+_FP8_SAFETENSORS_DTYPES = frozenset({"F8_E4M3", "F8_E5M2"})
+
+# What single-file checkpoints bundle beside their denoiser. Float8 weights there say nothing about the denoiser.
+_BUNDLED_COMPONENT_KEY_PREFIXES = ("cond_stage_model.", "conditioner.", "first_stage_model.", "text_encoders.", "vae.")
+
+# Where a diffusers folder keeps its denoiser. A single-component folder (a ControlNet) keeps it at the root.
+_DENOISER_SUBFOLDERS = frozenset({"transformer", "unet"})
+
+SettingsT = TypeVar("SettingsT", bound=BaseModel)
+
+
+def _denoiser_stores_float8_weights(mod: ModelOnDisk) -> bool:
+    """Whether the denoiser's weights are stored in a float8 the storage cast can reproduce, judged by the safetensors
+    headers and never by a file name.
+
+    Only headers are read, a few KB each. A header that cannot be read is no evidence of float8 weights: identification
+    did not need that file, and picking a default setting is no reason to fail an install.
+
+    Scaled fp8 checkpoints count too. They briefly did not: FP8 Storage used to fold their per-tensor scales away and
+    let the layerwise cast re-encode the result as *unscaled* fp8, which on `flux-2-klein-4b-fp8` flushed 3.4% of the
+    weights to zero for the byte count the file already had. The loaders now keep such a file in its own scaled form
+    instead, so switching the setting on is lossless and worth doing by default.
+    """
+    if mod.path.is_file():
+        candidates = [mod.path]
+    else:
+        candidates = [
+            path
+            for path in mod.weight_files()
+            if path.parent == mod.path or path.relative_to(mod.path).parts[0] in _DENOISER_SUBFOLDERS
+        ]
+
+    stores_float8 = False
+    for path in candidates:
+        if path.suffix != ".safetensors":
+            continue
+        try:
+            header = read_safetensors_header(path)
+        except (OSError, ValueError) as e:
+            logger.debug(f"Could not read the safetensors header of {path} to look for float8 weights: {e}")
+            continue
+        denoiser = {key: info for key, info in header.items() if not key.startswith(_BUNDLED_COMPONENT_KEY_PREFIXES)}
+        stores_float8 = stores_float8 or any(
+            isinstance(info, dict) and info.get("dtype") in _FP8_SAFETENSORS_DTYPES for info in denoiser.values()
+        )
+    return stores_float8
+
+
+def _identified_default_settings(
+    recommended: SettingsT | None,
+    settings_cls: type[SettingsT],
+    mod: ModelOnDisk,
+    override_fields: dict[str, Any] | None,
+    # Quoted: `AnyModelConfig` is the union of the concrete config classes and is assembled further down
+    # this module. `Config_Base` would not do — it declares none of base/type/format, which only a concrete
+    # class does (enforced by `__pydantic_init_subclass__`).
+    config: "AnyModelConfig",
+) -> SettingsT | None:
+    """Layer the settings sent with an install, and FP8 Storage for a float8 denoiser, over the recommended defaults.
+
+    An install setting wins over detection in both directions. Fields the settings class does not have (a main-model
+    field sent along with a LoRA install) are dropped, since nothing would read them.
+
+    FP8 Storage is enabled only where the model's own loader implements it. It used to be enabled for any float8
+    denoiser whose format was not already quantized, which wrote `fp8_storage: true` onto records whose loader ignores
+    it -- a Wan fp8 install was told its weights were halved and then loaded at bf16 size. `fp8_storage_verdict` is the
+    same answer the loader gate and the API row give; see `load/fp8_capability.py`.
+
+    A request sent with the install is dropped for such a model rather than stored. The detail panel does not offer the
+    control where the loader ignores it, so a stored `true` would be a value nobody can see or clear again -- and the
+    Add Models flow has one FP8 Storage checkbox for whatever is being installed, so it is easy to send for a model
+    that cannot use it.
+    """
+    requested = (override_fields or {}).get("default_settings") or {}
+    update = {
+        name: value for name, value in requested.items() if name in settings_cls.model_fields and value is not None
+    }
+
+    # Imported here, not at module scope: `model_loader_registry` imports this module, so the reverse edge would close
+    # a cycle. Identification runs long after import time, and the import is a `sys.modules` hit after the first.
+    from invokeai.backend.model_manager.load.fp8_capability import fp8_storage_verdict
+
+    if not fp8_storage_verdict(config.base, config.type, config.format).supported:
+        update.pop("fp8_storage", None)
+    elif "fp8_storage" not in update and _denoiser_stores_float8_weights(mod):
+        logger.info(f"{mod.name}: denoiser weights are stored in float8, enabling FP8 Storage by default")
+        update["fp8_storage"] = True
+
+    if not update:
+        return recommended
+    current = recommended.model_dump() if recommended is not None else {}
+    return settings_cls.model_validate({**current, **update})
+
+
 app_config = get_config()
 
 # Known model file extensions for sanity checking
@@ -292,6 +396,7 @@ AnyModelConfig = Annotated[
         Annotated[Main_Diffusers_Ideogram4_Config, Main_Diffusers_Ideogram4_Config.get_tag()],
         Annotated[Main_Diffusers_Krea2_Config, Main_Diffusers_Krea2_Config.get_tag()],
         Annotated[Main_Diffusers_MiniMaxH3_Config, Main_Diffusers_MiniMaxH3_Config.get_tag()],
+        Annotated[Main_Diffusers_LTX2_Config, Main_Diffusers_LTX2_Config.get_tag()],
         # Main (Pipeline) - checkpoint format
         # IMPORTANT: FLUX.2 must be checked BEFORE FLUX.1 because FLUX.2 has specific validation
         # that will reject FLUX.1 models, but FLUX.1 validation may incorrectly match FLUX.2 models
@@ -304,9 +409,12 @@ AnyModelConfig = Annotated[
         Annotated[Main_Checkpoint_QwenImage_Config, Main_Checkpoint_QwenImage_Config.get_tag()],
         Annotated[Main_Checkpoint_Wan_Config, Main_Checkpoint_Wan_Config.get_tag()],
         Annotated[Main_Checkpoint_ZImage_Config, Main_Checkpoint_ZImage_Config.get_tag()],
+        Annotated[Main_Checkpoint_ErnieImage_Config, Main_Checkpoint_ErnieImage_Config.get_tag()],
+        Annotated[Main_Checkpoint_Ideogram4_Config, Main_Checkpoint_Ideogram4_Config.get_tag()],
         Annotated[Main_Checkpoint_Krea2_Config, Main_Checkpoint_Krea2_Config.get_tag()],
         Annotated[Main_Checkpoint_Anima_Config, Main_Checkpoint_Anima_Config.get_tag()],
         Annotated[Main_Checkpoint_MiniMaxH3_Config, Main_Checkpoint_MiniMaxH3_Config.get_tag()],
+        Annotated[Main_Checkpoint_LTX2_Config, Main_Checkpoint_LTX2_Config.get_tag()],
         # Main (Pipeline) - quantized formats
         # IMPORTANT: FLUX.2 must be checked BEFORE FLUX.1 because FLUX.2 has specific validation
         # that will reject FLUX.1 models, but FLUX.1 validation may incorrectly match FLUX.2 models
@@ -378,6 +486,7 @@ AnyModelConfig = Annotated[
         # ``adaln_proj.linear``) and rejects other architectures' signatures, so it
         # is mutually exclusive with Wan/Anima regardless of order (locked in by
         # ``test_minimax_h3_lora_probe_independence.py``).
+        Annotated[LoRA_LyCORIS_LTX2_Config, LoRA_LyCORIS_LTX2_Config.get_tag()],
         Annotated[LoRA_LyCORIS_MiniMaxH3_Config, LoRA_LyCORIS_MiniMaxH3_Config.get_tag()],
         # Wan and Anima both target ``blocks.X`` shapes; their LoRA probes are
         # mutually exclusive — Wan rejects Anima's ``_proj``/``mlp``/
@@ -414,6 +523,13 @@ AnyModelConfig = Annotated[
         # the 4B shape so neither can claim the other's files.
         Annotated[Qwen3VLEncoder_Checkpoint_MiniMaxH3_Config, Qwen3VLEncoder_Checkpoint_MiniMaxH3_Config.get_tag()],
         Annotated[Qwen3VLEncoder_Checkpoint_Config, Qwen3VLEncoder_Checkpoint_Config.get_tag()],
+        # Kept mutually exclusive with Qwen3Encoder_GGUF_Config by an architecture-metadata check on
+        # both sides, NOT by position in this list: identification iterates `Config_Base.CONFIG_CLASSES`
+        # (a set) and `matches_sort_key` puts both encoders in the same bucket, so a double match would
+        # be resolved by arbitrary set-iteration order. The check is load-bearing because llama.cpp
+        # keeps the visual tower in a separate mmproj file -- a Qwen3-VL GGUF has none to probe for and
+        # satisfies the text-only Qwen3 GGUF heuristic in full.
+        Annotated[Qwen3VLEncoder_GGUF_Config, Qwen3VLEncoder_GGUF_Config.get_tag()],
         Annotated[Qwen3VLEncoder_Qwen3VLEncoder_Config, Qwen3VLEncoder_Qwen3VLEncoder_Config.get_tag()],
         # Qwen3 Encoder
         Annotated[Qwen3Encoder_Qwen3Encoder_Config, Qwen3Encoder_Qwen3Encoder_Config.get_tag()],
@@ -427,6 +543,7 @@ AnyModelConfig = Annotated[
         Annotated[MistralEncoder_GGUF_Config, MistralEncoder_GGUF_Config.get_tag()],
         # Gemma 2 Encoder (used by PiD)
         Annotated[Gemma2Encoder_Gemma2Encoder_Config, Gemma2Encoder_Gemma2Encoder_Config.get_tag()],
+        Annotated[Gemma4Encoder_Gemma4Encoder_LTX2_Config, Gemma4Encoder_Gemma4Encoder_LTX2_Config.get_tag()],
         Annotated[Gemma2Encoder_GGUF_Config, Gemma2Encoder_GGUF_Config.get_tag()],
         # Qwen VL Encoder (Qwen2.5-VL multimodal encoder for Qwen Image)
         Annotated[QwenVLEncoder_Diffusers_Config, QwenVLEncoder_Diffusers_Config.get_tag()],
@@ -785,11 +902,29 @@ class ModelConfigFactory:
                 # so its name is the only signal. What each architecture recommends lives in
                 # invokeai/backend/architectures/defs/.
                 variant = getattr(config, "variant", None)
-                config.default_settings = resolve_default_settings(config.base, variant, config.name, config.path)
+                config.default_settings = _identified_default_settings(
+                    resolve_default_settings(config.base, variant, config.name, config.path),
+                    MainModelDefaultSettings,
+                    mod,
+                    override_fields,
+                    config=config,
+                )
             case ModelType.ControlNet | ModelType.T2IAdapter | ModelType.ControlLoRa:
-                config.default_settings = ControlAdapterDefaultSettings.from_model_name(config.name)
+                config.default_settings = _identified_default_settings(
+                    ControlAdapterDefaultSettings.from_model_name(config.name),
+                    ControlAdapterDefaultSettings,
+                    mod,
+                    override_fields,
+                    config=config,
+                )
             case ModelType.LoRA:
-                config.default_settings = LoraModelDefaultSettings()
+                config.default_settings = _identified_default_settings(
+                    LoraModelDefaultSettings(),
+                    LoraModelDefaultSettings,
+                    mod,
+                    override_fields,
+                    config=config,
+                )
             case _:
                 pass
 

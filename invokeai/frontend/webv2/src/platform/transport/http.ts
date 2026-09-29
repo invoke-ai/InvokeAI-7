@@ -1,9 +1,7 @@
-/**
- * Shared HTTP client for the InvokeAI backend. Every REST call goes through
- * `apiFetch` so authentication matches the WebSocket connection: both read the
- * an Auth-owned adapter and send it as a bearer token. The token is read per
- * request, so an identity change applies without a reload.
- */
+/** Read the Auth-owned bearer token per request so HTTP and WebSocket identity stay aligned without reloads. */
+
+import { recordLogEvent } from '@platform/logging/logger';
+import { captureAccountScope } from '@platform/state/accountLifecycle';
 
 import { getDeploymentBasePath, getDeploymentBaseUrl } from './deploymentBase';
 
@@ -14,6 +12,9 @@ export interface HttpAuthAdapter {
   getToken(): string | null;
   onUnauthorized(rejectedToken: string, rejectedIdentity: unknown): void;
 }
+
+/** Transport failures are breadcrumbs; the caller that handles the outcome owns the terminal report. */
+const HTTP_LOG_SOURCE = { area: 'http', namespace: 'transport' } as const;
 
 let authAdapter: HttpAuthAdapter = {
   getIdentity: () => null,
@@ -28,11 +29,7 @@ export const configureHttpAuth = (adapter: HttpAuthAdapter): void => {
 
 export const getHttpAuthToken = (): string | null => authAdapter.getToken();
 
-/**
- * Called when an authenticated request comes back 401 — the stored token is no
- * longer valid. The auth session store registers itself here so the HTTP layer
- * stays unaware of session semantics.
- */
+/** Auth registers 401 handling here to keep session semantics out of transport. */
 export const getBackendSocketUrl = (): string => {
   const baseUrl = API_BASE_URL || getDeploymentBaseUrl();
 
@@ -143,24 +140,60 @@ export const assertOk = async (response: Response): Promise<Response> => {
   throw new ApiError(text || `${response.status} ${response.statusText}`, response.status, response.headers);
 };
 
-const fetchWithAuthToken = (path: string, init: RequestInit | undefined, token: string | null): Promise<Response> => {
+const fetchWithAuthToken = async (
+  path: string,
+  init: RequestInit | undefined,
+  token: string | null
+): Promise<Response> => {
   const headers = new Headers(init?.headers);
+  const method = (init?.method ?? 'GET').toUpperCase();
+  // Breadcrumbs carry the path only; query strings can hold tokens and user input. They are fenced to the account
+  // that started the request so late settlements never land in the next account's history.
+  const safePath = path.split(/[?#]/, 1)[0] ?? path;
+  const owner = captureAccountScope();
 
   if (token && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  // `credentials` is stated rather than left to the fetch default because the backend now
-  // authenticates media routes (`/images/i/{name}/full`, `/videos/i/{name}/full`) with the
-  // path-scoped HttpOnly cookie that login sets — `<img>`/`<video>` cannot send a bearer
-  // header. Losing the login `Set-Cookie` would blank every thumbnail in multiuser mode, so
-  // the cookie behavior is pinned here where it can be asserted.
-  //
-  // 'same-origin' covers the normal deployment and the dev Vite proxy. A cross-origin
-  // VITE_INVOKEAI_API_BASE_URL would additionally need 'include' here plus
-  // Access-Control-Allow-Credentials on the backend; requesting 'include' unconditionally
-  // would instead break those setups outright, so callers opt in via `init`.
-  return fetch(buildApiUrl(path), { credentials: 'same-origin', ...init, headers });
+  // Use same-origin credentials so login stores the media cookie. Cross-origin API callers must opt into include
+  // and configure server credential support.
+  let response: Response;
+
+  try {
+    response = await fetch(buildApiUrl(path), { credentials: 'same-origin', ...init, headers });
+  } catch (error) {
+    // Aborts are expected cancellations (account cleanup, superseded queries), not failures.
+    if (!(error instanceof DOMException && error.name === 'AbortError')) {
+      recordLogEvent(
+        'debug',
+        HTTP_LOG_SOURCE,
+        {
+          context: { method, path: safePath },
+          error,
+          message: `${method} ${safePath} failed`,
+          name: 'http.request-failed',
+        },
+        owner
+      );
+    }
+    throw error;
+  }
+
+  if (!response.ok) {
+    recordLogEvent(
+      'debug',
+      HTTP_LOG_SOURCE,
+      {
+        context: { method, path: safePath, status: response.status },
+        message: `${method} ${safePath} responded ${response.status}`,
+        name: 'http.response-error',
+      },
+      owner
+    );
+  }
+
+  return response;
 };
 
 /** Authenticated fetch that leaves status handling to the caller. */
@@ -175,8 +208,7 @@ export const apiFetchRaw = async (path: string, init?: RequestInit): Promise<Res
 };
 
 export const apiFetch = async (path: string, init?: RequestInit): Promise<Response> => {
-  // Capture one principal for the complete request. A late User A response
-  // must neither use User B's header nor expire User B's newer session.
+  // Capture one principal so late responses cannot use or expire a newer session.
   const requestToken = getHttpAuthToken();
   const requestIdentity = authAdapter.getIdentity();
   const response = await fetchWithAuthToken(path, init, requestToken);
@@ -196,8 +228,7 @@ export const apiFetch = async (path: string, init?: RequestInit): Promise<Respon
 
     return asserted;
   } catch (error) {
-    // A current-session 401 intentionally rotates identity inside
-    // `onUnauthorized`; callers should still receive the backend ApiError.
+    // Preserve the original ApiError even when current-session 401 handling rotates identity.
     if (!expiredCurrentIdentity) {
       assertHttpIdentityCurrent(requestIdentity);
     }
@@ -206,10 +237,7 @@ export const apiFetch = async (path: string, init?: RequestInit): Promise<Respon
   }
 };
 
-/**
- * Backend errors arrive as FastAPI JSON (`{"detail": "..."}`); `ApiError`
- * carries the raw body. This unwraps `detail` into a human-readable message.
- */
+/** Unwrap FastAPI's detail field from ApiError's raw body for display. */
 export const getApiErrorMessage = (error: unknown, fallback: string): string => {
   if (error instanceof ApiError) {
     try {

@@ -7,12 +7,6 @@ import { ProjectCard } from '@workbench/launchpad/projects/ProjectCard';
 import { ArrowRightIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * A short strip of recent projects under the resume card — enough to recognise
- * what else is in flight without turning Home into a second library. The full
- * one is a click away.
- */
-
 const GRID_COLUMNS = { base: 1, lg: 4, sm: 2 } as const;
 
 export const RecentProjectsRow = ({

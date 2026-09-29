@@ -2,9 +2,11 @@ import type { ProjectSummary } from '@workbench/projects/library';
 import type { MouseEvent, ReactNode } from 'react';
 
 import { Menu, Portal } from '@chakra-ui/react';
+import { requestIntermediatesFocus } from '@features/intermediates';
 import { ConfirmDialog } from '@platform/ui/ConfirmDialog';
 import { RenameDialog } from '@platform/ui/RenameDialog';
 import { isProjectSummaryCompatible } from '@workbench/projects/library';
+import { openWorkbenchSettings } from '@workbench/settings/settingsDialogStore';
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -14,16 +16,8 @@ import { ProjectActionsMenuBody } from './ProjectActionsMenu';
 import { useProjectCardActions } from './useProjectCardActions';
 
 /**
- * One menu instance for every project card on the page.
- *
- * Per-card menus raced: zag's dismissable stack treats any layer mounted
- * above another as nested, so right-clicking card B while card A's menu was
- * still tearing down dismissed B's menu along with A's. A single host never
- * has two layers — switching targets remounts the one menu, and React runs
- * the old instance's cleanup before the new one's effects in the same commit.
- *
- * The rename/delete dialogs live beside the menu, not inside it, because
- * choosing a menu item closes the menu (and with it anything it rendered).
+ * Use one menu host so switching cards cannot race Zag's nested-layer teardown. Keep dialogs beside the menu so
+ * selecting an action does not unmount them.
  */
 
 interface ProjectMenuTarget {
@@ -131,9 +125,6 @@ export const ProjectActionsMenuProvider = ({ children }: { children: ReactNode }
       />
 
       <ConfirmDialog
-        // No "it is open, so it may come back" caveat: an open project is deleted through the
-        // editor's own sync handle, so the deletion is final either way. What is worth saying
-        // instead is what else goes — the project's board — and what does not.
         body={`${t('projects.deleteProjectCardBody', { name: dialogRequest?.name ?? '' })} ${t('projects.deleteProjectBoardNote')}`}
         confirmLabel={t('projects.deleteProject')}
         isOpen={dialogRequest?.kind === 'delete'}
@@ -147,13 +138,7 @@ export const ProjectActionsMenuProvider = ({ children }: { children: ReactNode }
 
 const NOOP_SUBMIT = () => Promise.resolve();
 
-/**
- * Handlers for a card's dots button. The button is not a registered zag
- * trigger, so a pointerdown on it while its own menu is open dismisses the
- * menu as an outside interaction — and the click that follows would reopen
- * it. The pointerdown handler runs while the pre-dismiss state is still
- * rendered, so it can mark the click as a toggle-close instead.
- */
+/** Remember open state on pointerdown so outside dismissal followed by click toggles closed instead of reopening. */
 export const useProjectActionsMenuTrigger = (target: ProjectMenuTarget) => {
   const menu = useProjectActionsMenu();
   const suppressNextOpenRef = useRef(false);
@@ -224,6 +209,12 @@ const HostedProjectActionsMenu = ({
     () => onRequestDialog({ actions, kind: 'rename', name: request.summary.name }),
     [actions, onRequestDialog, request.summary.name]
   );
+  const handleDeleteIntermediates = useCallback(() => {
+    // The manager lives in Settings; it reads this intent once when its section mounts.
+    requestIntermediatesFocus({ projectId: request.summary.id });
+    openWorkbenchSettings('intermediates', request.returnFocus ?? undefined);
+    onClose();
+  }, [onClose, request.returnFocus, request.summary.id]);
   const handleDelete = useCallback(
     () => onRequestDialog({ actions, kind: 'delete', name: request.summary.name }),
     [actions, onRequestDialog, request.summary.name]
@@ -240,6 +231,7 @@ const HostedProjectActionsMenu = ({
             isPinned={request.isPinned}
             isCompatible={isCompatible}
             projectSearch={projectSearch}
+            onDeleteIntermediates={handleDeleteIntermediates}
             onDelete={handleDelete}
             onDuplicate={handleDuplicate}
             onExport={handleExport}

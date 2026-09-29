@@ -18,12 +18,8 @@ export interface GalleryItemActions {
 export interface GalleryItemActionContext {
   filterIdentity: string;
   /**
-   * The page a selection of `item` should be stamped with, when the host
-   * navigates from a window of its own. A selection made without one is
-   * stamped with the gallery grid's page, which names the grid's window; a
-   * host walking a different window — Preview anchored deep in a board the
-   * grid shows from the top — would have its selection filed outside the
-   * window it came from, with nowhere for the arrow keys to go.
+   * Stamp selections with the host window's page; using the grid's unrelated page would break navigation from deep
+   * Preview windows.
    */
   getItemSelectionPage?(item: GalleryItem): number;
   items: GalleryItem[];
@@ -64,6 +60,10 @@ export interface GalleryCommandsPort {
   setPageInfo(totalImages: number): void;
   setSearchTerm(searchTerm: string): void;
   setStarredOnly(starredOnly: boolean): void;
+  setSemanticSearchMode(enabled: boolean): void;
+  setSemanticSearchText(text: string): void;
+  commitSemanticSearch(text: string): void;
+  clearSearch(): void;
   setView(view: GalleryView): void;
   toggleItemSelection(item: GalleryItem, nextPrimaryItem: GalleryItem | null): void;
   updateSettings(settings: Partial<GallerySettings>): void;
@@ -89,10 +89,7 @@ export interface GalleryWidgetProps {
   runtime: GalleryWidgetRuntime;
 }
 
-/**
- * Gallery's UI port. The context is a dependency-direction port (the feature
- * may not import workbench), not a test seam; no second adapter is expected.
- */
+/** This UI port preserves dependency direction: Gallery cannot import Workbench. */
 export interface GalleryUiAdapter {
   ItemActionsProvider: ComponentType<GalleryItemActionsOptions & { children: ReactNode }>;
   ImageContextMenu: ComponentType<GalleryItemContextMenuProps>;
@@ -100,6 +97,8 @@ export interface GalleryUiAdapter {
   gallery: GalleryCommandsPort;
   galleryValues: Record<string, unknown>;
   generateValues: Record<string, unknown>;
+  /** Resolves an item's best image-map vocabulary label, or null when it has none. */
+  getItemLabel(item: GalleryItemRef): Promise<string | null>;
   notifications: GalleryNotificationsPort;
   projectId: string;
   projectName: string;
@@ -110,7 +109,10 @@ export interface GalleryUiAdapter {
   exportProject(projectId: string, projectName: string): void;
   progressSessions: QueueProgressSession[];
   pinnedProgressSessionId: string | null;
-  followProgressSession(sessionId: string): void;
+  /** The session Preview is showing while it follows live; null otherwise. The arrow keys step from it. */
+  followedProgressSessionId: string | null;
+  /** Follow `sessionId` live; a tile click also reveals Preview, an arrow step must not move the layout. */
+  followProgressSession(sessionId: string, options: { revealPreview: boolean }): void;
   liveFollowEnabled: boolean;
   widgets: {
     /** Open (or reveal) the Gallery widget; false when no region can host it. */

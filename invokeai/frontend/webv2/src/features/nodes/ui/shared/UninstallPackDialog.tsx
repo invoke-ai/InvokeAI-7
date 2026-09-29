@@ -9,10 +9,8 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 /**
- * Shared uninstall confirmation. Uninstalling also deletes the workflows the
- * pack imported at install time, so the dialog fetches a best-effort count
- * (by the pack's workflow tag) and says so — the count degrades to the
- * generic copy when the fetch fails or returns zero.
+ * Warn that uninstall deletes imported workflows; use a best-effort tag count and generic copy if unavailable or
+ * zero.
  */
 export const UninstallPackDialog = ({
   onClose,

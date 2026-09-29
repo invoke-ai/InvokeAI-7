@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-/**
- * `crypto.randomUUID` and `crypto.subtle` are undefined outside secure contexts,
- * so filter these calls out when running over plain HTTP.
- */
+/** Guard secure-context APIs: randomUUID and subtle are unavailable over insecure HTTP. */
 const sources = import.meta.glob('../**/*.{ts,tsx}', {
   eager: true,
   import: 'default',

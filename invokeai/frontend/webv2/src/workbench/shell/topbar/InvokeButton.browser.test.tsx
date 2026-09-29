@@ -10,13 +10,8 @@ import { userEvent } from 'vitest/browser';
 import type { InvocationState } from './useInvocationState';
 import type * as UseTopbarShortcutModule from './useTopbarShortcut';
 
-// Isolates the regression this file exists to catch: the icon slot must swap
-// back to progress once the pointer leaves AND the button does not hold
-// `:focus-visible` — a plain mouse click leaves it focused (browsers focus a
-// button on mousedown) but must not count, or every mouse-invoked batch would
-// show a play glyph it cannot act on. Mocking the shared hook keeps the test
-// about that gating, not about queue-summary plumbing (which
-// `useActiveQueueProgress` and its call sites already cover elsewhere).
+// Verify progress returns after hover ends unless focus-visible remains; mouse click-focus must not pin the play
+// icon. Mock queue plumbing to isolate that gate.
 const harness = vi.hoisted(() => ({
   progress: { activeItemIndex: 1, completedItemCount: 0, message: '', percentage: 0.42 },
   summary: { current: 1, remaining: 1, runningQueueItemId: 'item-1', total: 1 },

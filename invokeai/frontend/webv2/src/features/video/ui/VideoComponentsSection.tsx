@@ -12,6 +12,7 @@ import { GenerationSettingsSection } from '@features/generation/components';
 import { isMainModelConfig, isModelIdentifierConfig, isVaeModelConfig } from '@features/generation/settings';
 import { useModelsSelector } from '@features/models';
 import { ModelSelect } from '@features/models/react';
+import { MINIMAX_H3_HYBRID_BLOCK_RANGE } from '@features/video/core/settings';
 import {
   getVideoComponentSectionPolicy,
   getVideoModelSelectionResult,
@@ -19,16 +20,9 @@ import {
 } from '@features/video/core/videoPolicies';
 import { Field } from '@platform/ui';
 import { Button } from '@platform/ui/Button';
-import { memo, useCallback, useMemo } from 'react';
+import { ScrubberField } from '@platform/ui/ScrubberField';
+import { Fragment, memo, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-
-/**
- * Model Components for the Video panel — fully policy-driven, like the
- * generation panel's section: the component renders whatever slots the
- * capability matrix returns (Wan: component source / VAE / Wan T5 / low-noise
- * expert; MiniMax H3: the two single-file overrides), with each slot's
- * compatibility filter and requiredness coming from the policy.
- */
 
 const coerceSlotValue = (
   slot: VideoComponentSlotPolicy,
@@ -73,7 +67,7 @@ const ComponentSlotRow = memo(function ComponentSlotRow({
   return (
     <Field
       error={isMissing ? (slot.missingMessage ?? t('widgets.video.componentRequired')) : undefined}
-      helpText={isMissing ? undefined : slot.helpText}
+      helpText={isMissing || !slot.helpTextKey ? undefined : t(slot.helpTextKey)}
       label={slot.label}
     >
       <ModelSelect
@@ -90,12 +84,35 @@ const ComponentSlotRow = memo(function ComponentSlotRow({
   );
 });
 
+/** Blocks at and above this index use Ref2VA AdaLN projections; earlier blocks use the FL2VA base. */
+const HybridStartBlockRow = memo(function HybridStartBlockRow({
+  onPatch,
+  value,
+}: {
+  onPatch: (patch: Partial<VideoWidgetValues>) => void;
+  value: number;
+}) {
+  const { t } = useTranslation();
+  const handleChange = useCallback((h3HybridStartBlock: number) => onPatch({ h3HybridStartBlock }), [onPatch]);
+
+  // Reuse ScrubberField to avoid adding a shared Generate-only control chunk to editor boot.
+  return (
+    <ScrubberField
+      defaultValue={MINIMAX_H3_HYBRID_BLOCK_RANGE.defaultStart}
+      helpText={t('widgets.video.hybridStartBlockHelp')}
+      label={t('widgets.video.hybridStartBlock')}
+      max={MINIMAX_H3_HYBRID_BLOCK_RANGE.max}
+      min={MINIMAX_H3_HYBRID_BLOCK_RANGE.min}
+      step={1}
+      value={value}
+      onChange={handleChange}
+    />
+  );
+});
+
 /**
- * Advisory badge for suspicious Wan A14B expert wiring (a low-tagged file in
- * the main slot, a high-tagged one in the low-noise slot). The tags are a
- * filename heuristic and explicit wiring stays authoritative — mirroring the
- * backend loader — so this never blocks; it offers a one-click swap instead,
- * keeping deliberate cross-wiring expressible.
+ * Expert tags are filename heuristics; explicit wiring remains authoritative, so warn and offer a swap without
+ * blocking.
  */
 // Spelled out rather than interpolated, so the translation-key scan can see
 // them and fail the build if a string goes missing.
@@ -115,17 +132,13 @@ const WanExpertWiringNotice = memo(function WanExpertWiringNotice({
 }) {
   const { t } = useTranslation();
   const models = useModelsSelector((snapshot) => snapshot.models);
-  // A selection transition computed against an unloaded catalog would judge
-  // the Lightning pair "not installed" and silently strip the accelerator.
+  // Wait for catalog authority before judging the accelerator pair installed.
   const modelsLoaded = useModelsSelector((snapshot) => snapshot.status) === 'loaded';
   const warning = useMemo(
     () => getWanExpertWiringWarning(values.model, values.wanLowNoiseModel),
     [values.model, values.wanLowNoiseModel]
   );
-  // Only offer the swap when exchanging roles actually clears the warning: a
-  // high+high or low+low pair would just re-warn about the other file. Both
-  // configs must also still exist in the catalog — "models loaded" alone
-  // would happily relocate a just-uninstalled config into the main slot.
+  // Offer only swaps that clear the warning and whose two configs still exist.
   const bothExpertsInstalled =
     Boolean(values.model && models.some((candidate) => candidate.key === values.model?.key)) &&
     Boolean(values.wanLowNoiseModel && models.some((candidate) => candidate.key === values.wanLowNoiseModel?.key));
@@ -143,8 +156,6 @@ const WanExpertWiringNotice = memo(function WanExpertWiringNotice({
       return;
     }
 
-    // Same variant and both single-file (the slot filter guarantees it), so
-    // the canonical transition is a same-family no-op apart from the swap.
     const result = getVideoModelSelectionResult({ currentSettings: values, model: nextMain, models });
 
     onPatch({ ...result.settings, model: nextMain, wanLowNoiseModel: previousMain });
@@ -199,13 +210,17 @@ export const VideoComponentsSection = memo(function VideoComponentsSection({
     >
       <Stack gap="3" p="2">
         {policy.slots.map((slot) => (
-          <ComponentSlotRow
-            key={slot.key}
-            ctx={ctx}
-            slot={slot}
-            value={values[slot.key as VideoComponentValueKey]}
-            onPatch={onPatch}
-          />
+          <Fragment key={slot.key}>
+            <ComponentSlotRow
+              ctx={ctx}
+              slot={slot}
+              value={values[slot.key as VideoComponentValueKey]}
+              onPatch={onPatch}
+            />
+            {slot.key === 'h3HybridBaseModel' && values.h3HybridBaseModel ? (
+              <HybridStartBlockRow value={values.h3HybridStartBlock} onPatch={onPatch} />
+            ) : null}
+          </Fragment>
         ))}
         <WanExpertWiringNotice values={values} onPatch={onPatch} />
       </Stack>

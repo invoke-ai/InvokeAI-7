@@ -3,8 +3,7 @@ import type { ReactNode } from 'react';
 import { SegmentGroup } from '@chakra-ui/react';
 import { useCallback } from 'react';
 
-// Axe measures the checked label against the item's own background, not the
-// moving indicator sibling painted behind it, so the item carries the fill too.
+// Paint the checked item's background too; axe cannot infer the indicator sibling behind it.
 const CHECKED_ITEM_STYLES = { bg: 'accent.solid', color: 'accent.contrast' } as const;
 
 export interface SegmentedControlOption {

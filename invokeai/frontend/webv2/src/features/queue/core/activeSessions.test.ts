@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { QueueItem } from './historyTypes';
 
-import { getQueueActiveSessions, getQueueProgressSessions, isGalleryProgressItem } from './activeSessions';
+import {
+  getFollowedProgressSession,
+  getQueueActiveSessions,
+  getQueueProgressSessions,
+  isGalleryProgressItem,
+} from './activeSessions';
 
 const run = (id: string, backendItemIds: number[], destination: 'gallery' | 'canvas' = 'gallery'): QueueItem => ({
   id,
@@ -103,5 +108,22 @@ describe('gallery batch progress slots', () => {
     for (const status of ['completed', 'cancelled', 'failed'] as const) {
       expect(getQueueProgressSessions([{ ...item, status }], [])).toEqual([]);
     }
+  });
+});
+
+describe('getFollowedProgressSession', () => {
+  const sessions = [
+    { id: 'queued', state: 'queued' as const },
+    { id: 'settling', state: 'settling' as const },
+    { id: 'running-1', state: 'running' as const },
+    { id: 'running-2', state: 'running' as const },
+  ];
+
+  it('prefers the pinned session, then the first running, then the first settling, never a queued one', () => {
+    expect(getFollowedProgressSession(sessions, 'running-2')?.id).toBe('running-2');
+    expect(getFollowedProgressSession(sessions, null)?.id).toBe('running-1');
+    expect(getFollowedProgressSession(sessions, 'gone')?.id).toBe('running-1');
+    expect(getFollowedProgressSession(sessions.slice(0, 2), null)?.id).toBe('settling');
+    expect(getFollowedProgressSession(sessions.slice(0, 1), null)).toBeNull();
   });
 });

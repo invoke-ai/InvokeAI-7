@@ -1,25 +1,10 @@
 /**
- * Engine-owned canvas history: a bounded undo/redo stack of opaque entries.
- *
- * Project-level undo (`pushUndo` in the reducer) deliberately no longer covers
- * the canvas (Phase 0) — pixels never cross the reducer boundary, so the reducer
- * can't cheaply snapshot them. Instead the canvas keeps its OWN history here,
- * living entirely inside the engine. Each {@link HistoryEntry} is a self-contained
- * undo/redo pair (a paint {@link createImagePatchEntry | pixel patch} or a
- * structural {@link createDocumentPatchEntry | document patch}) plus a byte cost
- * used to bound memory.
- *
- * Budgets (evict oldest beyond EITHER dimension):
- * - at most {@link HISTORY_MAX_ENTRIES} undo entries, and
- * - at most {@link HISTORY_BYTE_BUDGET} bytes across both stacks.
- *
- * Re-entrancy: while an entry's `undo`/`redo` runs, {@link History.isApplying}
- * is `true`. The engine's paint/apply paths check it and skip recording, and
- * `push` is a hard no-op during apply — so replaying an entry can never spawn a
- * new entry (which would corrupt the stacks).
- *
- * Zero React, zero DOM, zero import-time side effects.
+ * Engine-owned opaque undo/redo entries account for pixel and structural edits. Evict oldest entries beyond {@link
+ * HISTORY_MAX_ENTRIES} or {@link HISTORY_BYTE_BUDGET} across both stacks. During replay `isApplying` prevents
+ * recording and `push` is a no-op, avoiding recursive history.
  */
+
+import { collectRestorableAssetRefs } from '@workbench/mediaReferences';
 
 /** Max number of undo entries retained before the oldest is evicted. */
 export const HISTORY_MAX_ENTRIES = 64;
@@ -27,12 +12,31 @@ export const HISTORY_MAX_ENTRIES = 64;
 /** Max total bytes retained across the undo + redo stacks before the oldest is evicted (256 MB). */
 export const HISTORY_BYTE_BUDGET = 256 * 1024 * 1024;
 
+export interface HeldAssetRefs {
+  readonly images: readonly string[];
+  readonly videos: readonly string[];
+}
+
+/** For entries that restore pixels or selection state only. */
+export const NO_HELD_ASSET_REFS: HeldAssetRefs = { images: [], videos: [] };
+
+/** Media names captured by an undo entry, including sources no longer in the live document. */
+export const collectHistoryMediaRefs = (...values: unknown[]): HeldAssetRefs => {
+  const { images, videos } = collectRestorableAssetRefs(...values);
+  return { images: [...images], videos: [...videos] };
+};
+
 /** One reversible step. `bytes` is the (approximate) memory the entry pins, for the budget. */
 export interface HistoryEntry {
   /** Human-readable label (e.g. "Brush stroke"). */
   readonly label: string;
   /** Approximate retained size in bytes (e.g. before+after ImageData byteLength). */
   readonly bytes: number;
+  /**
+   * Media names this entry can restore after they leave the current document; cleanup keeps them while the entry is
+   * on either stack.
+   */
+  readonly heldAssetRefs: HeldAssetRefs;
   /**
    * Opts into failure-atomic replay. When true, History moves this entry only
    * after `undo`/`redo` returns successfully, so a preparation failure remains
@@ -64,10 +68,8 @@ export interface History {
   /** Records a new entry (clearing the redo stack) and enforces the budgets. No-op while applying. */
   push(entry: HistoryEntry): void;
   /**
-   * Replaces the most recent undo entry in place (adjusting the byte total),
-   * used to coalesce a rapid burst of same-target edits — e.g. arrow-key nudges —
-   * into a single reversible step. Falls back to {@link push} when the undo stack
-   * is empty. Clears the redo stack like `push`. No-op while applying.
+   * Replaces the latest undo entry for coalescing, adjusts bytes and clears redo. Falls back to {@link push} if
+   * empty; no-op during replay.
    */
   amendLast(entry: HistoryEntry): void;
   /** Reverts the most recent entry (moving it onto the redo stack). No-op when empty or already applying. */
@@ -93,6 +95,8 @@ export interface History {
    * what `undo()` reverts), `future` next-redo-first. Fresh arrays per call.
    */
   entries(): { past: readonly string[]; future: readonly string[] };
+  /** Union of media references retained by undo and redo entries. */
+  heldAssetRefs(): HeldAssetRefs;
   /** Subscribes to every stack mutation (push, amend, undo, redo, clear, eviction). Returns an unsubscribe function. */
   subscribe(listener: () => void): () => void;
 }
@@ -164,6 +168,27 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
     past: undoStack.map((entry) => entry.label),
   });
 
+  // Reused while the stacks hold the same entries, so an unchanged union keeps its identity for the hold lease.
+  let heldUnion: { parts: HeldAssetRefs[]; refs: HeldAssetRefs } | null = null;
+  const heldAssetRefs = (): HeldAssetRefs => {
+    const parts = [...undoStack, ...redoStack].map((entry) => entry.heldAssetRefs);
+    if (
+      heldUnion &&
+      heldUnion.parts.length === parts.length &&
+      parts.every((part, i) => part === heldUnion!.parts[i])
+    ) {
+      return heldUnion.refs;
+    }
+    const images = new Set<string>();
+    const videos = new Set<string>();
+    for (const part of parts) {
+      part.images.forEach((name) => images.add(name));
+      part.videos.forEach((name) => videos.add(name));
+    }
+    heldUnion = { parts, refs: { images: [...images], videos: [...videos] } };
+    return heldUnion.refs;
+  };
+
   const push = (entry: HistoryEntry): void => {
     // Replaying an entry must never record a new one; drop it defensively.
     if (applying) {
@@ -174,8 +199,6 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
     undoStack.push(entry);
     undoBytes += entry.bytes;
     enforceBudgets();
-    // A push always clears redo and grows undo, so both booleans may have moved
-    // (canUndo→true on the first push, canRedo→false when redo was non-empty).
     notify();
   };
 
@@ -209,9 +232,8 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
       return;
     }
     if (!entry.replayFailureAtomic) {
-      // Legacy callbacks may mutate their domain before an observer throws.
-      // Move first so a retry cannot apply that mutation twice. If replay
-      // clears history, `clear()` owns the notification and the reset wins.
+      // Legacy replay may mutate before observer failure: move first to prevent duplicate retries. A replay-time
+      // clear owns reset and notification.
       undoStack.pop();
       undoBytes -= entry.bytes;
       redoStack.push(entry);
@@ -249,9 +271,7 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
     if (undoStack.at(-1) !== entry) {
       return;
     }
-    // Move the entry only after replay succeeds. A fallible callback (for
-    // example detached raster-cache preparation) may throw before applying
-    // anything; keeping the stacks and byte totals untouched makes retry exact.
+    // Fallible replay moves entries only after success, preserving stacks and byte totals for an exact retry.
     undoStack.pop();
     undoBytes -= entry.bytes;
     redoStack.push(entry);
@@ -350,6 +370,7 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
     amendLast,
     byteSize: () => undoBytes + redoBytes,
     entries,
+    heldAssetRefs,
     canRetain: (bytes) => Number.isFinite(bytes) && Math.max(0, Math.ceil(bytes)) <= byteBudget,
     canRedo: () => redoStack.length > 0,
     canUndo: () => undoStack.length > 0,

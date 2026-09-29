@@ -4,17 +4,15 @@ import type {
   NodeInvocationStartedEvent,
 } from '@features/nodes/core/executionContracts';
 
+import { getFirstOutputImageName } from '@platform/core/outputImages';
 import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
-import { createKeyedTransientStore } from '@platform/state/externalStore';
+import { createExternalStore, createKeyedTransientStore } from '@platform/state/externalStore';
 
 import { browserNodesDataPort } from './transport';
 
 /**
- * Ephemeral per-node execution state, keyed by the invocation's source node id
- * (the workflow editor's node id). Like the queue-item progress store, this is
- * high-frequency transient data that deliberately lives outside the workbench
- * reducer; the editor's nodes subscribe per id and only re-render when their
- * own node's state moves.
+ * Keep transient execution state outside the workbench reducer; subscribe per source node ID to isolate frequent
+ * renders.
  */
 
 export type NodeExecutionStatus = 'running' | 'completed' | 'failed';
@@ -34,18 +32,33 @@ export interface NodeExecutionState {
   error: string | null;
 }
 
+/** The project workflow whose run the store reflects; editors showing another copy ignore the node states. */
+export interface NodeExecutionOrigin {
+  projectId: string;
+  workflowId: string;
+}
+
 const stateByNodeId = createKeyedTransientStore<string, NodeExecutionState>();
-
-/** Pull the produced image out of an invocation output, whatever the node type. */
-const getResultImageName = (result: unknown): string | null => {
-  const image = (result as { image?: { image_name?: unknown } }).image;
-
-  return typeof image?.image_name === 'string' ? image.image_name : null;
-};
+const originStore = createExternalStore<{ origin: NodeExecutionOrigin | null }>({ origin: null });
 
 export const nodeExecutionStore = {
   clearAll(): void {
     stateByNodeId.clear();
+    if (originStore.getSnapshot().origin !== null) {
+      originStore.setSnapshot({ origin: null });
+    }
+  },
+  getOrigin(): NodeExecutionOrigin | null {
+    return originStore.getSnapshot().origin;
+  },
+  setOrigin(origin: NodeExecutionOrigin | null): void {
+    const current = originStore.getSnapshot().origin;
+    if (current?.projectId !== origin?.projectId || current?.workflowId !== origin?.workflowId) {
+      originStore.setSnapshot({ origin });
+    }
+  },
+  subscribeOrigin(listener: () => void): () => void {
+    return originStore.subscribe(listener);
   },
   get(nodeId: string): NodeExecutionState | null {
     return stateByNodeId.get(nodeId) ?? null;
@@ -54,14 +67,13 @@ export const nodeExecutionStore = {
     return stateByNodeId.subscribeKey(nodeId, listener);
   },
   completed(event: NodeInvocationCompleteEvent): void {
-    const imageName = getResultImageName(event.result);
-    const previous = stateByNodeId.get(event.invocation_source_id);
+    const imageName = getFirstOutputImageName(event.result);
 
     stateByNodeId.set(event.invocation_source_id, {
       error: null,
       outputImageUrl: imageName
         ? browserNodesDataPort.buildUrl(`/api/v1/images/i/${encodeURIComponent(imageName)}/thumbnail`)
-        : (previous?.outputImageUrl ?? null),
+        : null,
       latestOutput: event.result,
       progress: null,
       progressMessage: null,
@@ -96,7 +108,7 @@ export const nodeExecutionStore = {
    * The queue item running these nodes reached a terminal state: a node still marked running
    * finished with it, or never will (its failure/cancel event was lost or never sent).
    */
-  settleRunning(nodeIds: Iterable<string>, outcome: NodeExecutionOutcome): void {
+  settleRunning(nodeIds: Iterable<string>, outcome: NodeExecutionOutcome, error?: string): void {
     for (const nodeId of nodeIds) {
       const state = stateByNodeId.get(nodeId);
 
@@ -106,6 +118,14 @@ export const nodeExecutionStore = {
 
       if (outcome === 'completed') {
         stateByNodeId.set(nodeId, { ...state, progress: null, progressMessage: null, status: 'completed' });
+      } else if (outcome === 'failed') {
+        stateByNodeId.set(nodeId, {
+          ...state,
+          error: error ?? state.error,
+          progress: null,
+          progressMessage: null,
+          status: 'failed',
+        });
       } else {
         stateByNodeId.delete(nodeId);
       }
@@ -130,8 +150,11 @@ export interface NodeExecutionSink {
   completed(event: NodeInvocationCompleteEvent): void;
   failed(event: NodeInvocationErrorEvent): void;
   get(nodeId: string): NodeExecutionState | null;
+  getOrigin(): NodeExecutionOrigin | null;
+  setOrigin(origin: NodeExecutionOrigin | null): void;
+  subscribeOrigin(listener: () => void): () => void;
   progress(nodeId: string, percentage: number | null, message: string): void;
-  settleRunning(nodeIds: Iterable<string>, outcome: NodeExecutionOutcome): void;
+  settleRunning(nodeIds: Iterable<string>, outcome: NodeExecutionOutcome, error?: string): void;
   started(event: NodeInvocationStartedEvent): void;
   subscribe(nodeId: string, listener: () => void): () => void;
 }

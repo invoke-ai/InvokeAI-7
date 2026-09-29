@@ -2,22 +2,14 @@ import type { ReactNode } from 'react';
 
 import { createContext, use } from 'react';
 
-/**
- * Feature hints' host port. Platform may not import Workbench, so the enabled
- * preference and the "turn these off" command are pushed in from App — the same
- * direction `I18nController` and `ThemeController` feed their platform
- * singletons. Not a test seam; no second adapter is expected.
- */
+/** App supplies hint preferences/actions because Platform cannot import Workbench. */
 export interface FeatureHintsAdapter {
   enabled: boolean;
   /** Turns hints off from inside a card; null when the host cannot persist preferences. */
   onDisable: (() => void) | null;
 }
 
-/**
- * Inert by default: a tree with no provider renders exactly as it did before
- * hints existed, so unit tests and isolated browser tests need no setup.
- */
+/** Default to disabled without a provider so isolated trees remain unchanged. */
 const DEFAULT_FEATURE_HINTS_ADAPTER: FeatureHintsAdapter = {
   enabled: false,
   onDisable: null,

@@ -1,5 +1,6 @@
 import type { ForLoopValidationReason } from '@features/workflow/core/forLoops';
-import type { ProjectGraphState } from '@features/workflow/core/types';
+import type { ProjectGraphState, ProjectWorkflowEntry, ProjectWorkflowSource } from '@features/workflow/core/types';
+import type { WorkbenchThemeId } from '@theme/themes';
 import type { ReactNode } from 'react';
 
 import { useExternalStoreSelector, type EqualityFn } from '@platform/state/selectors';
@@ -15,7 +16,7 @@ import type {
 
 export interface WorkflowPreferences {
   reduceMotion: boolean;
-  themeId: 'classic' | 'light' | 'osakaJade' | 'mono' | 'ultradark';
+  themeId: WorkbenchThemeId;
   workflowEdgeStyle: 'curved' | 'square';
   workflowEdgesBehindNodes: boolean;
   workflowShowMinimap: boolean;
@@ -23,11 +24,26 @@ export interface WorkflowPreferences {
   workflowValidateConnections: boolean;
 }
 
+/** How the project's own persistence stands; the editor shows it beside the library actions. */
+export interface WorkflowProjectPersistence {
+  status: 'pending' | 'saving' | 'saved' | 'error' | 'conflict';
+  /** False when browser recovery storage is unavailable, so a pending save has no local safety net. */
+  hasLocalRecovery: boolean;
+  lastSavedAt: string | null;
+  error: string | null;
+}
+
 export interface WorkflowProjectSnapshot {
   galleryValues: Record<string, unknown>;
   id: string;
   isWorkflowRunning: boolean;
+  /** The active workflow's editable document. */
   projectGraph: ProjectGraphState;
+  /** The active workflow's entry: its document plus source and run metadata. */
+  activeWorkflow: ProjectWorkflowEntry;
+  activeWorkflowId: string;
+  /** Every workflow the project owns, in collection order; entries keep identity until edited. */
+  workflows: readonly ProjectWorkflowEntry[];
   workflowValues: Record<string, unknown>;
 }
 
@@ -47,17 +63,16 @@ export interface WorkflowGraphPreviewPort {
   invoke(sourceId?: WorkflowInvocationSourceId): Promise<boolean>;
   focusSource(sourceId?: WorkflowInvocationSourceId): void; // reveal the source's widget (provenance links)
   openWorkflowEditor(): void; // reveal the workflow editor widget
-  openDocumentInNewProject(document: ProjectGraphState, label: string): void; // fork a preview into a fresh project
+  /** Forks a document into a fresh project; a library source travels with it so the copy can update its template. */
+  openDocumentInNewProject(document: ProjectGraphState, label: string, source?: ProjectWorkflowSource): void;
 }
 
-/**
- * Workflow's UI port. The context is a dependency-direction port (the feature
- * may not import workbench), not a test seam; no second adapter is expected.
- */
+/** This UI port preserves dependency direction: Workflow cannot import Workbench. */
 export interface WorkflowUiAdapter {
   capabilities: WorkflowReadPort<WorkflowCapabilities>;
   preferences: WorkflowReadPort<WorkflowPreferences>;
   project: WorkflowReadPort<WorkflowProjectSnapshot>;
+  persistence: WorkflowReadPort<WorkflowProjectPersistence>;
   commands: WorkflowCommands;
   widgets: WorkflowWidgetCommands;
   getProjectGraph(): ProjectGraphState;
@@ -77,6 +92,9 @@ export interface WorkflowUiAdapter {
   nodeExecution: {
     get(nodeId: string): WorkflowNodeExecutionState | null;
     subscribe(nodeId: string, listener: () => void): () => void;
+    /** Which project workflow the tracked run came from; progress for another copy stays out of this editor. */
+    getOrigin(): { projectId: string; workflowId: string } | null;
+    subscribeOrigin(listener: () => void): () => void;
   };
 }
 
@@ -146,12 +164,34 @@ export const useWorkflowNotifications = () => useWorkflowUi().notifications;
 
 export const useOpenAddModels = (): ((query: string) => void) => useWorkflowUi().openAddModels;
 
+export const useWorkflowPersistenceSelector = <Selected,>(
+  selector: (persistence: WorkflowProjectPersistence) => Selected,
+  isEqual?: EqualityFn<Selected>
+): Selected => {
+  const { persistence } = useWorkflowUi();
+  return useExternalStoreSelector(persistence.subscribe, persistence.getSnapshot, selector, isEqual);
+};
+
+/** A node's execution state, only while the tracked run originated from the workflow this editor shows. */
 export const useWorkflowNodeExecutionState = (nodeId: string): WorkflowNodeExecutionState | null => {
-  const { nodeExecution } = useWorkflowUi();
+  const { nodeExecution, project } = useWorkflowUi();
   const subscribe = useCallback(
-    (listener: () => void) => nodeExecution.subscribe(nodeId, listener),
-    [nodeExecution, nodeId]
+    (listener: () => void) => {
+      const unsubscribers = [
+        nodeExecution.subscribe(nodeId, listener),
+        nodeExecution.subscribeOrigin(listener),
+        project.subscribe(listener),
+      ];
+      return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
+    },
+    [nodeExecution, nodeId, project]
   );
-  const getSnapshot = useCallback(() => nodeExecution.get(nodeId), [nodeExecution, nodeId]);
+  const getSnapshot = useCallback(() => {
+    const origin = nodeExecution.getOrigin();
+    const snapshot = project.getSnapshot();
+    return origin && origin.projectId === snapshot.id && origin.workflowId === snapshot.activeWorkflowId
+      ? nodeExecution.get(nodeId)
+      : null;
+  }, [nodeExecution, nodeId, project]);
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 };

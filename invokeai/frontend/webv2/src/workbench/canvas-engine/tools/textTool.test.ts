@@ -60,8 +60,7 @@ const createHarness = (doc: CanvasDocumentContractV3) => {
   const ctx = {
     cancelTextEdit,
     getDocument: () => doc,
-    // No layer cache in these tests, so hit-testing falls back to the pure
-    // estimateTextExtent (a `get` that always misses).
+    // Missing caches force hit tests to use estimated text extent.
     layers: { get: () => undefined },
     openTextCreate,
     openTextEdit,

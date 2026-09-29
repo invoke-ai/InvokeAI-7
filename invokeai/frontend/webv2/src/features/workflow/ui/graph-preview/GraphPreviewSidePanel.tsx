@@ -9,14 +9,7 @@ import { useTranslation } from 'react-i18next';
 
 type PreviewGraphNode = WorkflowPreviewGraph['nodes'][number];
 
-/**
- * The preview dialog's right-hand rail: either a summary of the compiled
- * graph (node count, result destination, source-specific settings rows), or
- * — once a node is selected in the flow/list — that node's inspector (who
- * set its inputs, their resolved values, and its edges). The outer
- * `Scrollable` stays mounted across the switch so selecting a node doesn't
- * remount the panel's scroll container.
- */
+/** Keep the outer scroll container mounted while switching between graph summary and node inspection. */
 export const GraphPreviewSidePanel = ({
   source,
   selectedNode,
@@ -34,9 +27,7 @@ export const GraphPreviewSidePanel = ({
   const { t } = useTranslation();
 
   return (
-    // `minH="0"` (not `h="full"`) — an explicit height opts the panel out of
-    // the flex row's stretch sizing, so the root grew to its content height
-    // and the viewport never actually overflowed (dead scrollbar thumb).
+    // Use minH=0 to retain flex stretch sizing and a genuinely overflowing scroll viewport.
     <Scrollable flexShrink={0} label={t('graphPreview.thisGraph')} minH="0" w="19rem">
       {selectedNode ? (
         <NodeInspector node={selectedNode} source={source} onBack={onBack} onProvenanceClick={onProvenanceClick} />
@@ -117,10 +108,7 @@ const GraphSummary = ({
             {nodeCount !== undefined ? String(nodeCount) : '—'}
           </DataList.ItemValue>
         </DataList.Item>
-        {/* A source with no destination has not been routed anywhere yet (a
-            library entry previewed before it is opened into a project). A row
-            reading "Destination —" states nothing; omitting it says the same
-            thing without the noise. */}
+
         {source.destinationLabel === null ? null : (
           <DataList.Item>
             <DataList.ItemLabel fontSize="2xs">{t('graphPreview.destination')}</DataList.ItemLabel>

@@ -18,12 +18,6 @@ interface LayersPanelFooterProps {
   onFilterChange: (filter: string) => void;
 }
 
-/**
- * The stable footer — the panel's one action strip: name filter and the
- * top-frequency selection verbs (duplicate, group, delete). Everything else
- * lives in the context menu; nothing here appears or disappears — controls
- * disable instead.
- */
 const LayersPanelFooterComponent = ({ commands, degraded, filter, onFilterChange }: LayersPanelFooterProps) => {
   const { t } = useTranslation();
   const handleFilter = useCallback(

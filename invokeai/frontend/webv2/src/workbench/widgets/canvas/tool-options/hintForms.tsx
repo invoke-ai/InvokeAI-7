@@ -4,11 +4,6 @@ import { HintCard } from '@workbench/widgets/canvas/tool-presentation/PropertyPr
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * Gesture cards for the tools whose whole interface is the pointer. The rows
- * mirror what `pointerPipeline`/the tools actually do — hold-keys included —
- * instead of the old single hint sentence.
- */
 const ViewHints = (_props: ToolFormProps) => {
   const { t } = useTranslation();
   const rows = useMemo(

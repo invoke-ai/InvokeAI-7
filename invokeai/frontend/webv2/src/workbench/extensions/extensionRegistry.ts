@@ -38,11 +38,7 @@ export interface ExtensionRegistry {
   toolbars: WidgetToolbarApi;
 }
 
-/**
- * One extension registry is constructed per Workbench mount (see
- * WorkbenchProvider) so contribution state lives and dies with the mount —
- * never in process-wide singletons.
- */
+/** Construct one registry per Workbench mount so contribution state shares its lifetime. */
 export const createExtensionRegistry = (): ExtensionRegistry => {
   const stores: ExtensionContributionStores = {
     commands: createCollectionStore<WidgetCommandContribution>(),

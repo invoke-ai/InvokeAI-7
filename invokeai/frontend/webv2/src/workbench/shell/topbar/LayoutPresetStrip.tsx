@@ -112,21 +112,14 @@ export const LayoutPresetStrip = () => {
     () => ({ destination: invocation.destination, sourceId: invocation.sourceId }),
     [invocation.destination, invocation.sourceId]
   );
-  /**
-   * Desktop semantics: the control acknowledges the press on its own frame,
-   * then the workspace rearranges. Activating inside the handler put a
-   * ~100ms blocking React commit between the click and any pixel changing,
-   * and the tab itself did not repaint for ~330ms.
-   */
+  /** Acknowledge the tab press before rearranging the workspace so a blocking layout commit cannot delay feedback. */
   const requestPreset = useCallback(
     (presetId: LayoutPresetId) => {
       setPendingPresetId(presetId);
       requestAnimationFrame(() => {
         void layout.activatePreset(presetId).then((appliedPresetId) => {
-          // An activation can be dropped — superseded, overtaken by a project
-          // switch, or aimed at a preset the account has since replaced. Give
-          // the tab back to the store rather than leave it painting a preset
-          // nothing ever applied. Guarded so a newer request keeps its own.
+          // Return dropped activations to store selection without overwriting a newer request's optimistic
+          // selection.
           if (appliedPresetId !== presetId) {
             setPendingPresetId((pending) => (pending === presetId ? null : pending));
           }
@@ -209,10 +202,7 @@ export const LayoutPresetStrip = () => {
                   ))}
                 </Tabs.List>
               </SortableContext>
-              {/* The real "panel" is the dock itself, which lives outside this
-                  component and is shared by every preset. These stand in for it so
-                  each tab's `aria-controls` resolves to something that describes
-                  what selecting it did. */}
+              {/* Provide aria-controls targets describing the shared dock outside this component. */}
               {presets.map((preset) => (
                 <Tabs.Content key={preset.id} value={preset.id} asChild>
                   <VisuallyHidden>{`${preset.label} layout`}</VisuallyHidden>
@@ -284,9 +274,8 @@ const PresetTab = ({
       opacity: isDragging ? 0.5 : undefined,
       position: 'relative' as const,
       transform: CSS.Translate.toString(transform),
-      // dnd-kit's inline transform transition replaces the recipe's CSS
-      // transition outright, which froze hover/selected fills; compose the
-      // buttons' fill fade back in (motion-aware duration token).
+      // Compose fill transitions with dnd-kit's inline transform transition so hover/selection fades remain
+      // active.
       transition: [transition, TAB_FILL_TRANSITION].filter(Boolean).join(', '),
       zIndex: isDragging ? 1 : undefined,
     }),
@@ -295,10 +284,7 @@ const PresetTab = ({
   const handlePreload = useCallback(() => preloadLayoutPresetWidgets(preset), [preset]);
   const showDrift = isActive && hasDrifted;
 
-  // A tab is a `<button>`, so the chevron cannot be one — nesting buttons is
-  // invalid and the browser hoists the inner one out of the tab entirely. It is
-  // a span the tab's own handler recognises, the same way the project tabs used
-  // to carry their close affordance.
+  // Use a span chevron recognized by the tab handler; nested buttons are invalid.
   const handleClick = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
       const trigger = event.target instanceof Element ? event.target.closest(`[${PRESET_MENU_ATTRIBUTE}]`) : null;
@@ -312,18 +298,11 @@ const PresetTab = ({
     [onOpenMenu, preset]
   );
 
-  // The press, not the click, is what the user is waiting on: the tabs machine
-  // lands the selection correctly either way, but only once the button is
-  // released. Primary button only — `pointerdown` fires for the secondary
-  // button too, ahead of `contextmenu`, and right-clicking an inactive preset
-  // to reach its menu must not switch to it first and strip the menu of the
-  // very item it was opened for. dnd-kit's own `MouseSensor` bails the same way.
+  // Activate on primary press for immediate feedback; right-click must preserve the inactive preset's menu
+  // actions.
   const handlePointerDown = useCallback(
     (event: PointerEvent<HTMLButtonElement>) => {
-      // dnd-kit owns the drag gesture; chain rather than replace. Inert today —
-      // the strip's sensors activate on `onMouseDown`/`onTouchStart`/`onKeyDown`
-      // and only the unused `PointerSensor` would put a listener here — kept so
-      // a future sensor swap does not silently lose its activator.
+      // Chain dnd-kit's activator so a sensor change cannot silently lose drag initiation.
       (listeners as { onPointerDown?: (value: unknown) => void } | undefined)?.onPointerDown?.(event);
 
       if (event.button === 0 && event.pointerType !== 'touch' && !isActive) {

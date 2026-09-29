@@ -1,12 +1,6 @@
 /**
- * Rasterizes a `paint` layer source. Paint layers are CONTENT-SIZED: the
- * persisted bitmap covers only the painted region, positioned in the layer's
- * local space by the source `offset` (default `{ x: 0, y: 0 }` for legacy
- * document-sized bitmaps). When the source has a bitmap it is decoded and
- * blitted onto a surface sized to the bitmap; when it is `null` the layer is
- * empty and the result is a zero-rect surface (a brand-new / cleared layer).
- *
- * Zero React, zero import-time side effects.
+ * Paint surfaces match persisted bitmap dimensions at the source's local offset (legacy zero). Null bitmaps yield
+ * empty zero-rect surfaces.
  */
 
 import type { CanvasImageRef } from '@workbench/canvas-engine/contracts';

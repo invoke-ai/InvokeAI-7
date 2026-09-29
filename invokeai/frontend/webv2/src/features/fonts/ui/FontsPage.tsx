@@ -30,6 +30,7 @@ import {
 } from '@features/fonts';
 import { useFontRuntime, useFontRuntimeSnapshot } from '@features/fonts/react';
 import { useCapabilities } from '@features/identity';
+import { formatBytes } from '@platform/i18n/languages';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import {
   assertAccountScopeCurrent,
@@ -262,19 +263,6 @@ const FontDetail = ({
       ) : null}
     </Stack>
   );
-};
-
-const formatBytes = (bytes: number): string => {
-  if (!Number.isFinite(bytes) || bytes < 1) {
-    return '0 B';
-  }
-  if (bytes < 1024) {
-    return `${Math.round(bytes)} B`;
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
 const UploadStatusList = ({ items }: { items: readonly UploadItem[] }) => {

@@ -14,12 +14,6 @@ import { QueueStats } from './QueueStats';
 import { usePendingQueueItemReveal } from './queueUiStore';
 import { RecentSection } from './RecentSection';
 
-/**
- * Queue console: server-wide stats, status filters, a live NOW & NEXT card, and
- * the RECENT history. Header (title/Pause/menu) and the MODEL CACHE footer are
- * provided through the manifest's chrome slots; this view is just the scrolling
- * body. In a collapsed bottom dock it degrades to a single status chip.
- */
 export const QueueWidgetView = ({
   presentation,
   region,
@@ -51,8 +45,7 @@ const QueueContent = () => {
   const revealRequest = usePendingQueueItemReveal();
   const [handledRevealRequestId, setHandledRevealRequestId] = useState<number | null>(null);
 
-  // Render-phase adjustment (not an effect): a reveal request must not be
-  // hidden by the active status tab.
+  // Adjust the active tab during render so it cannot hide a requested item.
   if (revealRequest !== null && revealRequest.requestId !== handledRevealRequestId) {
     setHandledRevealRequestId(revealRequest.requestId);
     setFilter('all');

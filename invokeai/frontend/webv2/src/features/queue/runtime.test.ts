@@ -3,10 +3,11 @@ import type {
   QueueBackendInvocation,
   QueueBackendPort,
   QueueResultImage,
-  QueueWorkflowRunSink,
+  QueueResultVideo,
 } from '@features/queue/core/types';
 import type { BackendConnectionStatus } from '@platform/transport/types';
 
+import { activeProgressTargetStore } from '@features/queue/data/activeProgressTargetStore';
 import { buildQueueItemOrigin } from '@features/queue/data/events';
 import { ApiError } from '@platform/transport/http';
 import { describe, expect, it, vi } from 'vitest';
@@ -62,6 +63,7 @@ const createTestBackend = (overrides: Partial<QueueBackendPort> = {}): QueueBack
   getItem: vi.fn(),
   getResultImages: vi.fn().mockResolvedValue([]),
   getResultVideoNames: vi.fn().mockResolvedValue([]),
+  getResultVideos: vi.fn().mockResolvedValue([]),
   listItems: vi.fn().mockResolvedValue([]),
   on: vi.fn(() => vi.fn()),
   onConnectionChange: vi.fn((listener) => {
@@ -110,6 +112,7 @@ const runtimeServices = {
     completed: vi.fn(),
     failed: vi.fn(),
     progress: vi.fn(),
+    setOrigin: vi.fn(),
     settleRunning: vi.fn(),
     started: vi.fn(),
   },
@@ -166,6 +169,7 @@ describe('queue runtime', () => {
         batchCount: 3,
         graph: { edges: [], id: 'backend-graph', nodes: { noise: { id: 'noise', seed: 7, type: 'noise' } } },
         kind: 'workflow',
+        workflow: { edges: [], name: 'Call-only workflow', nodes: [], version: '1.0.0' },
         ...(seeds === undefined ? {} : { seeds: seeds as never }),
       };
       queueItem.snapshot.sourceId = 'workflow';
@@ -176,7 +180,11 @@ describe('queue runtime', () => {
 
     expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([seed]))).toMatchObject({
       kind: 'workflow',
-      request: { batchCount: 3, seeds: [seed] },
+      request: {
+        batchCount: 3,
+        seeds: [seed],
+        workflow: { name: 'Call-only workflow' },
+      },
     });
     expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow(undefined))).toMatchObject({
       kind: 'workflow',
@@ -190,6 +198,80 @@ describe('queue runtime', () => {
       invalid
     );
     expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([seed, seed]))).toEqual(invalid);
+  });
+
+  it('keeps workflow provenance off the backend request, including the binding older records carry', () => {
+    const queueItem = createPendingQueueItem();
+    queueItem.snapshot.backendSubmission = {
+      batchCount: 1,
+      graph: { edges: [], id: 'backend-graph', nodes: {} },
+      kind: 'workflow',
+      libraryWorkflowId: 'lib-1',
+      projectWorkflowId: 'wf-1',
+    } as never;
+    queueItem.snapshot.sourceId = 'workflow';
+
+    const submission = createQueueItemBackendSubmission({ id: 'project-1' }, queueItem);
+
+    expect(submission).toMatchObject({ kind: 'workflow', request: { batchCount: 1, projectId: 'project-1' } });
+    expect(submission).toHaveProperty('request');
+    expect((submission as { request: object }).request).not.toHaveProperty('projectWorkflowId');
+    expect((submission as { request: object }).request).not.toHaveProperty('libraryWorkflowId');
+  });
+
+  it('replays persisted batch groups and rejects ones the graph or the backend would refuse', () => {
+    const asWorkflow = (batchData: unknown, seeds?: unknown) => {
+      const queueItem = createPendingQueueItem();
+      queueItem.snapshot.backendSubmission = {
+        batchCount: 2,
+        graph: {
+          edges: [],
+          id: 'backend-graph',
+          nodes: { denoise: { id: 'denoise', type: 'denoise' }, noise: { id: 'noise', seed: 7, type: 'noise' } },
+        },
+        kind: 'workflow',
+        ...(seeds === undefined ? {} : { seeds: seeds as never }),
+        batchData: batchData as never,
+      };
+      queueItem.snapshot.sourceId = 'workflow';
+      return queueItem;
+    };
+    const cfg = { fieldName: 'cfg', items: [1, 2], nodeId: 'denoise' };
+    const invalid = { error: 'Queue item has malformed workflow batch metadata.', kind: 'invalid' };
+
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([[cfg]]))).toMatchObject({
+      kind: 'workflow',
+      request: { batchData: [[cfg]] },
+    });
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([]))).toEqual(invalid);
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([[]]))).toEqual(invalid);
+    expect(
+      createQueueItemBackendSubmission(
+        { id: 'project-1' },
+        asWorkflow([[cfg, { ...cfg, fieldName: 'steps', items: [1] }]])
+      )
+    ).toEqual(invalid);
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([[{ ...cfg, nodeId: 'gone' }]]))).toEqual(
+      invalid
+    );
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([[cfg], [cfg]]))).toEqual(invalid);
+    // The product must fit the queue together with the runs, as the planner enforced when it was queued.
+    expect(
+      createQueueItemBackendSubmission(
+        { id: 'project-1' },
+        asWorkflow([[{ ...cfg, items: Array.from({ length: 5_001 }, (_, i) => i) }]])
+      )
+    ).toEqual(invalid);
+    // A field a seed already walks cannot also be batched.
+    expect(
+      createQueueItemBackendSubmission(
+        { id: 'project-1' },
+        asWorkflow(
+          [[{ fieldName: 'seed', items: [1, 2], nodeId: 'noise' }]],
+          [{ fieldName: 'seed', nodeId: 'noise', seed: 7, seedStep: 1 }]
+        )
+      )
+    ).toEqual(invalid);
   });
 
   it('rejects a generate item that records neither a seed step nor the legacy toggle', () => {
@@ -228,6 +310,7 @@ describe('queue runtime', () => {
       getItem: vi.fn(),
       getResultImages: vi.fn(),
       getResultVideoNames: vi.fn().mockResolvedValue([]),
+      getResultVideos: vi.fn().mockResolvedValue([]),
       listItems,
       on: vi.fn(() => vi.fn()),
       onConnectionChange: vi.fn((listener) => {
@@ -281,6 +364,7 @@ describe('queue runtime', () => {
         completed: vi.fn(),
         failed: vi.fn(),
         progress: vi.fn(),
+        setOrigin: vi.fn(),
         settleRunning: vi.fn(),
         started: vi.fn(),
       },
@@ -1876,6 +1960,62 @@ describe('queue runtime', () => {
     runtime.dispose();
   });
 
+  it.each([
+    { hasWorkflowCall: true, name: 'saved-workflow call', node: { id: 'call', type: 'call_saved_workflow' } },
+    { hasWorkflowCall: false, name: 'ordinary workflow', node: { id: 'denoise', type: 'denoise' } },
+  ])('recovery routes waiting preview correctly for $name', async ({ hasWorkflowCall, node }) => {
+    const queueItem = createPendingQueueItem();
+    queueItem.snapshot.backendSubmission = {
+      batchCount: 1,
+      graph: {
+        edges: [],
+        id: 'backend-graph',
+        nodes: { [node.id]: node },
+      },
+      kind: 'workflow',
+    };
+    queueItem.snapshot.sourceId = 'workflow';
+    queueItem.backendItemIds = [88];
+    queueItem.status = 'running';
+    const project = { id: 'project-1', queue: { items: [queueItem] } };
+    const getItem = vi.fn().mockResolvedValue({
+      id: 88,
+      origin: buildQueueItemOrigin(queueItem.id, project.id),
+      status: 'waiting',
+    });
+    const readProgressPreviews = vi.fn().mockResolvedValue([]);
+    const backend = createTestBackend({ getItem, readProgressPreviews });
+    const runtime = createQueueRuntime({
+      ...runtimeServices,
+      backend,
+      history: {
+        commands: createTestCommands(),
+        getSnapshot: () => ({ connectionStatus: 'connected', isHydrated: true, projects: [project] }),
+        subscribe: vi.fn(() => vi.fn()),
+      },
+    });
+    activeProgressTargetStore.clear();
+    const clear = vi.spyOn(activeProgressTargetStore, 'clear');
+    const set = vi.spyOn(activeProgressTargetStore, 'set');
+
+    try {
+      runtime.start();
+      await vi.waitFor(() => expect(readProgressPreviews).toHaveBeenCalled());
+
+      if (hasWorkflowCall) {
+        expect(clear).not.toHaveBeenCalledWith({ itemIndex: 1, queueItemId: queueItem.id });
+        expect(set).toHaveBeenCalledWith({ itemIndex: 1, queueItemId: queueItem.id });
+      } else {
+        expect(clear).toHaveBeenCalledWith({ itemIndex: 1, queueItemId: queueItem.id });
+        expect(set).not.toHaveBeenCalledWith({ itemIndex: 1, queueItemId: queueItem.id });
+      }
+    } finally {
+      await runtime.dispose();
+      clear.mockRestore();
+      set.mockRestore();
+    }
+  });
+
   it('retains a running journal row when its project tab closes', async () => {
     const queueItem = { ...createPendingQueueItem(), backendItemIds: [88], status: 'running' as const };
     const projects: Array<{ id: string; queue: { items: QueueItem[] } }> = [
@@ -1939,6 +2079,7 @@ describe('queue runtime', () => {
 describe('queue runtime video board routing', () => {
   const createHarness = (options: {
     getResultVideoNames: QueueBackendPort['getResultVideoNames'];
+    getResultVideos?: QueueBackendPort['getResultVideos'];
     galleryBoardId?: string | null;
     getResultImages?: QueueBackendPort['getResultImages'];
     /** Nodes of the compiled submission graph — media values here mark run INPUTS. */
@@ -1967,8 +2108,12 @@ describe('queue runtime video board routing', () => {
       getItem: vi.fn(),
       getResultImages: options.getResultImages ?? vi.fn().mockResolvedValue([]),
       getResultVideoNames: options.getResultVideoNames,
-      // The backend already accepted and completed this run before "reload": reconcile
-      // adopts it and settles immediately, driving both settlement paths without sockets.
+      getResultVideos:
+        options.getResultVideos ??
+        vi.fn((videoNames: string[], sourceQueueItemId: string, queuedAt: string) =>
+          Promise.resolve(videoNames.map((videoName) => resultVideo(videoName, sourceQueueItemId, queuedAt)))
+        ),
+      // Reconcile an already-completed backend run to exercise both settlement paths without sockets.
       listItems: vi.fn().mockResolvedValue([
         {
           batchId: 'backend-batch',
@@ -2035,22 +2180,43 @@ describe('queue runtime video board routing', () => {
         completed: vi.fn(),
         failed: vi.fn(),
         progress: vi.fn(),
+        setOrigin: vi.fn(),
         settleRunning: vi.fn(),
         started: vi.fn(),
       },
     });
 
-    return { commands, destinations, runtime };
+    return { backend, commands, destinations, runtime };
   };
+
+  const resultVideo = (videoName: string, sourceQueueItemId: string, queuedAt: string): QueueResultVideo => ({
+    category: 'general',
+    durationSeconds: 5,
+    height: 512,
+    isIntermediate: false,
+    queuedAt,
+    sourceQueueItemId,
+    thumbnailUrl: `http://test/v/${videoName}/thumbnail`,
+    videoName,
+    videoUrl: `http://test/v/${videoName}`,
+    width: 512,
+  });
 
   it('lands result videos on the enqueue-time board, excluding intermediates', async () => {
     const getResultVideoNames = vi.fn().mockResolvedValue(['clip-1.mp4']);
-    const { destinations, runtime } = createHarness({ getResultVideoNames });
+    const { commands, destinations, runtime } = createHarness({ getResultVideoNames });
 
     runtime.start();
 
     await vi.waitFor(() => {
       expect(destinations.addVideosToGalleryBoard).toHaveBeenCalledWith('board-1', ['clip-1.mp4']);
+      // Both passes queue follow-up reads while earlier ones drain; none may be stranded.
+      expect(commands.routePartialResults).toHaveBeenCalledWith(
+        expect.objectContaining({ videos: [expect.objectContaining({ videoName: 'clip-1.mp4' })] })
+      );
+      expect(commands.routeResults).toHaveBeenCalledWith(
+        expect.objectContaining({ videos: [expect.objectContaining({ videoName: 'clip-1.mp4' })] })
+      );
     });
     // filterIntermediateResults on the snapshot maps to the video-side intermediate filter.
     expect(getResultVideoNames).toHaveBeenCalledWith(77, expect.objectContaining({ excludeIntermediate: true }));
@@ -2076,19 +2242,37 @@ describe('queue runtime video board routing', () => {
     runtime.dispose();
   });
 
-  it('skips the board attach entirely when no board was active at enqueue', async () => {
+  it("routes an uncategorized run's videos for display without a board attach", async () => {
     const getResultVideoNames = vi.fn().mockResolvedValue(['clip-1.mp4']);
     const { commands, destinations, runtime } = createHarness({ galleryBoardId: null, getResultVideoNames });
+    const routedClip = expect.objectContaining({ videos: [expect.objectContaining({ videoName: 'clip-1.mp4' })] });
 
     runtime.start();
 
-    // Wait for full settlement first so the negative assertions below are meaningful.
     await vi.waitFor(() => {
-      expect(commands.routeResults).toHaveBeenCalled();
+      expect(commands.routePartialResults).toHaveBeenCalledWith(routedClip);
+      expect(commands.routeResults).toHaveBeenCalledWith(routedClip);
     });
     expect(destinations.addImagesToGalleryBoard).not.toHaveBeenCalled();
     expect(destinations.addVideosToGalleryBoard).not.toHaveBeenCalled();
-    expect(getResultVideoNames).not.toHaveBeenCalled();
+
+    runtime.dispose();
+  });
+
+  it('still shows a finished video when its board attach fails', async () => {
+    const { commands, destinations, runtime } = createHarness({
+      getResultVideoNames: vi.fn().mockResolvedValue(['clip-1.mp4']),
+    });
+    destinations.addVideosToGalleryBoard.mockRejectedValue(new Error('attach failed'));
+
+    runtime.start();
+
+    await vi.waitFor(() => {
+      expect(commands.routePartialResults).toHaveBeenCalledWith(
+        expect.objectContaining({ videos: [expect.objectContaining({ videoName: 'clip-1.mp4' })] })
+      );
+    });
+    expect(commands.recordError).toHaveBeenCalledWith(expect.objectContaining({ message: 'attach failed' }));
 
     runtime.dispose();
   });
@@ -2105,9 +2289,7 @@ describe('queue runtime video board routing', () => {
   });
 
   it('never routes an input image echoed into the results (first-frame keyframe)', async () => {
-    // The i2v workflow's `image` primitive echoes the uploaded keyframe into
-    // session.results as a non-intermediate output; only the generated image may
-    // reach the board or the recorded results.
+    // Exclude echoed i2v keyframes from result recording and board attachment.
     const { commands, destinations, runtime } = createHarness({
       getResultImages: vi.fn().mockResolvedValue([resultImage('keyframe.png'), resultImage('generated.png')]),
       getResultVideoNames: vi.fn().mockResolvedValue([]),
@@ -2195,212 +2377,6 @@ describe('queue runtime video board routing', () => {
       expect(commands.routeResults).toHaveBeenCalled();
     });
     expect(destinations.addImagesToGalleryBoard).not.toHaveBeenCalled();
-
-    runtime.dispose();
-  });
-});
-
-describe('queue runtime workflow run capture', () => {
-  const resultImage = (imageName: string): QueueResultImage => ({
-    height: 512,
-    imageName,
-    imageUrl: `http://test/i/${imageName}`,
-    isIntermediate: false,
-    queuedAt: '2026-07-17T00:00:00.000Z',
-    sourceQueueItemId: 'local-queue-item',
-    thumbnailUrl: `http://test/t/${imageName}`,
-    width: 512,
-  });
-
-  const createHarness = (options: {
-    images?: QueueResultImage[];
-    /** Replaces the item's generate submission with a workflow one. */
-    libraryWorkflowId?: string | null;
-    onWorkflowRunCompleted?: QueueWorkflowRunSink['onWorkflowRunCompleted'];
-  }) => {
-    const queueItem = createPendingQueueItem();
-
-    queueItem.snapshot.destination = 'gallery';
-    queueItem.snapshot.galleryBoardId = null;
-    if (options.libraryWorkflowId !== undefined) {
-      queueItem.snapshot.backendSubmission = {
-        batchCount: 1,
-        graph: { edges: [], id: 'backend-graph', nodes: {} },
-        kind: 'workflow',
-        ...(options.libraryWorkflowId ? { libraryWorkflowId: options.libraryWorkflowId } : {}),
-      };
-      queueItem.snapshot.sourceId = 'workflow';
-    }
-
-    const project = { id: 'project-1', queue: { items: [queueItem] } };
-    const backend: QueueBackendPort = {
-      cancelCurrentItem: vi.fn(),
-      cancelItem: vi.fn(),
-      cancelQueueItems: vi.fn(),
-      cancelQueueItemsByBatchIds: vi.fn(),
-      cancelScopedItems: vi.fn(),
-      clearFailedItems: vi.fn(),
-      clearItems: vi.fn(),
-      emit: vi.fn(),
-      enqueueGenerate: vi.fn(),
-      enqueueWorkflow: vi.fn(),
-      getItem: vi.fn(),
-      getResultImages: vi.fn().mockResolvedValue(options.images ?? [resultImage('generated.png')]),
-      getResultVideoNames: vi.fn().mockResolvedValue([]),
-      listItems: vi.fn().mockResolvedValue([
-        {
-          batchId: 'backend-batch',
-          id: 77,
-          origin: buildQueueItemOrigin(queueItem.id, project.id),
-          status: 'completed',
-        },
-      ]),
-      on: vi.fn(() => vi.fn()),
-      onConnectionChange: vi.fn(() => vi.fn()),
-      pauseProcessor: vi.fn(),
-      readCurrent: vi.fn().mockResolvedValue(null),
-      readItemIds: vi.fn().mockResolvedValue({ itemIds: [], totalCount: 0 }),
-      readItemsById: vi.fn().mockResolvedValue([]),
-      readNext: vi.fn().mockResolvedValue(null),
-      readStatus: vi.fn().mockResolvedValue({
-        processor: { isProcessing: false, isStarted: true },
-        queue: {
-          canceled: 0,
-          completed: 0,
-          failed: 0,
-          inProgress: 0,
-          pending: 0,
-          queueId: 'default',
-          total: 0,
-          waiting: 0,
-        },
-      }),
-      resumeProcessor: vi.fn(),
-      retryItems: vi.fn(),
-    };
-    const commands: QueueHistoryCommands = {
-      markBackendCancelled: vi.fn(),
-      markBackendSubmitted: ({ backendBatchId, backendItemIds }) => {
-        queueItem.backendBatchId = backendBatchId;
-        queueItem.backendItemIds = backendItemIds;
-        queueItem.status = 'running';
-      },
-      setCancellationPending: ({ pending }) => {
-        queueItem.cancellationPending = pending || undefined;
-      },
-      setLocalRecoveryState: vi.fn(),
-      recordError: vi.fn(),
-      refreshBackendData: vi.fn(),
-      restoreFromJournal: vi.fn(),
-      routePartialResults: vi.fn(),
-      routeResults: vi.fn(),
-      setConnectionStatus: vi.fn(),
-      setStatus: vi.fn(),
-    };
-    const onWorkflowRunCompleted = vi.fn(options.onWorkflowRunCompleted);
-    const runtime = createQueueRuntime({
-      backend,
-      destinations: { addImagesToGalleryBoard: vi.fn(), addVideosToGalleryBoard: vi.fn() },
-      ensureTemplatesLoaded: vi.fn(),
-      history: {
-        commands,
-        getSnapshot: () => ({ connectionStatus: 'connected', isHydrated: true, projects: [project] }),
-        subscribe: vi.fn(() => vi.fn()),
-      },
-      modelLoads: { completed: vi.fn(), reset: vi.fn(), started: vi.fn() },
-      nodeExecution: {
-        clearAll: vi.fn(),
-        completed: vi.fn(),
-        failed: vi.fn(),
-        progress: vi.fn(),
-        settleRunning: vi.fn(),
-        started: vi.fn(),
-      },
-      workflowRuns: { onWorkflowRunCompleted },
-    });
-
-    return { commands, onWorkflowRunCompleted, queueItem, runtime };
-  };
-
-  it('notifies the capture sink once with the completed run and its result image names', async () => {
-    const { commands, onWorkflowRunCompleted, runtime } = createHarness({
-      images: [resultImage('early.png'), resultImage('final.png')],
-      libraryWorkflowId: 'library-workflow-1',
-    });
-
-    runtime.start();
-
-    await vi.waitFor(() => {
-      expect(commands.routeResults).toHaveBeenCalled();
-    });
-    expect(onWorkflowRunCompleted).toHaveBeenCalledTimes(1);
-    expect(onWorkflowRunCompleted).toHaveBeenCalledWith({
-      imageNames: ['early.png', 'final.png'],
-      libraryWorkflowId: 'library-workflow-1',
-      projectId: 'project-1',
-      queueItemId: 'local-queue-item',
-    });
-
-    runtime.dispose();
-  });
-
-  it('never notifies for a workflow run that is not bound to a library record', async () => {
-    const { commands, onWorkflowRunCompleted, runtime } = createHarness({ libraryWorkflowId: null });
-
-    runtime.start();
-
-    await vi.waitFor(() => {
-      expect(commands.routeResults).toHaveBeenCalled();
-    });
-    expect(onWorkflowRunCompleted).not.toHaveBeenCalled();
-
-    runtime.dispose();
-  });
-
-  it('never notifies for a generate run', async () => {
-    const { commands, onWorkflowRunCompleted, runtime } = createHarness({});
-
-    runtime.start();
-
-    await vi.waitFor(() => {
-      expect(commands.routeResults).toHaveBeenCalled();
-    });
-    expect(onWorkflowRunCompleted).not.toHaveBeenCalled();
-
-    runtime.dispose();
-  });
-
-  it('never notifies for a bound workflow run that produced no images', async () => {
-    const { commands, onWorkflowRunCompleted, runtime } = createHarness({
-      images: [],
-      libraryWorkflowId: 'library-workflow-1',
-    });
-
-    runtime.start();
-
-    await vi.waitFor(() => {
-      expect(commands.routeResults).toHaveBeenCalled();
-    });
-    expect(onWorkflowRunCompleted).not.toHaveBeenCalled();
-
-    runtime.dispose();
-  });
-
-  it('settles the run normally when the capture sink throws', async () => {
-    const { commands, onWorkflowRunCompleted, runtime } = createHarness({
-      libraryWorkflowId: 'library-workflow-1',
-      onWorkflowRunCompleted: () => {
-        throw new Error('capture exploded');
-      },
-    });
-
-    runtime.start();
-
-    await vi.waitFor(() => {
-      expect(onWorkflowRunCompleted).toHaveBeenCalled();
-    });
-    expect(commands.routeResults).toHaveBeenCalled();
-    expect(commands.setStatus).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
 
     runtime.dispose();
   });

@@ -5,6 +5,7 @@ from invokeai.backend.architectures.facets.default_settings import DefaultSettin
 from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import FLUX2_32, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
+from invokeai.backend.architectures.facets.vae import VaeCompatibility, VaeFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
 from invokeai.backend.model_manager.taxonomy import BaseModelType
@@ -24,6 +25,19 @@ register(
         by_name_hint={
             "turbo": MainModelDefaultSettings(scheduler="euler", steps=8, cfg_scale=1.0, width=1024, height=1024)
         },
+    ),
+    VaeFacet(
+        frozenset(
+            {
+                # ERNIE-Image decodes with AutoencoderKLFlux2 -- its pipeline says so, and Comfy-Org
+                # ships the FLUX.2 VAE file alongside the single-file transformer, byte-identical to
+                # the one FLUX.2 Klein ships. It is the only entry because no VAE config class can
+                # produce `ernie-image`: the released file identifies as a FLUX.2 VAE, and a record
+                # forced to this base by hand would fall through to the generic VAE loader, which
+                # cannot serve a `vae` submodel at all. Listing it would advertise a broken choice.
+                VaeCompatibility(BaseModelType.Flux2),
+            }
+        )
     ),
     # Text-to-image only.
     ModalityFacet(frozenset({"txt2img"}), metadata_slug="ernie_image"),

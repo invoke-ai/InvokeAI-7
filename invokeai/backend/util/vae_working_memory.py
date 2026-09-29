@@ -21,6 +21,16 @@ from invokeai.backend.util.devices import TorchDevice
 _CLASSIC_VAE_MID_BLOCK_HEADS = 1
 _CLASSIC_VAE_MID_BLOCK_HEAD_DIM = 512
 
+# Fixed cost of the LTX-2 VAE's own buffers, and the marginal cost of a tile pixel-element.
+# See `estimate_vae_working_memory_ltx2` for the measurements these are fitted to.
+_LTX2_VAE_BASE_BYTES = 512 * 2**20
+_LTX2_AUDIO_BASE_BYTES = 128 * 2**20
+_LTX2_AUDIO_BYTES_PER_LATENT = 6.5 * 2**20
+_LTX2_VAE_DECODE_BYTES_PER_TILE_ELEMENT = 466
+_LTX2_DECODE_CLIP_COPIES = 3
+_LTX2_VAE_ENCODE_BYTES_PER_TILE_ELEMENT = 700
+_LTX2_VAE_TILED_ENCODE_BYTES_PER_TILE_ELEMENT = 360
+
 _WAN_VAE_SINGLE_FRAME_DECODE_SCALING_CONSTANT = 2900
 _WAN_VAE_VIDEO_DECODE_SCALING_CONSTANT_A14B = 6500
 _WAN_VAE_VIDEO_DECODE_SCALING_CONSTANT_TI2V = 7000
@@ -430,6 +440,116 @@ def estimate_vae_working_memory_minimax_h3(
     clip_bytes = clip_copies * 3 * pixel_frames * pixel_height * pixel_width * element_size
 
     return int((chunk_bytes + clip_bytes) * MINIMAX_H3_ALLOCATOR_HEADROOM)
+
+
+def estimate_vae_working_memory_ltx2(
+    operation: Literal["encode", "decode"],
+    vae: "torch.nn.Module",
+    pixel_height: int,
+    pixel_width: int,
+    pixel_frames: int,
+    tile_size: int | None = None,
+    temporal_tile: int | None = None,
+    tiled: bool = False,
+) -> int:
+    """Estimate the working memory to encode or decode with the LTX-2 video VAE.
+
+    The decode is always tiled in space and time (see
+    :func:`invokeai.backend.ltx2.video_decoding.scoped_ltx2_tiling`), so its activation term scales
+    with one tile's pixel volume and is almost flat in the clip's own size. Measured on a W7900
+    (gfx1100, bf16 weights, released 2.5 VAE), as peak *reserved* minus the weights, decoding
+    1248x704:
+
+    | tile | temporal tile | frames | activation |
+    |------|---------------|--------|------------|
+    | 256  | 16            | 33     | 1.12 GiB   |
+    | 512  | 16            | 33     | 3.85 GiB   |
+    | 512  | 16            | 121    | 3.60 GiB   |
+    | 512  | 32            | 33     | 5.57 GiB   |
+    | 768  | 16            | 33     | 6.45 GiB   |
+
+    A tile costs less than its volume suggests as it grows (the fixed cost of the decoder's own
+    buffers dominates a small tile), which is why the fit is affine rather than proportional; the
+    constants below bracket every row above by 11-55%. The clip term is added on top: the temporal
+    tiler holds both the decoded rows and the clip it concatenates them into, and the rows are not
+    one clip's worth: at the default 16-frame tile the latent stride is one, so a row is kept for
+    every latent frame and the accumulation runs to about two clips. Three is what that sums to,
+    and it is the term that grows with the clip -- the tile term does not, so a long clip would
+    otherwise eat the margin the measured rows show.
+
+    Encode has the same two shapes with one clip copy. ``tiled=False`` is the first-frame encode,
+    where the whole "tile" is the one frame and the fixed per-tile cost dominates: 1248x704x1
+    measured 1.26 GiB against 1.65 GiB predicted. ``tiled=True`` is a whole conditioning clip,
+    which cannot run any other way -- untiled, the activation grows with the clip and a
+    1248x704x121 encode needs about 65 GiB. Tiled at 512/16, measured the same way:
+
+    | canvas     | frames | activation | of which the tile term |
+    |------------|--------|------------|------------------------|
+    | 768x512    | 33     | 2.82 GiB   | 2.75 GiB               |
+    | 768x512    | 121    | 2.87 GiB   | 2.60 GiB               |
+    | 1248x704   | 121    | 3.20 GiB   | 2.61 GiB               |
+    | 1248x704   | 241    | 3.78 GiB   | 2.60 GiB               |
+    | 1920x1088  | 121    | 4.02 GiB   | 2.61 GiB               |
+
+    The tile term is flat across a 16x range of clip volume, as it should be, and works out at
+    333-352 bytes per tile element; the constant rounds up from there. Reading the encode constant
+    for a tiled run would over-reserve it twofold, which is cache the rest of the graph loses.
+    """
+    element_size = next(vae.parameters()).element_size()
+    spatial_ratio = int(getattr(vae, "spatial_compression_ratio", 32))
+    temporal_ratio = int(getattr(vae, "temporal_compression_ratio", 8))
+
+    if operation == "decode":
+        tile_height = max(
+            spatial_ratio, min(tile_size or int(getattr(vae, "tile_sample_min_height", 512)), pixel_height)
+        )
+        tile_width = max(spatial_ratio, min(tile_size or int(getattr(vae, "tile_sample_min_width", 512)), pixel_width))
+        # Not clamped to the clip's own frames: the temporal tile is two *latent* frames, which
+        # decode to a full tile of pixel frames even when the clip is shorter than one.
+        tile_frames = max(temporal_ratio, temporal_tile or int(getattr(vae, "tile_sample_min_num_frames", 16)))
+        bytes_per_element = _LTX2_VAE_DECODE_BYTES_PER_TILE_ELEMENT
+        clip_copies = _LTX2_DECODE_CLIP_COPIES
+    elif tiled:
+        tile_height = max(
+            spatial_ratio, min(tile_size or int(getattr(vae, "tile_sample_min_height", 512)), pixel_height)
+        )
+        tile_width = max(spatial_ratio, min(tile_size or int(getattr(vae, "tile_sample_min_width", 512)), pixel_width))
+        tile_frames = max(temporal_ratio, temporal_tile or int(getattr(vae, "tile_sample_min_num_frames", 16)))
+        bytes_per_element = _LTX2_VAE_TILED_ENCODE_BYTES_PER_TILE_ELEMENT
+        clip_copies = 1
+    else:
+        tile_height, tile_width, tile_frames = pixel_height, pixel_width, pixel_frames
+        bytes_per_element = _LTX2_VAE_ENCODE_BYTES_PER_TILE_ELEMENT
+        clip_copies = 1
+
+    activation_bytes = tile_frames * tile_height * tile_width * element_size * bytes_per_element
+    clip_bytes = clip_copies * 3 * pixel_frames * pixel_height * pixel_width * element_size
+    return int(_LTX2_VAE_BASE_BYTES + activation_bytes + clip_bytes)
+
+
+def estimate_audio_working_memory_ltx2(num_audio_latents: int) -> int:
+    """Estimate the working memory to turn LTX-2 audio latents into a waveform.
+
+    Three stages run back to back over the whole soundtrack, none of them tiled: the audio VAE
+    decodes the latents to a log-mel spectrogram, the vocoder synthesizes a 16 kHz waveform from
+    it, and a bandwidth extender resynthesizes that at 48 kHz. Every intermediate is proportional
+    to the clip's length, so the estimate is a line in the latent count (25 latents per second).
+
+    Measured on a W7900 (gfx1100, released 2.5 audio VAE and vocoder, fp32 weights), as peak
+    *reserved* minus the two models:
+
+    | audio latents | duration | working set |
+    |---------------|----------|-------------|
+    | 126           | 5 s      | 0.71 GiB    |
+    | 251           | 10 s     | 1.30 GiB    |
+    | 501           | 20 s     | 2.18 GiB    |
+    | 1251          | 50 s     | 6.93 GiB    |
+
+    The constants bracket every row by 16-30%. They also make an absurd request fail at the
+    reservation rather than inside a forward: a 481-frame clip at 1 fps is 481 seconds of audio,
+    and asking the cache for the ~76 GiB that needs is the honest answer.
+    """
+    return int(_LTX2_AUDIO_BASE_BYTES + num_audio_latents * _LTX2_AUDIO_BYTES_PER_LATENT)
 
 
 def estimate_vae_working_memory_wan(

@@ -133,7 +133,10 @@ const RailGroup = ({
   separated: boolean;
   side: 'left' | 'right';
 }) => {
-  const sortableInstanceIds = useMemo(() => group.railItems.map((item) => item.id), [group.railItems]);
+  const sortableInstanceIds = useMemo(
+    () => group.railItems.filter((item) => !item.isFloating).map((item) => item.id),
+    [group.railItems]
+  );
   const select = useCallback(
     (instanceId: WidgetInstanceId) => onSelect(group.region, instanceId),
     [group.region, onSelect]
@@ -170,17 +173,8 @@ const RailGroup = ({
 };
 
 /**
- * Rail states: idle icon dimmed, hover and active share the same fill, and
- * only the active icon takes the brand hue.
- *
- * The brand lives in the icon rather than the fill because it cannot live in
- * the fill: the seed is a 92%-lightness lime, so every brand tint of the light
- * theme's near-white rail lands within 1.06:1 of it — a state you cannot see.
- * As an icon on a neutral fill it clears 3:1 on all five themes, which
- * `RailActiveContrast.browser.test.tsx` pins.
- *
- * The attribute selectors outrank `rowRecipe`'s own `_hover`, so hovering the
- * active item leaves it alone instead of flickering to the hover fill.
+ * Use brand color on active icons over neutral fill for cross-theme contrast. Attribute selectors preserve active
+ * styling on hover.
  */
 export const WIDGET_ITEM_SX: SystemStyleObject = {
   display: 'flex',
@@ -197,6 +191,13 @@ export const WIDGET_ITEM_SX: SystemStyleObject = {
   '&[aria-pressed="true"]': {
     bg: 'bg.emphasized',
     color: 'brand.fg',
+  },
+  // A floating slot reads as a placeholder for the window: outlined, not filled.
+  '&[data-floating]': {
+    outline: '1px dashed',
+    outlineColor: 'border.emphasized',
+    outlineOffset: '-1px',
+    color: 'fg.subtle',
   },
   _disabled: WIDGET_SLOT_DISABLED_PROPS,
 };
@@ -216,7 +217,12 @@ const WidgetSlot = ({
   region: WidgetRegion;
   tooltipPlacement: 'left' | 'right';
 }) => {
-  const tooltipLabel = item.failureMessage ? `${item.label}: ${item.failureMessage}` : item.label;
+  const { t } = useTranslation();
+  const tooltipLabel = item.isFloating
+    ? t('widgets.floating.railSlot', { label: item.label })
+    : item.failureMessage
+      ? `${item.label}: ${item.failureMessage}`
+      : item.label;
   const isDisabled = item.status === 'disabled';
   const positioning = useMemo(() => ({ placement: tooltipPlacement }) as const, [tooltipPlacement]);
 
@@ -230,7 +236,7 @@ const WidgetSlot = ({
   const handleContextMenu = useCallback((event: MouseEvent) => onContextMenu(item, event), [item, onContextMenu]);
 
   const { dragHandleProps, setNodeRef, style } = useWidgetSortable({
-    disabled: isDisabled,
+    disabled: isDisabled || item.isFloating === true,
     instanceId: item.id,
     region,
     typeId: item.typeId,
@@ -242,11 +248,12 @@ const WidgetSlot = ({
         <Row
           {...dragHandleProps}
           css={WIDGET_ITEM_SX}
-          aria-label={item.label}
+          aria-label={tooltipLabel}
           aria-disabled={isDisabled}
           aria-pressed={isActive}
           as="button"
           data-disabled={isDisabled ? '' : undefined}
+          data-floating={item.isFloating ? '' : undefined}
           tabIndex={isDisabled ? -1 : undefined}
           {...intentPreloadProps}
           onClick={handleClick}

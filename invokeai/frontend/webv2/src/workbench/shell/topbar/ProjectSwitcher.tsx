@@ -140,9 +140,7 @@ export const ProjectSwitcher = () => {
       return;
     }
 
-    // Export bundles every image the project points at, so it runs for as long
-    // as the project is large and can fail on a dropped connection or a project
-    // past the archive ceiling. The reporter owns saying both.
+    // Use the reporter for export progress and failures, including connection loss and archive limits.
     startExport(project);
   }, [activeProjectId, getProject, startExport]);
   const closeActiveProject = useCallback(() => {
@@ -172,9 +170,7 @@ export const ProjectSwitcher = () => {
   return (
     <>
       <Menu.Root open={isMenuOpen} positioning={MENU_POSITIONING} onOpenChange={handleMenuOpenChange}>
-        {/* No tooltip on a menu trigger: wrapping `Menu.Trigger` swallows the
-            anchor ref, and the menu then renders in the page corner instead of
-            under the control. The label already names it. */}
+        {/* This labeled trigger supplies its own name; wrapping it with Tooltip would lose the menu anchor ref. */}
         <Menu.Trigger asChild>
           <Button
             ref={triggerRef}
@@ -279,9 +275,10 @@ export const ProjectSwitcher = () => {
         onClose={closeDeleteDialog}
         onConfirm={confirmDeleteProject}
       />
-      {/* Rendered unconditionally and driven by `open`: the dialog already declares `lazyMount`
-          and `unmountOnExit`, so it costs nothing while closed — and unmounting it here instead
-          skipped its exit transition, closing by cutting rather than fading. */}
+      {/*
+       * Keep the dialog mounted by open state; its lazyMount/unmountOnExit handle closed cost and preserve exit
+       * animation.
+       */}
       <OpenProjectDialog isOpen={isOpenDialogVisible} onClose={hideOpenDialog} />
     </>
   );

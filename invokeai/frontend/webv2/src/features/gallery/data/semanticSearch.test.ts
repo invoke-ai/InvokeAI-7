@@ -163,15 +163,11 @@ describe('listSemanticGalleryItemNames', () => {
     await expect(listSemanticGalleryItemNames({ query: { clusterId, kind: 'cluster' } })).resolves.toEqual({
       items: [
         { kind: 'image', name: 'near.png' },
-        // A clip clustered with the images it resembles is listed as a video,
-        // so the gallery hydrates it through the videos endpoint.
         { kind: 'video', name: 'clip.mp4' },
       ],
       total: 2,
     });
-    // An evicted key (another cluster registered, or a reload) degrades to an
-    // empty list rather than an error — the parse layer clears the reference
-    // before the UI would ever show that.
+    // Evicted cluster keys yield empty results; parsing clears the stale reference before display.
     registerImageCluster(['image:other.png'], 'newer');
     await expect(listSemanticGalleryItemNames({ query: { clusterId, kind: 'cluster' } })).resolves.toEqual({
       items: [],

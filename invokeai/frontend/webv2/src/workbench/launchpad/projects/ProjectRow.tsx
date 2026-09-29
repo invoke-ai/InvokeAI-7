@@ -16,13 +16,6 @@ import { useProjectActionsMenu, useProjectActionsMenuTrigger } from './ProjectAc
 import { ProjectCompatibilityBadge } from './ProjectCompatibilityBadge';
 import { ProjectCover } from './ProjectCover';
 
-/**
- * One saved project in the list view — the density a large library wants.
- * Carries the same link target and the same action menu as the grid card
- * (served by the page's shared `ProjectActionsMenuHost`); only the shape
- * differs.
- */
-
 const LINK_STYLE = { cursor: 'default', inset: 0, position: 'absolute' } as const;
 const REVEAL_ON_HOVER = { opacity: 1 } as const;
 const THUMBNAIL_WIDTH = '14';

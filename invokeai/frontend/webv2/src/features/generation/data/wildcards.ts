@@ -1,11 +1,4 @@
-/**
- * The current user's wildcards: named value lists that `__name__` expands to.
- *
- * The catalog feeds three consumers — the `__` autocomplete, the highlighter's
- * known/unknown distinction, and the wildcards editor — so it is fetched once
- * and shared. Mutations must invalidate the dynamic prompts cache as well; see
- * `invalidateWildcardDependents`.
- */
+/** Catalog edits invalidate shared expansion queries too. */
 
 import type { QueryClient } from '@tanstack/react-query';
 
@@ -54,15 +47,7 @@ export const deleteWildcard = async (id: string): Promise<void> => {
   await apiFetch(`/api/v1/wildcards/${encodeURIComponent(id)}`, { method: 'DELETE' });
 };
 
-/**
- * Editing a wildcard changes what a prompt expands to without changing the
- * prompt, and the expansion cache is keyed only on the request (with
- * `staleTime: Infinity`). Both caches must therefore be dropped together, or the
- * preview and the submitted batch would both keep serving the old expansion.
- *
- * Invalidation is the whole mechanism, so every reader has to consult staleness
- * — see the `fetchQuery` note in `resolveDynamicPrompts`.
- */
+/** Infinite staleTime and request-only keys require dependent invalidation and staleness-aware readers. */
 export const invalidateWildcardDependents = async (queryClient: QueryClient): Promise<void> => {
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: wildcardKeys.all }),

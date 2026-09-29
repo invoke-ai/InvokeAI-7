@@ -3,10 +3,14 @@ import weakref
 import torch
 
 from invokeai.backend.model_manager.load.model_cache.shared_cpu_weights import SharedCpuWeightsStore
+from invokeai.backend.model_manager.load.model_cache.tensor_aliases import (
+    StorageKey,
+    analyze_state_dict,
+    move_shared,
+)
 from invokeai.backend.model_manager.load.model_cache.torch_module_autocast.custom_modules.custom_module_mixin import (
     CustomModuleMixin,
 )
-from invokeai.backend.util.calc_tensor_size import calc_tensor_size
 from invokeai.backend.util.logging import InvokeAILogger
 
 
@@ -51,7 +55,13 @@ class CachedModelWithPartialLoad:
         # below. The re-point only swaps tensor storage; keys, shapes and dtypes are unchanged, so the
         # metadata is identical either way. Computing it first keeps the acquire the last (and only
         # failure-prone) step, so a failure there can release the reference cleanly without leaking it.
-        self._state_dict_bytes = {k: calc_tensor_size(v) for k, v in model_state_dict.items()}
+        #
+        # Tied weights share one tensor under several keys. Their bytes are charged to the first of those keys and
+        # the rest are charged 0, so every sum over this dict counts the memory once; `_aliases` below keeps the
+        # group moving as a unit, so a charged key and its free aliases are never on different devices.
+        aliases = analyze_state_dict(model_state_dict)
+        self._aliases = aliases.groups
+        self._state_dict_bytes = aliases.bytes_by_key
         self._total_bytes = sum(self._state_dict_bytes.values())
         self._cur_vram_bytes: int | None = None
         self._modules_that_support_autocast = self._find_modules_that_support_autocast()
@@ -93,6 +103,19 @@ class CachedModelWithPartialLoad:
                 raise
 
         self._cpu_state_dict = cpu_state_dict
+
+    def _select_with_aliases(self, selected: set[str], key: str) -> int:
+        """Add `key` and everything tied to it to `selected`; return the bytes that adds.
+
+        A group moves as a unit: selecting only the alias that is charged 0 bytes would move the memory while the
+        accounting recorded nothing.
+        """
+        added_bytes = 0
+        for group_key in self._aliases.get(key, (key,)):
+            if group_key not in selected:
+                selected.add(group_key)
+                added_bytes += self._state_dict_bytes[group_key]
+        return added_bytes
 
     def _find_modules_that_support_autocast(self) -> dict[str, torch.nn.Module]:
         """Find all modules that support autocasting."""
@@ -238,18 +261,20 @@ class CachedModelWithPartialLoad:
         movement invalidates the cached VRAM accounting.
         """
         cur_state_dict = self._model.state_dict()
-        keys_to_repair = {
-            key
-            for key in self._keys_in_modules_that_do_not_support_autocast
-            if cur_state_dict[key].device.type != self._compute_device.type
-        }
+        keys_to_repair: set[str] = set()
+        repaired_required_tensors = 0
+        for key in self._keys_in_modules_that_do_not_support_autocast:
+            if cur_state_dict[key].device.type != self._compute_device.type:
+                # Tied names come along, but the count stays what the caller asked about: required tensors repaired.
+                self._select_with_aliases(keys_to_repair, key)
+                repaired_required_tensors += 1
         if len(keys_to_repair) == 0:
             return 0
 
         self._load_state_dict_with_device_conversion(cur_state_dict, keys_to_repair, self._compute_device)
         self._move_non_persistent_buffers_to_device(self._compute_device)
         self._cur_vram_bytes = None
-        return len(keys_to_repair)
+        return repaired_required_tensors
 
     def _load_state_dict_with_device_conversion(
         self, state_dict: dict[str, torch.Tensor], keys_to_convert: set[str], target_device: torch.device
@@ -283,6 +308,7 @@ class CachedModelWithPartialLoad:
         peak virtual memory usage. Specifically, we want to avoid a case where we hold references to all of the CPU weights
         and CUDA weights simultaneously, because Windows will reserve virtual memory for both.
         """
+        moved: dict[StorageKey, torch.Tensor] = {}
         for module_name, module in self._model.named_modules():
             module_keys = self._state_dict_keys_by_module_prefix.get(module_name, [])
             # Calculate the length of the module name prefix.
@@ -295,7 +321,7 @@ class CachedModelWithPartialLoad:
                 if key in keys_to_convert:
                     # It is important that we overwrite `state_dict[key]` to avoid keeping two copies of the same
                     # parameter.
-                    state_dict[key] = state_dict[key].to(target_device)
+                    state_dict[key] = move_shared(state_dict[key], target_device, moved)
                 # Note that we keep parameters that have not been moved to a new device in case the module implements
                 # weird custom state dict loading logic that requires all parameters to be present.
                 module_state_dict[key[prefix_len:]] = state_dict[key]
@@ -319,11 +345,13 @@ class CachedModelWithPartialLoad:
         """Convert parameters to the target device and load them into the model. Leverages the `cpu_state_dict` to speed
         up transfers of weights to the CPU.
         """
+        moved: dict[StorageKey, torch.Tensor] = {}
         for key in keys_to_convert:
             if target_device.type == "cpu":
+                # The CPU copy already shares one tensor between tied keys, so this restores the tie too.
                 state_dict[key] = cpu_state_dict[key]
             else:
-                state_dict[key] = state_dict[key].to(target_device)
+                state_dict[key] = move_shared(state_dict[key], target_device, moved)
 
         self._model.load_state_dict(state_dict, assign=True)
 
@@ -375,9 +403,7 @@ class CachedModelWithPartialLoad:
             if param.device.type == self._compute_device.type:
                 continue
 
-            keys_to_load.add(key)
-            param_size = self._state_dict_bytes[key]
-            vram_bytes_loaded += param_size
+            vram_bytes_loaded += self._select_with_aliases(keys_to_load, key)
 
         if vram_bytes_loaded > vram_bytes_to_load:
             logger = InvokeAILogger.get_logger()
@@ -404,14 +430,18 @@ class CachedModelWithPartialLoad:
                 break
 
             param_size = self._state_dict_bytes[key]
+            if param_size == 0 and key in self._aliases:
+                # A tied key whose group is charged to another name. It is loaded with that name, against the budget;
+                # selecting it here would move the group's memory without the budget ever seeing its bytes.
+                continue
+
             if vram_bytes_loaded + param_size > vram_bytes_to_load:
                 # TODO(ryand): Should we just break here? If we couldn't fit this parameter into VRAM, is it really
                 # worth continuing to search for a smaller parameter that would fit?
                 fully_loaded = False
                 continue
 
-            keys_to_load.add(key)
-            vram_bytes_loaded += param_size
+            vram_bytes_loaded += self._select_with_aliases(keys_to_load, key)
 
         if len(keys_to_load) > 0:
             # We load the entire state dict, not just the parameters that changed, in case there are modules that
@@ -461,12 +491,17 @@ class CachedModelWithPartialLoad:
             if param.device.type == offload_device:
                 continue
 
-            if keep_required_weights_in_vram and key in self._keys_in_modules_that_do_not_support_autocast:
+            # A group is kept whenever any of its names is required: offloading it through one of its other names
+            # would take the required tensor to the CPU with it, and the next forward would fail on the device
+            # mismatch.
+            if keep_required_weights_in_vram and any(
+                group_key in self._keys_in_modules_that_do_not_support_autocast
+                for group_key in self._aliases.get(key, (key,))
+            ):
                 required_weights_in_vram += self._state_dict_bytes[key]
                 continue
 
-            keys_to_offload.add(key)
-            vram_bytes_freed += self._state_dict_bytes[key]
+            vram_bytes_freed += self._select_with_aliases(keys_to_offload, key)
 
         if len(keys_to_offload) > 0:
             self._load_state_dict_with_device_conversion(cur_state_dict, keys_to_offload, torch.device("cpu"))

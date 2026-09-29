@@ -61,6 +61,10 @@ from invokeai.backend.model_manager.taxonomy import BaseModelType, FluxVariantTy
 from invokeai.backend.patches.layer_patcher import LayerPatcher, PatchSpec
 from invokeai.backend.patches.lora_conversions.flux_lora_constants import FLUX_LORA_TRANSFORMER_PREFIX
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
+from invokeai.backend.quantization.dequantizing_linear import (
+    peak_dequant_transient_bytes,
+    requires_sidecar_patching,
+)
 from invokeai.backend.rectified_flow.rectified_flow_inpaint_extension import RectifiedFlowInpaintExtension
 from invokeai.backend.stable_diffusion.diffusers_pipeline import PipelineIntermediateState
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import FLUXConditioningInfo
@@ -423,9 +427,23 @@ class FluxDenoiseInvocation(BaseInvocation):
                 device=x.device,
             )
 
+            transformer_info = context.models.load(self.transformer.transformer)
+
+            # An `int8_tensorwise` build materializes each linear's dequantized, derotated weight
+            # inside `forward`, and that transient is not part of the model's resident size. Read
+            # from the unlocked model, before the VRAM lock the reservation applies to; zero for
+            # every other build.
+            #
+            # Passed alone because this node has no activation estimate. The cache floors the
+            # request at `device_working_mem_gb`, so at the 3 GiB default this changes nothing --
+            # FLUX.1's largest quantized layer needs 252 MiB. It binds only where that floor was
+            # lowered, and it is what keeps the term honest if this node ever grows a real estimate
+            # (the transient is alive alongside the activations, as it is for FLUX.2 and Krea-2).
+            int8_dequant_bytes = peak_dequant_transient_bytes(transformer_info.model, inference_dtype)
+
             # Load the transformer model.
             (cached_weights, transformer) = exit_stack.enter_context(
-                context.models.load(self.transformer.transformer).model_on_device()
+                transformer_info.model_on_device(working_mem_bytes=int8_dequant_bytes)
             )
             assert isinstance(transformer, Flux)
             config = transformer_config
@@ -435,7 +453,12 @@ class FluxDenoiseInvocation(BaseInvocation):
             # If the model is quantized, then we need to apply the LoRA weights as sidecar layers. This results in
             # slower inference than direct patching, but is agnostic to the quantization format.
             if config.format in [ModelFormat.Checkpoint]:
-                model_is_quantized = False
+                # An `int8_tensorwise` checkpoint carries `Checkpoint` like any other single file,
+                # but its `Int8ConvrotLinear` weights are int8 buffers that an in-place patch
+                # cannot write into -- and the fallbacks that would otherwise catch that iterate
+                # `module.parameters()`, which these modules have none of. So the loaded module
+                # tree is consulted, not just the format.
+                model_is_quantized = requires_sidecar_patching(transformer, config.format)
             elif config.format in [
                 ModelFormat.BnbQuantizedLlmInt8b,
                 ModelFormat.BnbQuantizednf4b,

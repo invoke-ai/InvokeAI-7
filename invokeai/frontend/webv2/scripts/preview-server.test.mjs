@@ -1,13 +1,4 @@
-/**
- * `killPreview` has to report an already-dead process the same way on every platform.
- *
- * The project-file journey tears the preview down in two steps — SIGTERM, wait, SIGKILL — and lets
- * `ESRCH` through as "it already exited" while rethrowing anything else. On POSIX that code comes
- * from `process.kill`. On Windows there is no process group to signal, so the tree kill is
- * `taskkill /T`, and its "no such process" exit status is translated by hand. A hand-written
- * translation is exactly the kind of thing that stops matching when the tool changes, and the
- * symptom would be a journey that fails during cleanup after passing.
- */
+/** Verify Windows taskkill's missing-process result maps to ESRCH, matching POSIX cleanup behavior. */
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -33,11 +24,9 @@ test('reports an already-exited process as ESRCH', async () => {
 });
 
 test('starts a preview server without a shell and stops it again', async (t) => {
-  // Deliberately not one of the three ports the journeys bind, so running this beside them cannot
-  // make either fail on `--strictPort`.
+  // Use a separate port so parallel journeys cannot conflict under --strictPort.
   const port = 4199;
-  // `import.meta.dirname`, not a URL pathname: on Windows the latter is '/D:/...', which is not
-  // a directory any process can start in.
+  // URL pathnames contain an invalid leading slash for Windows drive paths; use import.meta.dirname.
   const preview = spawnPreview({
     cwd: resolve(import.meta.dirname, '..'),
     port,
@@ -54,8 +43,8 @@ test('starts a preview server without a shell and stops it again', async (t) => 
     }
   });
 
-  // The point of the assertion: a `.cmd` shim spawned without a shell fails here with ENOENT, which
-  // is what this module exists to avoid, and a shell wrapper would make `preview.pid` the shell's.
+  // Verify the child is Vite itself: Windows .cmd shims fail without a shell, and shell wrappers obscure the
+  // server PID.
   const spawned = await new Promise((resolve) => {
     preview.once('spawn', () => resolve(true));
     preview.once('error', () => resolve(false));

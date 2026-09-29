@@ -1,11 +1,6 @@
 /**
- * The supplementary cluster-labeling vocabulary: a server-wide term list that
- * admins maintain and the backend merges with its bundled vocabulary when it
- * builds the label embeddings.
- *
- * Reads are open to every user; the PUT is admin-only (the router's
- * `AdminUserOrDefault`). The list is replaced whole on save — the editor
- * always holds the full list, and replace semantics keep the API idempotent.
+ * Admin-maintained server-wide supplementary terms augment bundled label vocabulary. All users can read;
+ * admin-only saves replace the full list idempotently.
  */
 
 import {
@@ -73,15 +68,8 @@ export const imageMapVocabQueryOptions = () =>
   })();
 
 /**
- * Replace the whole term list. The server normalizes (lowercase, collapsed
- * whitespace), dedupes, and rejects over-limit input with a 422 whose detail
- * names the offending term; the response carries the stored list.
- *
- * When the response reports a background embedding rebuild, a module-level
- * watcher is started so any open map's labels are re-fetched when it lands —
- * a vocabulary edit changes what the labels say without moving a single
- * point, so nothing in the map's own flow would notice, and the watcher must
- * outlive the settings dialog the save was made from.
+ * Replace all terms; server normalizes/dedupes and returns stored values or term-specific 422 limits. Background
+ * rebuild watching outlives the settings dialog and refreshes map labels even when points do not move.
  */
 export const updateImageMapVocab = async (terms: string[]): Promise<ImageMapVocab> => {
   const body = await apiFetchJson<BackendImageMapVocabResponse>('/api/v1/image_map/vocab', {
@@ -97,9 +85,7 @@ export const updateImageMapVocab = async (terms: string[]): Promise<ImageMapVoca
   return vocab;
 };
 
-// The rebuild usually lands in seconds, but the index worker parks during
-// generations, so it can also take a long while: back the poll off rather
-// than holding a 2s cadence indefinitely.
+// Back off rebuild polling because generation pauses can delay completion substantially.
 const REBUILD_POLL_MIN_MS = 2_000;
 const REBUILD_POLL_MAX_MS = 30_000;
 
@@ -143,20 +129,16 @@ const watchRebuild = (): void => {
         }
 
         if (body.state === 'ready') {
-          // The hover card's per-image tags are scored against this same
-          // vocabulary, so they go stale on exactly this event — and unlike
-          // the cluster labels, nothing else in the map's flow refetches them.
+          // Vocabulary rebuild also invalidates cached per-item hover tags.
           clearImageLabels();
           refetchClusterLabels();
         }
 
-        // 'error', 'unavailable', and 'idle' all mean no new labels are
-        // coming from this rebuild; the settings UI reports those itself.
+        // Error, unavailable and idle end this rebuild's label wait; settings owns their feedback.
         return;
       }
     } catch {
-      // Label refresh is best-effort decoration; the next points refresh
-      // fetches labels anyway.
+      // Label refresh is best-effort; the next point refresh fetches labels again.
     } finally {
       rebuildWatchActive = false;
     }

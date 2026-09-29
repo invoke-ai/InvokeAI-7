@@ -1,10 +1,3 @@
-/**
- * Pure functions on `Rect`, the engine's axis-aligned rectangle type.
- *
- * No classes, no mutation — every function returns a new `Rect` (or a
- * primitive / array of `Rect`).
- */
-
 import type { Mat2d, Rect, Vec2 } from '@workbench/canvas-engine/types';
 
 import { applyToPoint } from './mat2d';
@@ -61,11 +54,7 @@ export const expand = (r: Rect, margin: number): Rect => ({
   height: r.height + margin * 2,
 });
 
-/**
- * Rounds a rect outward to integer bounds (floor the min edges, ceil the
- * max edges). Used to align dirty rects to pixel boundaries so patches
- * fully cover the region that changed.
- */
+/** Round outward to integer pixels so dirty patches fully cover changed bounds. */
 export const roundOut = (r: Rect): Rect => {
   const x = Math.floor(r.x);
   const y = Math.floor(r.y);
@@ -106,18 +95,8 @@ const isNearby = (a: Rect, b: Rect, slack: number): boolean => {
 };
 
 /**
- * Coalesces a list of dirty rects into at most `maxRegions` rects.
- *
- * Algorithm: greedily merges any two rects that overlap or are within a
- * small proximity slack (derived from the average rect size) whenever the
- * merge doesn't waste too much area — specifically, whenever the merged
- * rect's area is no more than 2x the sum of the two input areas, or the
- * rects already overlap/touch. This repeats to a fixed point. If more than
- * `maxRegions` rects remain, it falls back to merging everything into a
- * single bounding rect (merge-all fallback) — simpler than picking which
- * regions to keep, and cheap dirty-rect accounting favors correctness
- * (never under-repaint) over minimizing painted area in the pathological
- * case.
+ * Greedily merge overlapping/touching or nearby rects when combined area stays within twice their sum. Repeat to
+ * stability; if still over `maxRegions`, union all to guarantee repaint coverage.
  */
 export const mergeDirtyRects = (rects: Rect[], maxRegions = 4): Rect[] => {
   const nonEmpty = rects.filter((r) => !isEmpty(r));

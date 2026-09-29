@@ -12,17 +12,8 @@ import { getModelsSnapshot, subscribeModels } from './modelsStore';
 import { addModelRelationship, getRelatedModelKeys, removeModelRelationship } from './relationshipsApi';
 
 /**
- * Shared cache of bidirectional "related model" links, keyed by model key.
- * One store keeps the detail pane and every open picker consistent: link and
- * unlink patch both cached directions instead of refetching. Cache writes are
- * ordered: per pair, only the latest mutation's response commits, and a
- * response that settles after its models were deleted is dropped.
- *
- * The backend's batch endpoint (`POST /model_relationships/batch`) is
- * deliberately unused — it returns a flat de-duplicated union across the input
- * keys, which cannot populate a per-key cache. Per-key fetches through
- * `ensureRelatedModelKeysLoaded` stay attributable and dedupe on the inflight
- * map.
+ * Patch both relationship directions; only latest per-pair mutations may commit, and deleted models discard late
+ * responses. Fetch per key because batch unions lose attribution.
  */
 
 export interface ModelRelationshipsSnapshot {
@@ -43,12 +34,7 @@ const inflightByKey = new Map<string, Promise<void>>();
 /** Keys whose last settled fetch rejected; `ensure` revalidates these. */
 const failedFetchKeys = new Set<string>();
 
-/**
- * Mutation responses outlive the component that issued them (the section
- * remounts per model key), so link/unlink ordering cannot rely on UI pending
- * state. Each pair's latest in-flight mutation holds a stamp here; a response
- * whose stamp has been superseded must not write to the cache.
- */
+/** Order mutations per pair outside component lifetimes; superseded responses must not update cache. */
 let nextMutationStamp = 1;
 const latestPairMutation = new Map<string, number>();
 
@@ -72,13 +58,8 @@ registerAccountOwnedResource({
 });
 
 /**
- * Library-driven pruning: when a loaded library snapshot no longer contains a
- * model we hold an entry for (deleted by another surface, or gone after a
- * refresh), drop the entry and scrub the key from siblings. Entries for
- * still-present models stay cache-first; freshness of links edited elsewhere
- * is out of scope by design. This store subscribes to the library — not the
- * other way around — so the eagerly-loaded modelsStore never pulls this lazy
- * chunk into the entry graph.
+ * Prune missing models and sibling links on library updates. Subscribe from this lazy store to preserve the eager
+ * library boundary; external link freshness is excluded.
  */
 let lastLoadedModels: readonly ModelConfig[] | null = null;
 
@@ -130,9 +111,8 @@ const fetchRelatedKeys = (modelKey: string): Promise<void> => {
       }
     })
     .catch((error: unknown) => {
-      // Leave an empty entry so consumers stop showing a spinner, but still
-      // reject so callers that care (the detail pane) can surface the error.
-      // A superseded fetch writes nothing and does not mark the key failed.
+      // Set an empty entry to stop spinners while rejecting for error-aware callers; superseded fetches write
+      // nothing.
       if (isAccountScopeCurrent(owner) && inflightByKey.get(modelKey) === fetch) {
         failedFetchKeys.add(modelKey);
 
@@ -192,11 +172,8 @@ const patchBothDirections = (modelKey: string, otherKey: string, patch: EntryPat
 };
 
 /**
- * Apply a successful mutation to the cache: patch the entries that exist, and
- * for any key with a GET inflight, evict it (a request issued before the
- * mutation is stale) and refetch so the entry converges on server truth. This
- * also covers a link made while the entry's first fetch is still inflight —
- * the refetch was issued after the POST, so it includes the new link.
+ * Patch existing entries, but invalidate and refetch GETs started before mutation so stale responses cannot erase
+ * new links.
  */
 const commitMutation = (modelKey: string, otherKey: string, patch: EntryPatch): void => {
   // A response that outlived its models' deletion must not resurrect them.
@@ -284,11 +261,7 @@ export const removeModelsFromRelationships = (keys: readonly string[]): void => 
 
 export const getRelationshipsSnapshot = (): ModelRelationshipsSnapshot => store.getSnapshot();
 
-/**
- * Low-level change subscription for callers that must load this module
- * lazily (the editor's pickers) and so cannot use the `useRelatedModelKeys`
- * hook. Returns the unsubscribe function.
- */
+/** Manual subscription supports lazy consumers that cannot statically import the hook; return unsubscribe. */
 export const subscribeToRelationships = (listener: () => void): (() => void) => store.subscribe(listener);
 
 /** Related keys for one model; `null` means not fetched yet (or no model). */

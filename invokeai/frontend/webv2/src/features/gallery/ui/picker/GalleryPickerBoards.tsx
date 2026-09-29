@@ -45,10 +45,7 @@ const GalleryPickerBoardRow = memo(function GalleryPickerBoardRow({
   );
 });
 
-/**
- * The grouped board list the picker swaps in for its grid. Arrow keys walk the
- * rows; leaving the top row hands focus back to the search field.
- */
+/** Arrow navigation leaving the top board row returns focus to search. */
 export const GalleryPickerBoards = ({
   emptyMessage,
   galleryView,

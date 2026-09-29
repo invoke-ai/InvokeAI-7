@@ -2,10 +2,10 @@
 import type { OrphanedModelInfo } from '@features/models/core/types';
 
 import { Checkbox, Dialog, Flex, Portal, Spinner, Stack, Text } from '@chakra-ui/react';
-import { formatBytes } from '@features/models/core/taxonomy';
 import { deleteOrphanedModels, getOrphanedModels } from '@features/models/data/api';
 import { refreshModels } from '@features/models/data/modelsStore';
 import { useNotify } from '@features/models/ui/useModelsNotify';
+import { formatBytes } from '@platform/i18n/languages';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { useScopedAction } from '@platform/react/useScopedAction';
 import {
@@ -20,11 +20,7 @@ import { Panel } from '@platform/ui/Panel';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * Scan-and-delete flow for orphaned model folders (files on disk with no
- * database record). Partial failures keep the dialog open on a rescanned
- * remainder so the user can see which paths are left and retry.
- */
+/** Rescan after partial orphan deletion and keep the dialog open for retrying remaining paths. */
 export const OrphanedModelsDialog = ({ onClose }: { onClose: () => void }) => {
   const { t } = useTranslation();
   const notify = useNotify();
@@ -85,8 +81,6 @@ export const OrphanedModelsDialog = ({ onClose }: { onClose: () => void }) => {
               failed: errorCount,
             })
           );
-          // Keep the dialog open on the rescanned remainder so the user can
-          // see which paths are left and retry.
           const deleted = new Set(result.deleted);
 
           setSelectedPaths((current) => new Set([...current].filter((path) => !deleted.has(path))));

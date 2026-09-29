@@ -27,10 +27,8 @@ const resolveAdapterModel = (
 };
 
 /**
- * The control-layer problems that would make the invoke pipeline reject the
- * document, in document order. Mirrors `createControlLayerCollector`: only
- * enabled, content-bearing control layers are validated, and the per-kind
- * limit counters advance only past valid layers.
+ * Validate the same enabled, content-bearing layers as createControlLayerCollector; invalid layers do not consume
+ * per-kind limits.
  */
 export const getBlockingControlLayerIssues = (params: {
   layers: readonly CanvasLayerContract[];
@@ -87,11 +85,7 @@ export const getBlockingControlLayerIssues = (params: {
   return issues;
 };
 
-/**
- * Relaxed per-layer check for ambient warning UI: content is not required
- * (a fresh model-less layer should already warn) and the per-kind limit
- * counters are pinned to zero (limit problems stay in the invoke tooltip).
- */
+/** Ambient warnings include empty layers but omit per-kind limits, which belong in the Invoke tooltip. */
 export const getControlLayerAttentionReason = (
   layer: CanvasControlLayerContract,
   mainBase: string,

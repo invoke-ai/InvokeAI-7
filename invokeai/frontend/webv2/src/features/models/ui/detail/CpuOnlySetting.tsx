@@ -11,11 +11,7 @@ import { useTranslation } from 'react-i18next';
 
 export type CpuOnlyModel = Pick<ModelConfig, 'cpu_only' | 'key' | 'name' | 'type'>;
 
-/**
- * Every type whose backend config class carries a top-level `cpu_only` field.
- * The PATCH silently drops the field elsewhere (notably qwen_vl_encoder and
- * pid_decoder), so the toggle is only offered where it acts.
- */
+/** Offer cpu_only only where backend config accepts it; other model types silently discard the field. */
 const CPU_ONLY_TYPES: ReadonlySet<string> = new Set([
   'vae',
   'clip_embed',

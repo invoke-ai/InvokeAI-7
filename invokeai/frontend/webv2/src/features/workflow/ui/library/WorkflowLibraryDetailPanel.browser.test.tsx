@@ -1,5 +1,6 @@
 import type { StarterModel } from '@features/models';
 import type { WorkflowModelRequirement } from '@features/workflow/core/modelRequirements';
+import type { ProjectWorkflowEntry } from '@features/workflow/core/types';
 import type { WorkflowLibraryEntry, WorkflowLibraryEntryEnrichment } from '@features/workflow/data/libraryBrowseStore';
 import type { WorkflowGraphPreviewPort, WorkflowUiAdapter } from '@features/workflow/ui/WorkflowUiContext';
 
@@ -14,12 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WorkflowLibraryDetailPanel } from './WorkflowLibraryDetailPanel';
 
 /**
- * The panel is the only surface that turns "what does this workflow need" into
- * an action, so the model stores it resolves against are replaced by mutable
- * fixtures: installed models, the starter catalog, and the set of sources
- * already installing. `getStarterModelInstallSources` stays real — the install
- * action's contract is that it hands the *catalog's* sources to `installMany`,
- * deduped across requirements.
+ * Use mutable catalog fixtures but real install-source expansion to verify deduplicated catalog sources reach
+ * installMany.
  */
 const models = vi.hoisted(() => ({
   activeInstallSources: { current: new Set<string>() },
@@ -66,7 +63,17 @@ const queries = vi.hoisted(() => ({
   getLibraryWorkflowCached: vi.fn((_workflowId: string, _signal?: AbortSignal) =>
     Promise.resolve({} as Record<string, unknown>)
   ),
+  getLibraryWorkflowRecord: vi.fn((_workflowId: string, _signal?: AbortSignal) =>
+    Promise.resolve({} as Record<string, unknown>)
+  ),
+  getLibraryWorkflowRecordCached: vi.fn((_workflowId: string, _signal?: AbortSignal) =>
+    Promise.resolve({} as Record<string, unknown>)
+  ),
   invalidateWorkflowLibraryCache: vi.fn(),
+  updateLibraryWorkflow: vi.fn(
+    (_workflowId: string, _workflow: Record<string, unknown>, _options?: { expectedRevision?: number }) =>
+      Promise.resolve({} as Record<string, unknown>)
+  ),
 }));
 
 vi.mock('@features/workflow/queries', async (importOriginal) => ({
@@ -80,6 +87,9 @@ vi.mock('@platform/browser/downloadBlob', () => ({ downloadText }));
 
 const TRANSLATIONS: Record<string, string> = {
   'common.unknownError': 'Something went wrong',
+  'workflowLibrary.addAnotherCopy': 'Add another copy',
+  'workflowLibrary.addAnotherCopyHint': 'A second, independent copy in this project',
+  'workflowLibrary.chooseProjectCopy': 'Open which copy?',
   'workflowLibrary.delete': 'Delete',
   'workflowLibrary.deleteConfirmBody': 'Delete "{{name}}" from the workflow library? This cannot be undone.',
   'workflowLibrary.deleteConfirmTitle': 'Delete workflow',
@@ -89,6 +99,13 @@ const TRANSLATIONS: Record<string, string> = {
   'workflowLibrary.downloadJsonHint': 'For bug reports and sharing',
   'workflowLibrary.duplicate': 'Duplicate',
   'workflowLibrary.duplicateFailed': 'Failed to duplicate workflow',
+  'workflowLibrary.rename': 'Rename',
+  'workflowLibrary.renameFailed': 'Rename failed',
+  'workflowLibrary.renameTemplateHint': "Changes the template's name in the library",
+  'workflowLibrary.renameTemplateTitle': 'Rename template',
+  'workflowLibrary.renameWithEllipsis': 'Rename…',
+  'workflowLibrary.renamed': 'Template renamed',
+  'workflowLibrary.templateName': 'Template name',
   'workflowLibrary.duplicateHint': 'Saves a copy under Yours, original untouched',
   'workflowLibrary.duplicateName': '{{name}} copy',
   'workflowLibrary.duplicated': 'Saved a copy under Yours',
@@ -103,7 +120,9 @@ const TRANSLATIONS: Record<string, string> = {
   'workflowLibrary.moreActions': 'More actions',
   'workflowLibrary.notRunYet': 'Not run yet',
   'workflowLibrary.open': 'Open',
-  'workflowLibrary.openHint': 'Replaces the current workflow',
+  'workflowLibrary.openHint': 'Adds a copy to this project',
+  'workflowLibrary.openProjectCopy': 'Open project copy',
+  'workflowLibrary.openProjectCopyHint': 'Switches to the copy this project already has',
   'workflowLibrary.previewGraph': 'Preview graph',
   'workflowLibrary.requirementInstallable': 'Not installed',
   'workflowLibrary.requirementInstalled': 'Installed',
@@ -127,6 +146,8 @@ const translate = (key: string, options?: Record<string, unknown>): string => {
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: translate }) }));
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const NOOP = () => {};
 
 // #region Fixtures
 
@@ -206,6 +227,7 @@ const entry = (
   item: {
     category: 'user',
     description: `${overrides.name} description`,
+    revision: 1,
     thumbnail_url: null,
     ...overrides,
   },
@@ -246,6 +268,23 @@ const RAW_WORKFLOW: Record<string, unknown> = {
   meta: { category: 'default', version: '3.0.0' },
 };
 
+/** The library record behind IMAGE_TO_VIDEO, at the revision a fork must carry along. */
+const RAW_RECORD = {
+  ...IMAGE_TO_VIDEO.item,
+  revision: 7,
+  workflow: RAW_WORKFLOW,
+};
+
+/** Project copies of TEXT_TO_IMAGE: what Open resumes instead of adding another. */
+const projectCopy = (id: string, name: string, libraryWorkflowId = 'wf-text-to-image'): ProjectWorkflowEntry => ({
+  document: { ...createProjectGraph(id), name },
+  source: { libraryWorkflowId, revision: 1 },
+});
+const FIRST_COPY = projectCopy('copy-1', 'Text to image');
+const SECOND_COPY = projectCopy('copy-2', 'Text to image, tuned');
+const OTHER_TEMPLATE_COPY = projectCopy('copy-other', 'Something else', 'wf-image-to-video');
+const NO_COPIES: readonly ProjectWorkflowEntry[] = [];
+
 // #endregion
 
 const NOTIFICATIONS = { error: vi.fn(), info: vi.fn(), success: vi.fn() };
@@ -265,8 +304,9 @@ describe('WorkflowLibraryDetailPanel', () => {
   let onClose: () => void;
   let onDeleted: () => void;
   let onDuplicated: (workflowId: string) => void;
-  let onOpen: (item: WorkflowLibraryEntry['item']) => void;
+  let onOpen: (item: WorkflowLibraryEntry['item'], mode: 'resume-or-add' | 'add-copy') => void;
   let onPreview: (selected: WorkflowLibraryEntry) => void;
+  let onResume: (workflowId: string) => void;
 
   /** See `WorkflowLibraryDialog.browser.test.tsx`: keeps Chakra's observer-driven commits inside the act scope. */
   const settleFrame = () =>
@@ -274,7 +314,10 @@ describe('WorkflowLibraryDetailPanel', () => {
       setTimeout(resolve, 0);
     });
 
-  const renderPanel = async (selected: WorkflowLibraryEntry | null) => {
+  const renderPanel = async (
+    selected: WorkflowLibraryEntry | null,
+    projectWorkflows: readonly ProjectWorkflowEntry[] = NO_COPIES
+  ) => {
     await act(async () => {
       root.render(
         <StrictMode>
@@ -282,12 +325,17 @@ describe('WorkflowLibraryDetailPanel', () => {
             <WorkflowUiProvider adapter={ADAPTER}>
               <WorkflowGraphPreviewProvider adapter={GRAPH_PREVIEW}>
                 <WorkflowLibraryDetailPanel
+                  contextMenuPoint={null}
+                  contextMenuTriggerId={null}
                   entry={selected}
+                  projectWorkflows={projectWorkflows}
                   onClose={onClose}
+                  onContextMenuClose={NOOP}
                   onDeleted={onDeleted}
                   onDuplicated={onDuplicated}
                   onOpen={onOpen}
                   onPreview={onPreview}
+                  onResume={onResume}
                 />
               </WorkflowGraphPreviewProvider>
             </WorkflowUiProvider>
@@ -318,10 +366,7 @@ describe('WorkflowLibraryDetailPanel', () => {
     const trigger = document.querySelector<HTMLElement>('[aria-label="More actions"]');
     expect(trigger).not.toBeNull();
 
-    // The trigger is a toggle: clicking it while the menu is already open
-    // (e.g. a caller re-asserts state after an in-flight action left the
-    // menu open, because a disabled item's click never reaches the menu
-    // machine) would close it instead of being the no-op callers expect.
+    // Check open state before clicking the toggle; repeating an open request would otherwise close it.
     if (trigger?.getAttribute('data-state') === 'open') {
       return;
     }
@@ -355,6 +400,7 @@ describe('WorkflowLibraryDetailPanel', () => {
     onDuplicated = vi.fn((_workflowId: string) => {});
     onOpen = vi.fn();
     onPreview = vi.fn();
+    onResume = vi.fn();
 
     models.activeInstallSources.current = new Set();
     models.installedModels.current = [INSTALLED_SDXL_MAIN, INSTALLED_WAN_VAE];
@@ -369,6 +415,8 @@ describe('WorkflowLibraryDetailPanel', () => {
     queries.deleteLibraryWorkflow.mockResolvedValue(undefined);
     queries.getLibraryWorkflowCached.mockClear();
     queries.getLibraryWorkflowCached.mockResolvedValue(RAW_WORKFLOW);
+    queries.getLibraryWorkflowRecordCached.mockClear();
+    queries.getLibraryWorkflowRecordCached.mockResolvedValue(RAW_RECORD);
     queries.invalidateWorkflowLibraryCache.mockClear();
 
     downloadText.mockClear();
@@ -407,7 +455,64 @@ describe('WorkflowLibraryDetailPanel', () => {
 
     await clickButton('Open');
 
-    expect(onOpen).toHaveBeenCalledWith(TEXT_TO_IMAGE.item);
+    // No project copy exists yet, so opening adds the first one.
+    expect(onOpen).toHaveBeenCalledWith(TEXT_TO_IMAGE.item, 'resume-or-add');
+    expect(onResume).not.toHaveBeenCalled();
+  });
+
+  it('resumes the one project copy of the template instead of adding another', async () => {
+    await renderPanel(TEXT_TO_IMAGE, [OTHER_TEMPLATE_COPY, FIRST_COPY]);
+
+    expect(buttonWithText('Open')).toBeUndefined();
+    expect(buttonWithText('Open project copy')).not.toBeUndefined();
+
+    await clickButton('Open project copy');
+
+    expect(onResume).toHaveBeenCalledWith('copy-1');
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('lets the user choose which of several project copies to resume', async () => {
+    await renderPanel(TEXT_TO_IMAGE, [FIRST_COPY, OTHER_TEMPLATE_COPY, SECOND_COPY]);
+
+    await clickButton('Open project copy');
+
+    const chooser = () => document.querySelector<HTMLElement>('[data-workflow-copy-chooser]');
+    await vi.waitFor(() => expect(chooser()).not.toBeNull());
+
+    // Only this template's copies, by name, in collection order.
+    const choices = [...(chooser()?.querySelectorAll<HTMLElement>('[data-menu-item]') ?? [])];
+    expect(choices.map((choice) => choice.dataset.menuItem)).toEqual(['resume:copy-1', 'resume:copy-2']);
+    expect(chooser()?.textContent).toContain('Text to image, tuned');
+    expect(chooser()?.textContent).not.toContain('Something else');
+    expect(onResume).not.toHaveBeenCalled();
+
+    await act(async () => {
+      choices[1]?.click();
+      await settleFrame();
+    });
+
+    expect(onResume).toHaveBeenCalledWith('copy-2');
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('offers another independent copy only once the project already has one', async () => {
+    await renderPanel(TEXT_TO_IMAGE);
+    await openMenu();
+
+    expect(menuItem('add-copy')).toBeNull();
+    expect(menuItem('open')?.textContent).toContain('Open');
+
+    await renderPanel(TEXT_TO_IMAGE, [FIRST_COPY]);
+    await openMenu();
+
+    expect(menuItem('open')?.textContent).toContain('Open project copy');
+    expect(menuItem('add-copy')?.textContent).toContain('Add another copy');
+
+    await clickMenuItem('add-copy');
+
+    expect(onOpen).toHaveBeenCalledWith(TEXT_TO_IMAGE.item, 'add-copy');
+    expect(onResume).not.toHaveBeenCalled();
   });
 
   it('opens the workflow from the keyboard, the path the double-click-only cards do not offer', async () => {
@@ -426,7 +531,7 @@ describe('WorkflowLibraryDetailPanel', () => {
       await settleFrame();
     });
 
-    expect(onOpen).toHaveBeenCalledWith(TEXT_TO_IMAGE.item);
+    expect(onOpen).toHaveBeenCalledWith(TEXT_TO_IMAGE.item, 'resume-or-add');
   });
 
   it('swaps the primary action for an install when starter models can fill the gaps', async () => {
@@ -474,8 +579,6 @@ describe('WorkflowLibraryDetailPanel', () => {
     await renderPanel(IMAGE_TO_VIDEO);
 
     expect(requirementStatuses()).toEqual(['unresolvable', 'unresolvable', 'installed']);
-    // Nothing to install, so the panel keeps its Open action rather than
-    // offering an install that cannot run.
     expect(buttonWithText('Open')).not.toBeUndefined();
   });
 
@@ -549,8 +652,7 @@ describe('WorkflowLibraryDetailPanel', () => {
     expect(RAW_WORKFLOW.meta).toStrictEqual({ category: 'default', version: '3.0.0' });
     expect(queries.invalidateWorkflowLibraryCache).toHaveBeenCalledTimes(1);
     expect(onDuplicated).toHaveBeenCalledWith('wf-copy');
-    // From Browse, the copy lands in a category the user is not looking at, so
-    // the notice is the only confirmation there is.
+    // A copied default lands outside the current category, so notification confirms success.
     expect(NOTIFICATIONS.success).toHaveBeenCalledWith('Saved a copy under Yours');
   });
 
@@ -568,10 +670,7 @@ describe('WorkflowLibraryDetailPanel', () => {
 
     await clickMenuItem('duplicate');
 
-    // Nothing has changed on screen yet — the copy is two round trips away and
-    // lands in a category this view is not showing — so the menu item holds
-    // itself closed instead of letting an impatient second click mint a second
-    // copy.
+    // Guard duplicate creation while its two requests are pending and no visible result exists yet.
     await openMenu();
     expect(menuItem('duplicate')?.getAttribute('aria-disabled')).toBe('true');
 
@@ -594,17 +693,24 @@ describe('WorkflowLibraryDetailPanel', () => {
     expect(menuItem('duplicate')?.getAttribute('aria-disabled')).toBeNull();
   });
 
-  it('forks the cached workflow into a fresh project', async () => {
+  it('forks the cached workflow into a fresh project, carrying its library source and revision', async () => {
     await renderPanel(IMAGE_TO_VIDEO);
 
     await clickMenuItem('fork-into-project');
 
+    expect(queries.getLibraryWorkflowRecordCached).toHaveBeenCalledWith('wf-image-to-video', expect.anything());
     expect(OPEN_DOCUMENT_IN_NEW_PROJECT).toHaveBeenCalledTimes(1);
 
-    const [document_, label] = OPEN_DOCUMENT_IN_NEW_PROJECT.mock.calls[0] as [{ name: string }, string];
+    const [document_, label, source] = OPEN_DOCUMENT_IN_NEW_PROJECT.mock.calls[0] as [
+      { name: string },
+      string,
+      unknown,
+    ];
 
     expect(document_.name).toBe('Image to video');
     expect(label).toBe('Image to video');
+    // The copy can update its template later only if it knows which revision it started from.
+    expect(source).toEqual({ libraryWorkflowId: 'wf-image-to-video', revision: 7 });
     // The fork lands the user in a new project, so the library gets out of the way.
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(queries.createLibraryWorkflow).not.toHaveBeenCalled();
@@ -624,13 +730,72 @@ describe('WorkflowLibraryDetailPanel', () => {
     expect(mimeType).toBe('application/json');
   });
 
+  it('renames a user template over the live record at its current revision', async () => {
+    queries.getLibraryWorkflowRecord.mockResolvedValueOnce({
+      revision: 4,
+      workflow: { name: 'Text to image', nodes: [], notes: 'kept' },
+      workflow_id: 'wf-text-to-image',
+    });
+
+    await renderPanel(TEXT_TO_IMAGE);
+    await clickMenuItem('rename');
+
+    const input = document.querySelector<HTMLInputElement>('input[name="renameValue"]');
+    expect(input?.value).toBe('Text to image');
+
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    await act(async () => {
+      setValue?.call(input, 'Portraits');
+      input?.dispatchEvent(new Event('input', { bubbles: true }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      input?.closest('form')?.querySelector<HTMLButtonElement>('button[type="submit"]')?.click();
+      await settleFrame();
+      await settleFrame();
+    });
+
+    expect(queries.updateLibraryWorkflow).toHaveBeenCalledWith(
+      'wf-text-to-image',
+      { name: 'Portraits', nodes: [], notes: 'kept' },
+      expect.objectContaining({ expectedRevision: 4 })
+    );
+    expect(queries.invalidateWorkflowLibraryCache).toHaveBeenCalledWith('wf-text-to-image');
+  });
+
+  it('keeps the rename dialog open, with the typed name, when the library refuses the rename', async () => {
+    queries.getLibraryWorkflowRecord.mockResolvedValueOnce({
+      revision: 4,
+      workflow: { name: 'Text to image', nodes: [] },
+      workflow_id: 'wf-text-to-image',
+    });
+    queries.updateLibraryWorkflow.mockRejectedValueOnce(new Error('stale'));
+
+    await renderPanel(TEXT_TO_IMAGE);
+    await clickMenuItem('rename');
+
+    const input = document.querySelector<HTMLInputElement>('input[name="renameValue"]');
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    await act(async () => {
+      setValue?.call(input, 'Portraits');
+      input?.dispatchEvent(new Event('input', { bubbles: true }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      input?.closest('form')?.querySelector<HTMLButtonElement>('button[type="submit"]')?.click();
+      await settleFrame();
+      await settleFrame();
+    });
+
+    expect(NOTIFICATIONS.error).toHaveBeenCalledWith('Rename failed', expect.any(String));
+    expect(document.querySelector<HTMLInputElement>('input[name="renameValue"]')?.value).toBe('Portraits');
+    expect(queries.invalidateWorkflowLibraryCache).not.toHaveBeenCalled();
+  });
+
   it('deletes only after the confirmation is accepted', async () => {
     await renderPanel(TEXT_TO_IMAGE);
 
     await openMenu();
-    // The overflow menu carries the same second-line hints as the graph
-    // preview's "Open as" menu — this is the one place that unification is
-    // asserted, rather than duplicating it under every item.
     expect(menuItem('delete')?.textContent).toContain('Removes it from your library');
 
     await clickMenuItem('delete');
@@ -686,8 +851,7 @@ describe('WorkflowLibraryDetailPanel', () => {
   it('links only the rows the account is missing, and takes them to Add Models', async () => {
     await renderPanel(IMAGE_TO_VIDEO);
 
-    // Two installable rows link; the installed VAE stays plain text — Add
-    // Models has nothing to offer for a model that is already here.
+    // Link missing installable models only; installed requirements have no Add Models action.
     expect(requirementStatuses()).toEqual(['installable', 'installable', 'installed']);
     expect(document.querySelectorAll('[data-requirement-link]')).toHaveLength(2);
     expect(requirementRows()[2]?.querySelector('[data-requirement-link]')).toBeNull();
@@ -709,8 +873,7 @@ describe('WorkflowLibraryDetailPanel', () => {
   });
 
   it('leaves a row that names nothing installable as plain text', async () => {
-    // Nothing installed and no catalog: the row is unresolvable, and a slot
-    // with neither base nor type has no query to offer either.
+    // Unresolved requirements without catalog matches or searchable slot hints remain plain text.
     models.installedModels.current = [];
     models.starterModels.current = [];
 

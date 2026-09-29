@@ -1,3 +1,5 @@
+import { DEFAULT_LOGGING_CONFIG } from '@platform/logging/contracts';
+import { configureLogging, getLogSnapshot, resetLogging } from '@platform/logging/logger';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { BackendSocket } from './socketHub';
@@ -149,5 +151,31 @@ describe('socketHub', () => {
     socket.fire('disconnect', 'transport close');
 
     expect(getConnectionStatus().status).toBe('disconnected');
+  });
+
+  it('records connection transitions with disconnects as warnings', () => {
+    resetLogging();
+    configureLogging({ ...DEFAULT_LOGGING_CONFIG, level: 'debug' });
+    const socket = new FakeSocket();
+    const hub = createSocketHub({ createSocket: () => socket });
+
+    hub.connect();
+    socket.fire('disconnect', 'transport close');
+    socket.fire('connect_error', { message: 'xhr poll error' });
+    socket.fire('connect_error', { message: 'xhr poll error' });
+
+    expect(getLogSnapshot().entries).toMatchObject([
+      { level: 'debug', message: 'Backend socket reconnect failed: xhr poll error', name: 'socket.reconnect-failed' },
+      { level: 'warn', message: 'Backend socket disconnected: xhr poll error', name: 'socket.disconnected' },
+      {
+        context: { previous: 'connected', reason: 'transport close' },
+        level: 'warn',
+        message: 'Backend socket disconnected: transport close',
+        name: 'socket.disconnected',
+        source: { area: 'socket', namespace: 'transport' },
+      },
+      { level: 'info', name: 'socket.connected' },
+      { level: 'debug', name: 'socket.connecting' },
+    ]);
   });
 });

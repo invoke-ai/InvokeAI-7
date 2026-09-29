@@ -1,4 +1,5 @@
 import json
+from typing import Optional
 
 from invokeai.app.invocations.baseinvocation import (
     BaseInvocation,
@@ -16,7 +17,14 @@ from invokeai.app.invocations.model import (
     VAEField,
 )
 from invokeai.app.services.shared.invocation_context import InvocationContext
-from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelType, SubModelType
+from invokeai.backend.architectures import accepted_vae_bases
+from invokeai.backend.model_manager.taxonomy import (
+    BaseModelType,
+    MistralVariantType,
+    ModelFormat,
+    ModelType,
+    SubModelType,
+)
 
 
 @invocation_output("ernie_image_model_loader_output")
@@ -50,20 +58,46 @@ class ErnieImageModelLoaderInvocation(BaseInvocation):
     """
 
     model: ModelIdentifierField = InputField(
-        description="ERNIE-Image diffusers pipeline (provides transformer, VAE, text encoder, and optional prompt enhancer)",
+        description="ERNIE-Image model. A diffusers pipeline provides every submodel; a single-file "
+        "transformer needs a text encoder and a VAE selected below.",
         input=Input.Direct,
         ui_model_base=BaseModelType.ErnieImage,
         ui_model_type=ModelType.Main,
         title="ERNIE-Image Model",
     )
 
+    text_encoder_model: Optional[ModelIdentifierField] = InputField(
+        default=None,
+        description="Standalone Ministral 3B text encoder. Required when the model is a single-file transformer.",
+        input=Input.Direct,
+        ui_model_type=ModelType.MistralEncoder,
+        title="Text Encoder",
+    )
+
+    vae_model: Optional[ModelIdentifierField] = InputField(
+        default=None,
+        description="Standalone VAE (AutoencoderKLFlux2, the one ERNIE-Image shares with FLUX.2). "
+        "Required when the model is a single-file transformer.",
+        input=Input.Direct,
+        ui_model_base=accepted_vae_bases(BaseModelType.ErnieImage),
+        ui_model_type=ModelType.VAE,
+        title="VAE",
+    )
+
     use_prompt_enhancer: bool = InputField(
         default=True,
-        description="If true and the pipeline ships with a prompt-enhancer submodel, expose it on the output.",
+        description="If true and the pipeline ships with a prompt-enhancer submodel, expose it on the output. "
+        "Single-file transformers carry no prompt enhancer.",
         title="Use Prompt Enhancer",
     )
 
     def invoke(self, context: InvocationContext) -> ErnieImageModelLoaderOutput:
+        config = context.models.get_config(self.model)
+        is_single_file = config.format is ModelFormat.Checkpoint
+
+        if is_single_file:
+            return self._load_from_single_file(context)
+
         transformer = self.model.model_copy(update={"submodel_type": SubModelType.Transformer})
         vae = self.model.model_copy(update={"submodel_type": SubModelType.VAE})
         tokenizer = self.model.model_copy(update={"submodel_type": SubModelType.Tokenizer})
@@ -80,6 +114,49 @@ class ErnieImageModelLoaderInvocation(BaseInvocation):
             text_encoder=Mistral3EncoderField(tokenizer=tokenizer, text_encoder=text_encoder),
             vae=VAEField(vae=vae),
             prompt_enhancer=prompt_enhancer,
+        )
+
+    def _load_from_single_file(self, context: InvocationContext) -> ErnieImageModelLoaderOutput:
+        """A single file holds the transformer alone, so its companions are chosen on this node.
+
+        The prompt enhancer is not among them: it is a Ministral3 language model that only the
+        diffusers pipeline ships, and the model manager has no standalone type for it.
+        """
+        missing = [
+            title
+            for title, field in (("Text Encoder", self.text_encoder_model), ("VAE", self.vae_model))
+            if field is None
+        ]
+        if missing:
+            raise ValueError(
+                f"A single-file ERNIE-Image transformer needs {' and '.join(missing)} selected on this node. "
+                "Install the standalone Ministral 3B encoder and the FLUX.2 VAE, or select an ERNIE-Image "
+                "diffusers pipeline, which carries both."
+            )
+        assert self.text_encoder_model is not None and self.vae_model is not None
+
+        # Every Mistral encoder is installed under the same type, but ERNIE-Image conditions on
+        # Ministral 3B: half the width of the Mistral Small 3 encoders FLUX.2 uses. Selecting one of
+        # those otherwise fails as a shape mismatch deep inside denoising, long after the point
+        # where a user could see what they picked wrong.
+        encoder_variant = getattr(context.models.get_config(self.text_encoder_model), "variant", None)
+        if encoder_variant is not MistralVariantType.Ministral3B:
+            raise ValueError(
+                f"'{self.text_encoder_model.name}' is not the encoder ERNIE-Image conditions on. "
+                "It needs Ministral 3B (hidden size 3072); the Mistral Small 3 encoders that FLUX.2 "
+                "uses are 5120 wide and would fail with a shape mismatch during denoising."
+            )
+
+        return ErnieImageModelLoaderOutput(
+            transformer=TransformerField(
+                transformer=self.model.model_copy(update={"submodel_type": SubModelType.Transformer}), loras=[]
+            ),
+            text_encoder=Mistral3EncoderField(
+                tokenizer=self.text_encoder_model.model_copy(update={"submodel_type": SubModelType.Tokenizer}),
+                text_encoder=self.text_encoder_model.model_copy(update={"submodel_type": SubModelType.TextEncoder}),
+            ),
+            vae=VAEField(vae=self.vae_model.model_copy(update={"submodel_type": SubModelType.VAE})),
+            prompt_enhancer=None,
         )
 
     def _pipeline_has_prompt_enhancer(self, context: InvocationContext) -> bool:

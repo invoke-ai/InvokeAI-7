@@ -37,8 +37,7 @@ describe('models ui store', () => {
 
     const snapshot = store.getModelsUiSnapshotForTests();
 
-    // Add Models, showing the starter catalog filtered to the request — a
-    // leftover scan/HF panel or bundle would hide the catalog entirely.
+    // Clear prior scan, repo, and bundle results so the requested starter catalog remains visible.
     expect(snapshot.activeTab).toBe('add');
     expect(store.getAddModelsSeed()).toBe('Juggernaut XL');
     expect(snapshot.hfLookup).toBeNull();

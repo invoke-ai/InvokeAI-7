@@ -1,4 +1,4 @@
-/* oxlint-disable react-perf/jsx-no-new-function-as-prop */
+/* oxlint-disable react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-new-function-as-prop */
 import { ChakraProvider } from '@chakra-ui/react';
 import { system } from '@theme/system';
 import { createInstance } from 'i18next';
@@ -12,7 +12,7 @@ import { Combobox, type ComboboxOption } from './Combobox';
 const options: ComboboxOption[] = [
   { label: 'Euler Ancestral', value: 'euler_a' },
   { label: 'DPM++ 2M', value: 'dpmpp_2m' },
-  { label: 'UniPC', value: 'unipc' },
+  { label: 'UniPC', searchText: 'popular sampler', value: 'unipc' },
 ];
 
 const i18n = createInstance();
@@ -45,15 +45,37 @@ const interact = (action: () => void): Promise<void> =>
     });
   });
 
-const Harness = ({ disabled = false, onChange }: { disabled?: boolean; onChange: (value: string) => void }) => {
+const Harness = ({
+  disabled = false,
+  filterOptions = false,
+  onInputValueChange,
+  onChange,
+}: {
+  disabled?: boolean;
+  filterOptions?: boolean;
+  onInputValueChange?: (value: string) => void;
+  onChange: (value: string) => void;
+}) => {
   const [value, setValue] = useState('euler_a');
+  const [search, setSearch] = useState('');
+  const visibleOptions = filterOptions
+    ? options.filter((option) => option.label.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
+    : options;
 
   return (
     <Combobox
       aria-label="Scheduler"
       disabled={disabled}
-      options={options}
+      options={visibleOptions}
       value={value}
+      onInputValueChange={
+        filterOptions
+          ? (nextSearch) => {
+              setSearch(nextSearch);
+              onInputValueChange?.(nextSearch);
+            }
+          : undefined
+      }
       onValueChange={(nextValue) => {
         setValue(nextValue);
         onChange(nextValue);
@@ -62,23 +84,29 @@ const Harness = ({ disabled = false, onChange }: { disabled?: boolean; onChange:
   );
 };
 
-const renderCombobox = async (disabled = false) => {
+const renderCombobox = async (disabled = false, filterOptions = false) => {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
   const onChange = vi.fn();
+  const onInputValueChange = vi.fn();
 
   await interact(() => {
     root?.render(
       <I18nextProvider i18n={i18n}>
         <ChakraProvider value={system}>
-          <Harness disabled={disabled} onChange={onChange} />
+          <Harness
+            disabled={disabled}
+            filterOptions={filterOptions}
+            onChange={onChange}
+            onInputValueChange={onInputValueChange}
+          />
         </ChakraProvider>
       </I18nextProvider>
     );
   });
 
-  return { input: host.querySelector<HTMLInputElement>('input[role="combobox"]')!, onChange };
+  return { input: host.querySelector<HTMLInputElement>('input[role="combobox"]')!, onChange, onInputValueChange };
 };
 
 const setInputValue = async (input: HTMLInputElement, value: string) => {
@@ -112,6 +140,16 @@ describe('Combobox', () => {
     expect(document.body.textContent).toContain('No schedulers found');
   });
 
+  it('keeps an option that matches secondary server-search text', async () => {
+    const { input } = await renderCombobox();
+
+    await interact(() => input.click());
+    await setInputValue(input, 'popular');
+
+    expect(document.querySelectorAll('[role="option"]')).toHaveLength(1);
+    expect(document.querySelector('[role="option"]')?.textContent).toContain('UniPC');
+  });
+
   it('supports controlled mouse and keyboard selection with selected-state indication', async () => {
     const { input, onChange } = await renderCombobox();
 
@@ -132,6 +170,25 @@ describe('Combobox', () => {
     });
     expect(onChange).toHaveBeenLastCalledWith('euler_a');
     expect(input.value).toBe('Euler Ancestral');
+  });
+
+  it('clears the controlled search query when reopened', async () => {
+    const { input, onInputValueChange } = await renderCombobox(false, true);
+
+    await interact(() => input.click());
+    await setInputValue(input, 'DPM');
+    expect(document.querySelectorAll('[role="option"]')).toHaveLength(1);
+
+    await interact(() => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' }));
+    });
+    expect(onInputValueChange).toHaveBeenLastCalledWith('');
+    expect(onInputValueChange).toHaveBeenCalledTimes(2);
+    expect(input.getAttribute('aria-expanded')).toBe('false');
+    await interact(() => input.click());
+
+    expect(input.value).toBe('');
+    expect(document.querySelectorAll('[role="option"]')).toHaveLength(options.length);
   });
 
   it('honors the disabled state', async () => {

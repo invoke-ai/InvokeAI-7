@@ -63,16 +63,8 @@ export interface CanvasStagingAreaContract {
   areThumbnailsVisible: boolean;
 }
 
-// ---------------------------------------------------------------------------
-// Canvas v3 document contracts
-//
-// A document holds four stack forests (raster, control, regional guidance and
-// inpaint mask). Each forest is a top-first tree of leaves and pass-through
-// groups. Leaves are positioned by `transform` and reference bitmaps by
-// `imageName` (via `CanvasImageRef`) rather than by resolved URLs, since URLs
-// are ephemeral. Groups organise leaves and gate their effective enabled,
-// locked and hidden state; they carry no opacity, blend mode or transform.
-// ---------------------------------------------------------------------------
+// Four top-first stack forests hold raster, control, regional guidance and inpaint nodes. Leaves use transforms
+// and stable image names, never ephemeral URLs. Groups gate descendant enabled, locked and hidden state.
 
 export type CanvasBlendMode =
   | 'normal'
@@ -93,12 +85,8 @@ export type CanvasBlendMode =
   | 'luminosity';
 
 /**
- * Stable identity for an indexed custom font face.
- *
- * The family and label are deliberately copied into the document alongside
- * the opaque id and hash. They keep an unresolved document understandable and
- * let the missing-font recovery UI offer a useful replacement without ever
- * persisting the browser-only family alias used by the font runtime.
+ * Stable custom-font identity. Persist family and label for unresolved-font recovery; browser-only family aliases
+ * are never persisted.
  */
 export interface CanvasTextFontRef {
   id: string;
@@ -129,12 +117,8 @@ export type CanvasLayerSourceContract =
       type: 'paint';
       bitmap: CanvasImageRef | null;
       /**
-       * The layer-local origin of `bitmap`'s top-left pixel. Paint layers are
-       * content-sized: the persisted bitmap covers only the painted region, and
-       * this offset records where that region sits in the layer's local space
-       * (it can be negative). Absent (or `{ x: 0, y: 0 }`) for legacy documents
-       * whose paint bitmaps were document-sized at the origin — they load
-       * identically.
+       * Bitmap origin in layer-local pixels, possibly negative. Paint bitmaps cover only content; absent or zero
+       * preserves legacy document-sized bitmaps at the origin.
        */
       offset?: { x: number; y: number };
     }
@@ -172,11 +156,8 @@ export type CanvasLayerSourceContract =
       angle: number;
       stops: { offset: number; color: string }[];
       /**
-       * The gradient's explicit content extent (layer-local pixels). Gradient
-       * layers are content-sized like every other layer: the extent is set at
-       * creation (bbox-sized) and preserved across angle edits. Absent for legacy
-       * documents whose gradients were document-sized by construction — they
-       * default to the document dimensions on load (see `getSourceContentRect`).
+       * Layer-local gradient extent, initialized from the bbox and preserved across angle edits. Legacy absence
+       * defaults to document dimensions via `getSourceContentRect`.
        */
       width?: number;
       height?: number;
@@ -185,10 +166,7 @@ export type CanvasLayerSourceContract =
        * a linear ramp, or the radial center. Absent = the extent center.
        */
       center?: { x: number; y: number };
-      /**
-       * Linear: the distance between the 0 and 1 stops; radial: the radius.
-       * Absent = a ramp fitted to the extent (the legacy, fixed-center look).
-       */
+      /** Linear stop distance or radial radius; absence fits the ramp to the extent. */
       span?: number;
     };
 
@@ -222,9 +200,8 @@ interface CanvasAdjustmentEntryBase {
 }
 
 /**
- * One non-destructive adjustment in a raster layer's ordered stack. List order
- * is application order; disabling keeps the tuned values out of every render
- * without losing them. The Layers tree projects each entry as a child row.
+ * Non-destructive raster adjustment, applied in list order. Disabling preserves settings while excluding it from
+ * renders.
  */
 export type CanvasAdjustmentEntry =
   | (CanvasAdjustmentEntryBase & { type: 'brightness-contrast'; brightness: number; contrast: number })
@@ -273,23 +250,15 @@ export interface CanvasMaskContract {
   bitmap: CanvasImageRef | null;
   fill: CanvasMaskFillContract;
   /**
-   * The layer-local origin of `bitmap`'s top-left pixel. Mask layers are
-   * content-sized exactly like paint layers: the persisted mask bitmap covers
-   * only the painted region, and this offset records where that region sits in
-   * the layer's local space (it can be negative). Absent (or `{ x: 0, y: 0 }`)
-   * for legacy documents whose mask bitmaps were document-sized at the origin —
-   * they load identically. Mirrors {@link CanvasLayerSourceContract} `paint`.
+   * Content-sized mask bitmap origin in layer-local pixels, possibly negative. Absent or zero preserves legacy
+   * document-sized masks; matches {@link CanvasLayerSourceContract} paint offsets.
    */
   offset?: { x: number; y: number };
 }
 
 /**
- * A raster layer's attached regenerate region: the layer's OWN content alpha
- * presented as a live inpaint mask ("copy to inpaint mask", non-destructively).
- * Every stroke, erase, and transform of the layer updates the coverage, which
- * unions into generation's inpaint mask while the layer contributes. Singleton,
- * like a mask's noise modifier; absent ⇒ never added. Carries no pixels of its
- * own — only the overlay fill.
+ * Singleton regenerate region using the raster layer's live alpha as inpaint coverage. It follows strokes, erasure
+ * and transforms, contributes while the layer does, and stores only overlay fill. Absence means never added.
  */
 export interface CanvasLayerRegionContract {
   isEnabled: boolean;
@@ -313,15 +282,8 @@ export interface CanvasControlLayerContract extends CanvasLayerBaseContract {
   withTransparencyEffect: boolean;
   filter?: { type: string; settings: Record<string, unknown> };
   /**
-   * Whether this layer's on-canvas preview is suppressed. DISPLAY ONLY — a
-   * hidden layer still affects generation exactly as it would if visible, which
-   * is the whole point: you can get a control map or mask overlay out of the way
-   * without changing the image it produces. Absent ⇒ not hidden.
-   *
-   * Only these three types carry it. For a raster layer, visibility and
-   * participation are the SAME fact — the raster stack IS the generation
-   * input — so `isEnabled` alone says everything, and a hidden-but-contributing
-   * raster layer is deliberately not representable.
+   * Display-only visibility for overlay layers; generation is unchanged. Absence means visible. Raster layers
+   * instead use `isEnabled` for both visibility and participation.
    */
   isHidden?: boolean;
 }
@@ -334,15 +296,8 @@ export interface CanvasRegionalGuidanceLayerContract extends CanvasLayerBaseCont
   autoNegative: boolean;
   referenceImages: RegionalGuidanceReferenceImage[];
   /**
-   * Whether this layer's on-canvas preview is suppressed. DISPLAY ONLY — a
-   * hidden layer still affects generation exactly as it would if visible, which
-   * is the whole point: you can get a control map or mask overlay out of the way
-   * without changing the image it produces. Absent ⇒ not hidden.
-   *
-   * Only these three types carry it. For a raster layer, visibility and
-   * participation are the SAME fact — the raster stack IS the generation
-   * input — so `isEnabled` alone says everything, and a hidden-but-contributing
-   * raster layer is deliberately not representable.
+   * Display-only visibility for overlay layers; generation is unchanged. Absence means visible. Raster layers
+   * instead use `isEnabled` for both visibility and participation.
    */
   isHidden?: boolean;
 }
@@ -366,15 +321,8 @@ export interface CanvasInpaintMaskLayerContract extends CanvasLayerBaseContract 
   noise?: CanvasMaskNoiseContract;
   denoise?: CanvasMaskDenoiseContract;
   /**
-   * Whether this layer's on-canvas preview is suppressed. DISPLAY ONLY — a
-   * hidden layer still affects generation exactly as it would if visible, which
-   * is the whole point: you can get a control map or mask overlay out of the way
-   * without changing the image it produces. Absent ⇒ not hidden.
-   *
-   * Only these three types carry it. For a raster layer, visibility and
-   * participation are the SAME fact — the raster stack IS the generation
-   * input — so `isEnabled` alone says everything, and a hidden-but-contributing
-   * raster layer is deliberately not representable.
+   * Display-only visibility for overlay layers; generation is unchanged. Absence means visible. Raster layers
+   * instead use `isEnabled` for both visibility and participation.
    */
   isHidden?: boolean;
 }
@@ -388,13 +336,8 @@ export type CanvasLayerContract =
 export type CanvasLayerStackKind = CanvasLayerContract['type'];
 
 /**
- * A group. It belongs to exactly one stack forest and may contain only that
- * stack's leaves and groups. `isHidden` is display-only and valid only in overlay stacks, with the
- * meaning the overlay leaves already give it; a raster group has no display-only hidden state.
- *
- * A group composites pass-through unless it carries a non-identity `adjustments` stack, which is
- * valid only on RASTER-stack groups (overlay groups composite coverage, not color) and applies to
- * the group's composited children before the result reaches its parent.
+ * Groups contain only their own stack's nodes. `isHidden` is display-only and valid only for overlay stacks.
+ * Raster-only adjustments apply to composited children before the parent; identity adjustments pass through.
  */
 export interface CanvasGroupContract {
   id: string;
@@ -464,12 +407,8 @@ export interface CanvasStateContractV3 {
   version: 3 | 4;
   document: CanvasDocumentContractV3;
   /**
-   * Monotonic counter bumped whenever the document is swapped wholesale
-   * (snapshot restore, `replaceCanvasDocument`) rather than incrementally
-   * edited. The document mirror treats any change to this value as a full
-   * document replacement (clearing engine pixel history), even when the new
-   * document keeps the same dimensions and reuses layer ids — the case a
-   * reference/dimension diff alone cannot distinguish from an ordinary edit.
+   * Monotonic wholesale-replacement counter. The mirror clears pixel history whenever it changes, including
+   * replacements reusing dimensions and layer ids that ordinary diffs cannot detect.
    */
   documentRevision: number;
   snapshots: CanvasSnapshotContract[];

@@ -82,8 +82,6 @@ describe('scanDynamicPromptSyntax', () => {
     ]);
   });
 
-  // Regression: globs, sampler overrides and parameters are all valid, and all
-  // read as ordinary text — or worse, as errors — before this.
   it('annotates the looser reference forms the backend accepts', () => {
     expect(
       annotate('__artists/*__ __artist?__ __animals/[dc]ogs__ __~colours__ __@colours__ __outfit(mood=warm)__')
@@ -112,8 +110,7 @@ describe('scanDynamicPromptSyntax', () => {
 
     expect(scan('__colours__')).toEqual(['wildcard']);
     expect(scan('__nope__')).toEqual(['error']);
-    // A glob is known when anything matches it, and `*` crosses `/` as it does
-    // on the backend.
+    // may cross slashes and must resolve to at least one catalog match.
     expect(scan('__animals/*__')).toEqual(['wildcard']);
     expect(scan('__*s__')).toEqual(['wildcard']);
     expect(scan('__nope/*__')).toEqual(['error']);
@@ -189,8 +186,7 @@ describe('scanDynamicPromptSyntax', () => {
     expect(annotate('a cat # {unclosed __nope__')).toEqual([['comment', '# {unclosed __nope__']]);
   });
 
-  // `\#` is not an escape upstream — it comments from the `#` and leaves the
-  // backslash in the prompt — so the scanner must not treat it as one either.
+  // Backslash does not escape # in backend syntax.
   it('comments from a backslash-escaped hash too', () => {
     expect(annotate('a \\# b')).toEqual([['comment', '# b']]);
   });

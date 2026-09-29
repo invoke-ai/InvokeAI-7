@@ -44,11 +44,8 @@ const SEED_HISTORY_LIMIT = 6;
 const selectQueueItems = (model: QueueReadModel): QueueItemReadModel[] => model.items;
 
 /**
- * Seeds and durations of recent completed Generate runs, derived from the
- * project-scoped backend queue read model. Backend items map to a local queue
- * item to prove they came from the Generate source (canvas, workflow, and
- * upscale runs share the same backend queue); the executed seed comes from the
- * backend item's session meta, which is authoritative for randomized runs.
+ * Join backend items to local Generate items to exclude other queue sources; use executed session-meta seeds for
+ * randomized runs.
  */
 const useGenerationQueueInsights = (projectId: string): GenerationUiAdapter['queueInsights'] => {
   const localQueueItems = useActiveProjectSelector((activeProject) => activeProject.queue.items);
@@ -106,15 +103,8 @@ const useGenerationQueueInsights = (projectId: string): GenerationUiAdapter['que
   }, [backendItems, localQueueItems]);
 };
 
-/**
- * Production binding of Generation's UI port: builds each sub-port from
- * Workbench, Models, and Gallery state. No second adapter is expected.
- */
 export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode }) => {
-  // The generate widget needs its model picker as soon as it renders. Left to
-  // Suspense, `ModelSelect` was fetched in a second wave after the boot
-  // widget wave had already finished. `GenerateCanvasSections` is
-  // canvas-only and stays lazy — warming it would add bytes to every boot.
+  // Preload the always-needed model picker; leave canvas-only sections lazy.
   useMountEffect(() => {
     void import('@features/models/react');
   });
@@ -123,8 +113,7 @@ export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode 
     generateValues: getProjectWidgetValues(activeProject, 'generate'),
     invocationSourceId: activeProject.invocation.sourceId,
   }));
-  // Syntax highlighting is a per-user preference, not a property of the
-  // project, so it is joined here rather than read off the document.
+  // Syntax highlighting is an account preference, not project data.
   const showPromptSyntaxHighlighting = useWorkbenchPreferenceSelector(
     (preferences) => preferences.showPromptSyntaxHighlighting
   );
@@ -144,10 +133,7 @@ export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode 
   const queryClient = useQueryClient();
   const notify = useNotify();
   const findGalleryItem = useFindGalleryItem();
-  // Hoisted out of the group: the group's identity turns over on every gallery
-  // selection change, and the reference-image cards are memoized against
-  // exactly that — a fresh handler per selection would re-render the whole
-  // stack, model pickers and all, on every click in the grid.
+  // Keep this handler stable across gallery selection changes so memoized reference cards do not all rerender.
   const findImage = useCallback<GenerationUiAdapter['gallery']['findImage']>(
     (imageName) => findGalleryItem({ kind: 'image', name: imageName }),
     [findGalleryItem]
@@ -168,13 +154,8 @@ export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode 
       error: modelsError,
       getBaseColorPalette: getModelBaseColorPalette,
       getBaseLabel: getModelBaseLabel,
-      // Hash navigation, matching the app.selectModelsTab command. Going through
-      // useNavigate or the models UI store would pull either the router hooks or
-      // the store into the editor/launchpad initial bundles (architecture budget).
-      // The manager opens on Add Models by default, which is where this link
-      // wants to land; a model type seeds its catalog filter through the same
-      // dynamic-import seam `WorkflowUiAdapter.openAddModels` uses, before the
-      // navigation, so the first paint is already filtered.
+      // Use hash navigation and lazy filter seeding to keep router/manager code out of initial bundles; set the
+      // filter before navigation.
       openManager: (options) => {
         const navigateToManager = () => {
           window.location.hash = `#/models?project=${encodeURIComponent(project.activeProjectId)}`;
@@ -226,9 +207,7 @@ export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode 
   const krea2RebalancePresets = useWorkbenchPreferenceSelector((preferences) => preferences.krea2RebalancePresets);
   const rebalancePresetsGroup = useMemo<GenerationUiAdapter['rebalancePresets']>(
     () => ({
-      // Settings persists these shape-checked only; a curve whose weights no longer parse
-      // (hand-edited storage, a future backend tap count) is dropped here rather than
-      // handed to the picker.
+      // Stored curves are only shape-checked; discard weights incompatible with the current parser.
       presets: normalizeRebalancePresets(krea2RebalancePresets),
       remove: (presetId) => {
         void patchWorkbenchPreferences({
@@ -259,8 +238,7 @@ export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode 
   const generatePresets = useWorkbenchPreferenceSelector((preferences) => preferences.generatePresets);
   const presetsGroup = useMemo<GenerationUiAdapter['presets']>(
     () => ({
-      // Settings persists these shape-checked only; the feature re-normalizes the
-      // snapshot against the current model catalog when a preset is applied.
+      // Presets are shape-checked in storage and normalized against current models on application.
       presets: generatePresets,
       remove: (presetId) => {
         void patchWorkbenchPreferences({

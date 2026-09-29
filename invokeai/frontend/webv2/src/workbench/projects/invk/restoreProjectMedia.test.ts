@@ -6,14 +6,7 @@ import type { InvkMediaRef } from './transfer';
 
 import { createRestoredMediaLedger, restoreProjectMedia, rollbackRestoredMedia } from './restoreProjectMedia';
 
-/**
- * The restore engine, with the byte source and the transport replaced.
- *
- * These are the rules that make a restored project *its own* project rather than a second view of
- * somebody else's: board media always gets a new identity, a board item that fails takes its
- * document references down with it rather than letting them resolve to a stranger, and everything
- * that could not be carried is reported against the role it failed in.
- */
+/** Verify fresh ownership, failed-reference isolation, and role-aware loss reporting. */
 
 const BOARD_ID = 'staging-board';
 const PROJECT_ID = 'project-new';
@@ -83,11 +76,7 @@ const restore = (
 };
 
 describe('board media', () => {
-  /**
-   * `board_images` has `PRIMARY KEY (image_name)`, so reusing a name would move the destination's
-   * image onto this project's board rather than copy it — and deleting either board would then take
-   * it from both. The existence check that document references get is deliberately not run here.
-   */
+  /** Board media needs fresh copies: adopting an existing image-name primary key would move another board's media. */
   it('takes a fresh identity even when the destination already has that name', async () => {
     const findExisting = vi.fn(() => Promise.resolve(new Set(['board.png'])));
     const result = await restore(
@@ -143,10 +132,7 @@ describe('board media', () => {
     expect(result.mappings.images.get('board.png')).toBe('staging-board-board.png');
   });
 
-  /**
-   * A rejected star call reaches the caller's rollback, which deletes every asset the restore just
-   * uploaded. Trading a whole project's media for a flag is the one thing this must not do.
-   */
+  /** Star rejection must not roll back restored media. */
   it('does not lose the restore when the star request itself fails', async () => {
     const result = await restore(
       { boardItems: [boardItem({ starred: true })], documentRefs: [imageRef('board.png')] },
@@ -166,10 +152,7 @@ describe('board media', () => {
     ).rejects.toBe(cancelled);
   });
 
-  /**
-   * The invariant this module exists for. The old name is not neutral: on the same server it is
-   * already taken, by the source project's own image.
-   */
+  /** After a failed copy, the existing source name remains unsafe to reuse. */
   it('forces an overlapping reference dangling when its board item fails', async () => {
     const result = await restore(
       { boardItems: [boardItem({ name: 'both.png' })], documentRefs: [imageRef('both.png')] },
@@ -188,21 +171,14 @@ describe('board media', () => {
       { materializeBoardMedia: freshNameMaterializer({ fail: new Set(['a.png', 'b.png']) }) }
     );
 
-    // Derived from the descriptor's position, not from the order the failures arrived in, so two
-    // failed items can never collapse onto one placeholder.
+    // Derive stable placeholders from descriptors, independently of completion order.
     expect([...result.mappings.images]).toEqual([
       ['a.png', `${PROJECT_ID}-missing-image-0`],
       ['b.png', `${PROJECT_ID}-missing-image-1`],
     ]);
   });
 
-  /**
-   * The live reference set skips history — `collectLiveAssetRefs` walks past `recentImages`, canvas
-   * snapshots and the queue — but `remapAssetRefs` rewrites the whole document. Gating the *mapping*
-   * on that set therefore left the newest generated result, which is on the board and in the gallery
-   * recents but not yet on canvas, pointing at the source project's image: the copy renders the
-   * original's picture, and deleting the original breaks it with no explanation.
-   */
+  /** Remap the entire document, including history excluded from collection. */
   it('remaps a failed board item the document names only from history', async () => {
     const result = await restore(
       // No document ref: this name lives in `recentImages`, which the live-ref walker skips.
@@ -212,14 +188,12 @@ describe('board media', () => {
 
     expect(result.mappings.images.get('newest.png')).toBe(`${PROJECT_ID}-missing-image-0`);
     expect(result.boardItemIssues).toEqual([{ kind: 'image', name: 'newest.png', reason: 'upload-failed' }]);
-    // Still not *reported*: a gallery recent that stops resolving is not something the person lost
-    // from this project, and counting it would inflate every report.
+    // Missing history references do not count as live losses.
     expect(result.documentReferenceIssues).toEqual([]);
   });
 
   it('keeps two failures the board never described apart', async () => {
-    // No descriptor position to derive from. Collapsing both onto index 0 would merge two unrelated
-    // missing items into one dangling reference.
+    // Allocate distinct fallback indices for references without descriptor positions.
     const result = await restore(
       { boardItems: [boardItem({ name: 'described.png' })] },
       {
@@ -241,10 +215,7 @@ describe('board media', () => {
   });
 
   /** A materializer that answers neither way has still not delivered the media. */
-  /**
-   * Three ways a descriptor can fail to arrive, all of which must produce exactly one issue and one
-   * placeholder: reported missing, reported twice, and not reported at all.
-   */
+  /** Missing, duplicate, or unreported settlements must produce exactly one issue and placeholder per descriptor. */
   it.each([
     [
       'the source could not materialize it',
@@ -293,10 +264,7 @@ describe('board media', () => {
 });
 
 describe('document-only references', () => {
-  /**
-   * The existence check is an optimization — it only decides whether an upload can be skipped. A
-   * failed probe should cost bandwidth, never the import.
-   */
+  /** Failed existence probes may cause extra uploads, but must not fail the import. */
   it('uploads everything when the existence check fails', async () => {
     const uploadImage = vi.fn((_bytes: Uint8Array, fileName: string) =>
       Promise.resolve({ height: 1, imageName: `uploaded-${fileName}`, width: 1 })
@@ -485,8 +453,7 @@ describe('rollbackRestoredMedia', () => {
 
     expect(deleteImages).toHaveBeenCalledWith(['board-image', 'cover-image', 'document-image'], undefined);
     expect(deleteVideos).toHaveBeenCalledWith(['board-video', 'document-video'], undefined);
-    // The board goes last, and without `include_images`, so anything that wandered onto it while
-    // the import ran survives as Uncategorized.
+    // Delete the board last with include_images=false to preserve unrelated media.
     expect(order.at(-1)).toBe(`board:${BOARD_ID}`);
   });
 

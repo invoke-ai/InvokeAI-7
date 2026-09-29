@@ -17,10 +17,7 @@ describe('parseWorkflowTags', () => {
 
 describe('mergeTagCountsByCase', () => {
   it("takes one variant's count, not their sum, because backend counts are already case-insensitive", () => {
-    // `counts_by_tag` counts each requested tag with `tags LIKE '%tag%'`, and
-    // SQLite's LIKE is case-insensitive — so the row for 'sdxl' and the row for
-    // 'SDXL' are both the full total over the *same* two workflows. Summing
-    // them showed "sdxl 4" for a library holding two.
+    // Case variants already count the same workflows under SQLite LIKE; summing would double-count.
     expect(
       mergeTagCountsByCase([
         { count: 2, tag: 'sdxl' },
@@ -43,8 +40,7 @@ describe('mergeTagCountsByCase', () => {
   });
 
   it('takes the largest count if the variants ever disagree', () => {
-    // They should not, given the backend's LIKE semantics — but a merged chip
-    // that under-reports is worse than one that is merely robust.
+    // Use the maximum variant count even if backend case-insensitive totals unexpectedly differ.
     expect(
       mergeTagCountsByCase([
         { count: 3, tag: 'Upscaling' },

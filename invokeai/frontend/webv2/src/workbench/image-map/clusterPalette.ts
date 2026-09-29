@@ -1,8 +1,4 @@
-/**
- * Categorical colors for map clusters, cycled by cluster id. Modeled on
- * PhotoMapAI's cluster palette: saturated, well-separated hues that read on
- * both light and dark plot backgrounds.
- */
+/** Cluster-id palette modeled on PhotoMapAI, with distinct saturated colors for light/dark backgrounds. */
 export const CLUSTER_PALETTE = [
   '#4E79A7',
   '#F28E2B',
@@ -32,11 +28,7 @@ export const getClusterColor = (cluster: number): string => {
   return CLUSTER_PALETTE[cluster % CLUSTER_PALETTE.length];
 };
 
-/**
- * Whether text on this background needs to be dark to stay readable.
- * Perceived-brightness formula and threshold from PhotoMapAI, so hover cards
- * flip dark/light at the same point its popups do.
- */
+/** PhotoMapAI's perceived-brightness threshold selects readable dark/light hover text. */
 export const isClusterColorLight = (hexColor: string): boolean => {
   const hex = hexColor.replace('#', '');
   const r = parseInt(hex.slice(0, 2), 16);

@@ -17,40 +17,61 @@ export type AddNodeConnectionFilter =
       targetType: FieldType | null;
     };
 
-/**
- * Session-lived UI coordination for the workflow widget. Menu items live
- * inside the shared widget actions menu while their dialogs and the import
- * file input live in the always-mounted header actions — this store is the
- * bridge between the two.
- */
+/** Bridge transient menu actions to always-mounted workflow dialogs and file input through session UI state. */
+
+/** The library dialog's views: the project's own workflows, bundled templates, or the account's templates. */
+export type WorkflowLibraryTab = 'project' | 'default' | 'user';
+
+/** What a surface asked the publication host to do with one project workflow. */
+export type WorkflowPublicationIntent =
+  | { kind: 'save-as-new'; workflowId: string }
+  | { kind: 'update-source'; workflowId: string };
 
 export interface WorkflowUiSnapshot {
   addNodeConnection: AddNodeConnectionFilter | null;
   addNodePosition: XYPosition | null;
+  /** Nodes whose latest-output preview is folded away. Session-lived, like the previews themselves. */
+  collapsedPreviewNodeIds: ReadonlySet<string>;
   isAddNodeOpen: boolean;
   isLibraryOpen: boolean;
-  isNewWorkflowConfirmOpen: boolean;
+  /** Which view the library dialog shows; remembered for the session. */
+  libraryTab: WorkflowLibraryTab;
+  /** The project workflow selected on the This-project view; only meaningful for the project it was made in. */
+  librarySelection: { projectId: string; workflowId: string } | null;
   /** Bumped to ask the dialog host to open the JSON file picker. */
   importRequestCount: number;
-  /** Library workflow a shell surface (command palette) asked to load; consumed by the widget chrome. */
-  pendingLibraryWorkflowLoad: LibraryWorkflowLoadRequest | null;
+  /** A rename the dialog host should offer; it names the workflow it was asked for. */
+  renameRequest: { requestId: number; workflowId: string } | null;
+  /** A workflow a shell surface (command palette, an image's context menu) asked to load; consumed by the widget chrome. */
+  pendingWorkflowLoad: WorkflowLoadRequest | null;
+  /** A publication the always-mounted host should start a dialog for. */
+  publicationIntent: WorkflowPublicationIntent | null;
 }
 
-export interface LibraryWorkflowLoadRequest {
+export type WorkflowLoadSource =
+  | { kind: 'library'; workflowId: string }
+  /** An already-fetched workflow document (an image's embedded workflow); `label` names the undo step. */
+  | { kind: 'document'; label: string; raw: unknown };
+
+export interface WorkflowLoadRequest {
   requestId: number;
-  workflowId: string;
+  source: WorkflowLoadSource;
 }
 
-let nextLibraryWorkflowLoadRequestId = 0;
+let nextWorkflowLoadRequestId = 0;
 
 const INITIAL_WORKFLOW_UI_SNAPSHOT: WorkflowUiSnapshot = {
   addNodeConnection: null,
   addNodePosition: null,
+  collapsedPreviewNodeIds: new Set(),
   importRequestCount: 0,
   isAddNodeOpen: false,
+  renameRequest: null,
   isLibraryOpen: false,
-  isNewWorkflowConfirmOpen: false,
-  pendingLibraryWorkflowLoad: null,
+  librarySelection: null,
+  libraryTab: 'project',
+  pendingWorkflowLoad: null,
+  publicationIntent: null,
 };
 
 export const workflowUiStore = createExternalStore<WorkflowUiSnapshot>(INITIAL_WORKFLOW_UI_SNAPSHOT);
@@ -66,6 +87,35 @@ export const setWorkflowLibraryOpen = (isOpen: boolean): void => {
   workflowUiStore.patchSnapshot({ isLibraryOpen: isOpen });
 };
 
+export const setWorkflowLibraryTab = (libraryTab: WorkflowLibraryTab): void => {
+  if (workflowUiStore.getSnapshot().libraryTab !== libraryTab) {
+    workflowUiStore.patchSnapshot({ libraryTab });
+  }
+};
+
+export const setWorkflowLibrarySelection = (selection: { projectId: string; workflowId: string } | null): void => {
+  workflowUiStore.patchSnapshot({ librarySelection: selection });
+};
+
+/** Opens the library on the project's own workflows with one of them selected. */
+export const openWorkflowLibraryAtProjectWorkflow = (projectId: string, workflowId: string): void => {
+  workflowUiStore.patchSnapshot({
+    isLibraryOpen: true,
+    librarySelection: { projectId, workflowId },
+    libraryTab: 'project',
+  });
+};
+
+export const requestWorkflowPublication = (intent: WorkflowPublicationIntent): void => {
+  workflowUiStore.patchSnapshot({ publicationIntent: intent });
+};
+
+export const clearWorkflowPublicationIntent = (): void => {
+  if (workflowUiStore.getSnapshot().publicationIntent !== null) {
+    workflowUiStore.patchSnapshot({ publicationIntent: null });
+  }
+};
+
 export const setAddNodeOpen = (
   isOpen: boolean,
   position: XYPosition | null = null,
@@ -78,21 +128,40 @@ export const setAddNodeOpen = (
   });
 };
 
-export const setNewWorkflowConfirmOpen = (isOpen: boolean): void => {
-  workflowUiStore.patchSnapshot({ isNewWorkflowConfirmOpen: isOpen });
+const requestWorkflowLoad = (source: WorkflowLoadSource): void => {
+  nextWorkflowLoadRequestId += 1;
+  workflowUiStore.patchSnapshot({ pendingWorkflowLoad: { requestId: nextWorkflowLoadRequestId, source } });
 };
 
-export const requestLibraryWorkflowLoad = (workflowId: string): void => {
-  nextLibraryWorkflowLoadRequestId += 1;
-  workflowUiStore.patchSnapshot({
-    pendingLibraryWorkflowLoad: { requestId: nextLibraryWorkflowLoadRequestId, workflowId },
-  });
-};
+export const requestLibraryWorkflowLoad = (workflowId: string): void =>
+  requestWorkflowLoad({ kind: 'library', workflowId });
 
-export const clearPendingLibraryWorkflowLoad = (requestId: number): void => {
-  if (workflowUiStore.getSnapshot().pendingLibraryWorkflowLoad?.requestId === requestId) {
-    workflowUiStore.patchSnapshot({ pendingLibraryWorkflowLoad: null });
+export const requestWorkflowDocumentLoad = (raw: unknown, label: string): void =>
+  requestWorkflowLoad({ kind: 'document', label, raw });
+
+export const clearPendingWorkflowLoad = (requestId: number): void => {
+  if (workflowUiStore.getSnapshot().pendingWorkflowLoad?.requestId === requestId) {
+    workflowUiStore.patchSnapshot({ pendingWorkflowLoad: null });
   }
+};
+
+export const setNodePreviewCollapsed = (nodeId: string, collapsed: boolean): void => {
+  const collapsedPreviewNodeIds = new Set(workflowUiStore.getSnapshot().collapsedPreviewNodeIds);
+
+  if (collapsed) {
+    collapsedPreviewNodeIds.add(nodeId);
+  } else {
+    collapsedPreviewNodeIds.delete(nodeId);
+  }
+
+  workflowUiStore.patchSnapshot({ collapsedPreviewNodeIds });
+};
+
+let nextRenameRequestId = 0;
+
+export const requestWorkflowRename = (workflowId: string): void => {
+  nextRenameRequestId += 1;
+  workflowUiStore.patchSnapshot({ renameRequest: { requestId: nextRenameRequestId, workflowId } });
 };
 
 export const requestWorkflowImport = (): void => {

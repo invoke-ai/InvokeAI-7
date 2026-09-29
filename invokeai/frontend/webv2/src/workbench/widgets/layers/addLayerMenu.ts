@@ -1,7 +1,6 @@
 /**
- * React-free data and base gating for the layers-panel add-layer surfaces, so
- * the grouping is unit-testable. The header menu renders {@link ADD_LAYER_MENU}; each
- * stack header's "New" button uses {@link stackAddItemId} to add its own type.
+ * Share React-free add-layer grouping/gating; headers use {@link ADD_LAYER_MENU}, stack buttons use {@link
+ * stackAddItemId}.
  */
 
 import type { LayerStackKind } from '@workbench/canvas-engine/api';
@@ -29,11 +28,6 @@ export interface AddLayerMenuGroup {
   items: AddLayerMenuItem[];
 }
 
-/**
- * The add-layer menu, split into legacy's two labelled groups: "Regional" (inpaint
- * mask, regional guidance, regional guidance seeded with a reference image) and
- * "Layers" (control, raster).
- */
 export const ADD_LAYER_MENU: readonly AddLayerMenuGroup[] = [
   {
     items: [

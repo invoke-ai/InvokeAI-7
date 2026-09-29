@@ -29,11 +29,8 @@ import {
 import { useSelectedModelBase } from './useSelectedModelBase';
 
 /**
- * Returns a single `addLayer(id)` callback that creates a new layer of the given
- * kind through the guarded structural commit (one undoable history entry per
- * add). Reused by the panel's add-layer menu AND each stack header's "New"
- * button so both surfaces stay in lockstep. A new node lands directly above the
- * selection, inside its group when the selection is a leaf of one.
+ * Share guarded undoable creation across add menus and stack buttons. Insert above the selection, inside its group
+ * for selected leaves.
  */
 export const useAddLayer = (): ((id: AddLayerItemId) => void) => {
   const { t } = useTranslation();

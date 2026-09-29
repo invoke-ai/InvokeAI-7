@@ -1,12 +1,6 @@
 /**
- * The correctness guard for damage-clipped compositing.
- *
- * A damage-clipped frame leaves everything outside the damage rect showing the
- * PREVIOUS frame. That is the whole point, and also the whole risk: if the
- * damage under-reports by even a pixel, the target keeps stale content, and no
- * assertion about draw-call order would notice. So these tests run every case
- * twice against real canvases — once repainting in full, once damage-clipped
- * on top of the previous frame — and demand the two are pixel-identical.
+ * Compare full and damage-clipped repaints over previous frames on real canvases. Pixel equality catches
+ * underreported damage that draw-call assertions cannot.
  */
 
 import type {
@@ -88,10 +82,6 @@ const countDifferences = (a: Uint8ClampedArray, b: Uint8ClampedArray): { differi
 };
 
 describe('damage-clipped compositing matches a full repaint', () => {
-  /**
-   * Composites `steps` twice: once always in full, once with each step's damage
-   * clipped on top of the previous frame. Returns both screens' pixels.
-   */
   const run = (
     doc: CanvasDocumentContractV3,
     caches: ReturnType<typeof createLayerCacheStore>,

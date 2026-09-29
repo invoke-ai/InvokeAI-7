@@ -1,20 +1,6 @@
 /**
- * Rasterizes a `shape` layer source (rect / ellipse / triangle / star /
- * polygon). Shape layers are PARAMETRIC: their pixels are derived from the source params (`width`,
- * `height`, `fill`, `stroke`, `strokeWidth`, `kind`) rather than a persisted
- * bitmap, so they re-render for free whenever a param changes.
- *
- * Extent semantics: a shape's surface is sized to the source's own
- * `width`×`height` (its layer-local extent), NOT the document — the compositor
- * applies the layer transform (position/scale/rotation) when drawing, exactly
- * like an `image` layer. The stroke is drawn INSET by `strokeWidth / 2` so a
- * thick outline stays entirely within the extent rather than clipping at the
- * surface edge.
- *
- * `polygon` sources carry their vertices across the extent; a polygon with
- * fewer than three points has nothing to draw and is refused by the dispatch.
- *
- * Zero React, zero import-time side effects.
+ * Parametric shapes rasterize at source width/height; compositing applies transforms. Inset strokes by half-width
+ * to contain outlines. Polygons with fewer than three vertices are refused.
  */
 
 import type { CanvasLayerSourceContract, ParametricShapeKind } from '@workbench/canvas-engine/contracts';
@@ -30,14 +16,8 @@ const STAR_INNER_RATIO = 0.382;
 const STAR_SPIKES = 5;
 
 /**
- * Builds the parametric path for `kind` into an `x/y + width×height` box inset
- * by `inset` on every side. Shared by the rasterizer and the drag-preview
- * outline so a committed shape lands exactly where its preview drew. Sharp
- * kinds (triangle, star) are stroked with round joins, so a half-stroke-width
- * inset genuinely contains the outline. The inset path is a box RESCALE, not a
- * uniform offset: on slanted edges a thick stroke drifts slightly outside the
- * fill silhouette — accepted (the ellipse's radius-shrink has the same class
- * of error), revisit only if design objects.
+ * Shared raster/preview path inside an inset box, with round joins for sharp corners. Inset rescales the box
+ * rather than uniformly offsetting edges, so slanted thick outlines may drift slightly beyond the fill silhouette.
  */
 export const buildParametricShapePath = (
   ctx: Ctx,
@@ -102,11 +82,7 @@ export const buildParametricShapePath = (
   ctx.rect(x + inset, y + inset, w, h);
 };
 
-/**
- * Draws a shape source's fill then stroke into an `x/y + width×height` box on
- * the current transform. Shared by the layer rasterizer and the shape tool's
- * pixel placement so both stroke a shape the same way.
- */
+/** Shared fill-then-stroke drawing keeps shape rasterization and pixel placement consistent. */
 export const drawShapeSource = (
   ctx: Ctx,
   source: ShapeSource,
@@ -133,12 +109,6 @@ export const drawShapeSource = (
   }
 };
 
-/**
- * Draws a shape source onto a surface sized to the source extent. Reuses
- * `target` if provided (resizing it to the extent), matching the paint/image
- * rasterizer contract. Synchronous work wrapped in a resolved promise so it
- * shares the `rasterizeSource` dispatch signature.
- */
 export const rasterizeShapeSource = (
   source: ShapeSource,
   deps: RasterizeDeps,

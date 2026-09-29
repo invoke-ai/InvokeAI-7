@@ -1,12 +1,14 @@
-import { SegmentGroup } from '@chakra-ui/react';
-import { useCallback } from 'react';
+import { SegmentTabs, type SegmentTab } from '@platform/ui';
+import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { QueueFilterId } from './queueFilters';
 
 import { QUEUE_FILTERS } from './queueFilters';
 
-/** Status filter pills for the RECENT list (All · Active · Done · Failed · Canceled). */
+export const QUEUE_FILTER_TABS_ID = 'queue-filter';
+
+/** Status filter tabs for the RECENT list (All · Active · Done · Failed · Canceled). */
 export const QueueFilterTabs = ({
   value,
   onChange,
@@ -15,30 +17,19 @@ export const QueueFilterTabs = ({
   onChange: (filter: QueueFilterId) => void;
 }) => {
   const { t } = useTranslation();
-  const onValueChange = useCallback(
-    (details: { value: string | null }) => {
-      if (details.value) {
-        onChange(details.value as QueueFilterId);
-      }
-    },
-    [onChange]
+  const tabs = useMemo<SegmentTab<QueueFilterId>[]>(
+    () => QUEUE_FILTERS.map((filter) => ({ id: filter.id, label: t(filter.labelKey) })),
+    [t]
   );
 
   return (
-    <SegmentGroup.Root
-      aria-label={t('widgets.queue.filterRecentByStatus')}
-      colorPalette="accent"
-      size="xs"
-      value={value}
-      onValueChange={onValueChange}
-    >
-      <SegmentGroup.Indicator />
-      {QUEUE_FILTERS.map((filter) => (
-        <SegmentGroup.Item key={filter.id} value={filter.id}>
-          <SegmentGroup.ItemHiddenInput />
-          <SegmentGroup.ItemText>{t(filter.labelKey)}</SegmentGroup.ItemText>
-        </SegmentGroup.Item>
-      ))}
-    </SegmentGroup.Root>
+    <SegmentTabs
+      isCompact
+      activeId={value}
+      ariaLabel={t('widgets.queue.filterRecentByStatus')}
+      idBase={QUEUE_FILTER_TABS_ID}
+      tabs={tabs}
+      onSelect={onChange}
+    />
   );
 };

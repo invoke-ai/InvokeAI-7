@@ -90,3 +90,21 @@ class TestFluxHintPrefixes:
         layers = extract_fp8_scaled_layers(sd, layer_hints=strip_layer_path_prefix(header))
 
         assert layers["double_blocks.0.img_attn.qkv"].full_precision_matmul is True
+
+
+def test_a_prefixed_hint_still_reaches_a_checkpoint_whose_tensors_are_bare() -> None:
+    """The decision `checkpoint_prefix.py` records, made falsifiable.
+
+    The hint re-keyer strips any known prefix, whatever the state dict carried. Binding it instead
+    to the prefix the loader *detected* is the obvious-looking way to stop the two lists drifting --
+    and on this shape, a header naming `model.diffusion_model.X` over bare tensors, the detected
+    prefix is the empty string, the hint keeps its wrapper, matches nothing, and
+    `full_precision_matrix_mult` is lost in silence. Neither this shape nor its mirror is observed on
+    any local checkpoint, so the rule that cannot lose a hint is the one kept.
+    """
+    sd = _quantized("double_blocks.0.img_attn.qkv")
+    header = {"model.diffusion_model.double_blocks.0.img_attn.qkv": {"full_precision_matrix_mult": True}}
+
+    layers = extract_fp8_scaled_layers(sd, layer_hints=strip_layer_path_prefix(header))
+
+    assert layers["double_blocks.0.img_attn.qkv"].full_precision_matmul is True

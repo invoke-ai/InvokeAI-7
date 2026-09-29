@@ -1,18 +1,6 @@
 /**
- * Pure transform math for merging one layer down into the layer below it.
- *
- * "Merge down" bakes the upper layer's pixels into the lower layer while the
- * reducer keeps the lower layer's transform verbatim (see
- * `mergeCanvasLayersDown` — it never touches pixels). So the engine must draw
- * the upper layer's cache into the lower layer's *local* space: upper-local →
- * document (via the upper transform) → lower-local (via the inverse of the
- * lower transform). Composing those gives the matrix returned here, which the
- * engine feeds to `ctx.setTransform` when blitting the upper cache onto the
- * merged surface. When the merged (lower) layer is later composited with its
- * unchanged transform, the upper content lands back at its original document
- * position: `lowerTransform · (lowerTransform⁻¹ · upperTransform) = upperTransform`.
- *
- * Zero React, zero DOM, zero import-time side effects.
+ * Merge down preserves the lower transform, so map upper pixels through `inverse(lowerTransform) * upperTransform`
+ * into lower-local space. Later lower-layer compositing restores the original document placement.
  */
 
 import type { CanvasLayerBaseContract } from '@workbench/canvas-engine/contracts';

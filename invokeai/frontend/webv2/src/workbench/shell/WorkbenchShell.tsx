@@ -1,3 +1,5 @@
+import type { Project } from '@workbench/projectContracts';
+
 import { Flex, HStack, Text, VisuallyHidden } from '@chakra-ui/react';
 import {
   DndContext,
@@ -11,6 +13,7 @@ import {
 import { restrictToWindowEdges } from '@dnd-kit/modifiers';
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { GalleryDragCursor } from '@features/gallery/utility';
+import { flushWorkbenchDrafts } from '@platform/react/draftRegistry';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { FocusRegionProvider } from '@workbench/focusRegions';
 import { WidgetIcon } from '@workbench/iconResolver';
@@ -50,6 +53,7 @@ import {
 } from './holdToDragSensor';
 import { WorkbenchNotificationToaster } from './notifications';
 import { LeftPanel, RightPanel } from './Panels';
+import { PasteMediaRuntime } from './PasteMediaRuntime';
 import { ProjectConflictBanner } from './ProjectConflictBanner';
 import { QueueRecoveryBanner } from './QueueRecoveryBanner';
 import { StatusBar } from './StatusBar';
@@ -58,16 +62,11 @@ import { TopBar } from './topbar';
 const DND_MODIFIERS = [restrictToWindowEdges];
 
 /**
- * Default 20% edge zones, at half the default scroll speed. The zones must
- * stay full-size: in the side layout the board list is under 250px tall, so
- * a narrower band excludes the first and last visible rows — the places an
- * image is actually held to scroll the list. Speed is halved because at
- * dnd-kit's default a list this small dumps its full range in under half a
- * second, far too fast to pick a row. Phantom off-screen targets triggering
- * scrolls from afar are prevented by the visibility check inside
- * widgetCollisionDetection, not by shrinking zones.
+ * Keep 20% edge zones for short board lists but halve scrolling speed. Collision visibility checks exclude
+ * offscreen targets rather than narrowing usable zones.
  */
 const DND_AUTO_SCROLL = { acceleration: 5 };
+const EMPTY_FLOATING: NonNullable<Project['floatingWidgets']> = {};
 
 export const WorkbenchShell = () => {
   const { notifications, widgets } = useWorkbenchCommands();
@@ -76,10 +75,9 @@ export const WorkbenchShell = () => {
   const projectName = useActiveProjectSelector((project) => project.name);
   const leftRegion = useActiveProjectSelector((project) => project.widgetRegions.left);
   const rightRegion = useActiveProjectSelector((project) => project.widgetRegions.right);
+  const floatingWidgets = useActiveProjectSelector((project) => project.floatingWidgets ?? EMPTY_FLOATING);
   const placementProject = useActiveProjectSelector(getWidgetPlacementProject, areWidgetPlacementProjectsEqual);
   const sensors = useSensors(
-    // `PrimaryMouseSensor`/`HoldToDragSensor` replace the stock `PointerSensor`:
-    // see holdToDragSensor.ts for why touch gestures need the hold gate.
     useSensor(PrimaryMouseSensor, { activationConstraint: { distance: 6 } }),
     useSensor(HoldToDragSensor, {
       activationConstraint: { delay: TOUCH_DRAG_HOLD_DELAY_MS, tolerance: TOUCH_DRAG_MOVE_TOLERANCE_PX },
@@ -94,24 +92,26 @@ export const WorkbenchShell = () => {
   const leftRegionViewModel = useMemo(
     () =>
       createWidgetRegionViewModelFromState({
+        floatingWidgets,
         region: 'left',
         regionState: leftRegion,
         widgetInstances: placementProject.widgetInstances,
         widgets: getWidgetsForRegion('left'),
         getWidgetLabel,
       }),
-    [getWidgetLabel, leftRegion, placementProject.widgetInstances]
+    [floatingWidgets, getWidgetLabel, leftRegion, placementProject.widgetInstances]
   );
   const rightRegionViewModel = useMemo(
     () =>
       createWidgetRegionViewModelFromState({
+        floatingWidgets,
         region: 'right',
         regionState: rightRegion,
         widgetInstances: placementProject.widgetInstances,
         widgets: getWidgetsForRegion('right'),
         getWidgetLabel,
       }),
-    [getWidgetLabel, placementProject.widgetInstances, rightRegion]
+    [floatingWidgets, getWidgetLabel, placementProject.widgetInstances, rightRegion]
   );
   const leftMenuItems = useMemo(() => getWidgetRegionItems(leftRegionViewModel), [leftRegionViewModel]);
   const rightMenuItems = useMemo(() => getWidgetRegionItems(rightRegionViewModel), [rightRegionViewModel]);
@@ -192,46 +192,68 @@ export const WorkbenchShell = () => {
     [placementProject, widgets]
   );
   const handleDragCancel = useCallback(() => setActiveDrag(null), []);
+  // Flush drafts before rail-side docking, as the window's dock control does.
   const handleSelect = useCallback(
-    (region: WidgetBarGroup['region'], instanceId: string) =>
-      revealWidgetPlacement({ instanceId, project: placementProject, region, widgets }),
-    [placementProject, widgets]
+    (region: WidgetBarGroup['region'], instanceId: string) => {
+      if (floatingWidgets[instanceId]) {
+        flushWorkbenchDrafts();
+        widgets.dockFloating(instanceId);
+
+        return;
+      }
+
+      revealWidgetPlacement({ instanceId, project: placementProject, region, widgets });
+    },
+    [floatingWidgets, placementProject, widgets]
+  );
+  // Removing a floating slot closes the window outright — never dock-then-
+  // toggle, which would pop the panel open and retarget the route on the way.
+  const closeFloating = useCallback(
+    (instanceId: string) => {
+      flushWorkbenchDrafts();
+      widgets.closeFloating(instanceId);
+    },
+    [widgets]
   );
   const handleToggleLeft = useCallback(
     (item: (typeof leftMenuItems)[number]) =>
-      item.isEnabled
-        ? closeWidgetPlacement({
-            widgets,
-            getWidgetById,
-            instanceId: item.id,
-            project: placementProject,
-            region: 'left',
-          })
-        : openWidgetPlacement({
-            widgets,
-            getWidgetsForRegion,
-            options: { createNew: item.allowMultiple, preferredRegions: ['left'] },
-            typeId: item.typeId,
-          }),
-    [placementProject, widgets]
+      item.isEnabled && item.isFloating
+        ? closeFloating(item.id)
+        : item.isEnabled
+          ? closeWidgetPlacement({
+              widgets,
+              getWidgetById,
+              instanceId: item.id,
+              project: placementProject,
+              region: 'left',
+            })
+          : openWidgetPlacement({
+              widgets,
+              getWidgetsForRegion,
+              options: { createNew: item.allowMultiple, preferredRegions: ['left'] },
+              typeId: item.typeId,
+            }),
+    [closeFloating, placementProject, widgets]
   );
   const handleToggleRight = useCallback(
     (item: (typeof rightMenuItems)[number]) =>
-      item.isEnabled
-        ? closeWidgetPlacement({
-            widgets,
-            getWidgetById,
-            instanceId: item.id,
-            project: placementProject,
-            region: 'right',
-          })
-        : openWidgetPlacement({
-            widgets,
-            getWidgetsForRegion,
-            options: { createNew: item.allowMultiple, preferredRegions: ['right'] },
-            typeId: item.typeId,
-          }),
-    [placementProject, widgets]
+      item.isEnabled && item.isFloating
+        ? closeFloating(item.id)
+        : item.isEnabled
+          ? closeWidgetPlacement({
+              widgets,
+              getWidgetById,
+              instanceId: item.id,
+              project: placementProject,
+              region: 'right',
+            })
+          : openWidgetPlacement({
+              widgets,
+              getWidgetsForRegion,
+              options: { createNew: item.allowMultiple, preferredRegions: ['right'] },
+              typeId: item.typeId,
+            }),
+    [closeFloating, placementProject, widgets]
   );
   const leftRailGroups = useMemo(
     () => [
@@ -278,9 +300,7 @@ export const WorkbenchShell = () => {
             <VisuallyHidden as="h1" id="workbench-project-heading">
               {projectName}
             </VisuallyHidden>
-            {/* Not a tab panel any more: the project tab strip became a
-                dropdown, so there is no tab list for this to belong to. It is
-                the project's content region, named by the heading above it. */}
+            {/* Use a named content region: the project switcher is no longer a tablist. */}
             <Flex
               aria-labelledby="workbench-project-heading"
               flex="1"
@@ -318,11 +338,11 @@ export const WorkbenchShell = () => {
         </Flex>
         <FloatingWidgetLayer />
         <GalleryDragCursor />
-        {/* The overlay renders whenever anything is being dragged, even with no
-            preview to show — and it is a fixed, full-size div over the dragged
-            element. Without this it swallows every pointer event aimed at what
-            is underneath, which is how a second finger meant for the preview's
-            pinch never reaches the preview. */}
+        <PasteMediaRuntime />
+        {/*
+         * Allow pointer events through the full-size drag overlay so another finger can reach Preview pinch
+         * handlers.
+         */}
         <DragOverlay style={DRAG_OVERLAY_STYLE}>
           {activeDrag ? <WidgetDragPreview activeDrag={activeDrag} /> : null}
         </DragOverlay>

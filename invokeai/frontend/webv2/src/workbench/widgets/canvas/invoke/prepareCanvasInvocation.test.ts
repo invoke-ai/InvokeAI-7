@@ -228,9 +228,8 @@ const makeHarness = (options: HarnessOptions = {}): Harness => {
     uploadImage: uploadImage as (blob: Blob) => Promise<CanvasImageUploadResult>,
   };
 
-  // The fake engine seam behind the REAL `composeForGeneration` operation — the
-  // same fakes the hand-rolled transaction used to wire (stub raster backend,
-  // counting uploader, spy-able release, harness-scoped dedupe cache).
+  // Run real composeForGeneration against stub raster/upload/release dependencies and a harness-owned dedupe
+  // cache.
   const host: GenerationCompositeHost = {
     captureDocumentSnapshot: () => ({
       canvas: makeCanvas(options.document ?? makeDoc([rasterLayer('layer-a')])),
@@ -511,11 +510,8 @@ describe('runCanvasInvocation', () => {
   });
 
   it('plans from the POST-flush document (re-reads getDocument after the flush barrier)', async () => {
-    // The flush dispatches `updateCanvasLayerSource` for just-persisted paint
-    // layers, so the pre-flush snapshot references stale/empty sources. The
-    // orchestrator must re-read the document after the flush and composite from
-    // it — otherwise the stale refs build wrong dedupe keys and the empty-paint
-    // filter reads a `null` bitmap that the flush already replaced.
+    // Reread the document after upload flush updates paint sources; pre-flush references would corrupt dedupe and
+    // omit newly painted content.
     const preDoc = makeDoc([rasterLayer('pre')]);
     const postDoc = makeDoc([rasterLayer('post')]);
     let flushed = false;
@@ -1027,8 +1023,6 @@ describe('runCanvasInvocation', () => {
     const invokePromise = runCanvasInvocation(harness.deps);
     await Promise.resolve();
 
-    // ...but by the time the flush/composite/compile settles, the user has
-    // switched to another project.
     expect(state.activeProjectId).toBe(otherProjectId);
 
     releaseFlush();
@@ -1240,10 +1234,7 @@ describe('runCanvasInvocation — inpaint / outpaint dispatch', () => {
   });
 });
 
-// Task 39, finding 1: a regional reference image is only usable once an image is
-// assigned (the settings UI now wires drop/upload → config.image). This guards
-// the resolver seam: refs without an image are dropped; refs with an image + a
-// compatible model survive into the graph inputs.
+// Regional references require an assigned image and compatible model before reaching graph inputs.
 describe('resolveRegionalReferenceImages', () => {
   const asset = { imageName: 'ref.png' } as RegionalGuidanceReferenceImageAsset;
   const ipAdapterModel = { base: 'sd-1', key: 'ipa', name: 'IP Adapter', type: 'ip_adapter' };

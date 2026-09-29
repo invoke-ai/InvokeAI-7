@@ -23,23 +23,14 @@ import { useTranslation } from 'react-i18next';
 import { flowThemeCss, getFlowColorMode } from './flowTheme';
 import { getNodeSubtitle } from './nodeSummaries';
 
-/**
- * A read-only flow rendering of a compiled `GraphContract` — the "nodes" half
- * of the graph preview dialog. Contracts carry no positions, so the renderer
- * uses the caller's hints (the editable document's positions, when the graph
- * came from the project graph) and falls back to a layered topological layout.
- */
+/** Use caller position hints when available; compiled contracts otherwise receive topological layout. */
 
 type PreviewFlowNode = FlowNode<
   { inputCount: number; isSelected: boolean; nodeId: string; nodeType: string; subtitle: string | null },
   'preview'
 >;
 
-/**
- * A lightweight contract view of an editable document (no templates needed),
- * for previewing workflows that are not the active project graph — e.g.
- * library entries before loading them.
- */
+/** Build a template-free contract view for documents outside the active editor, including library previews. */
 export const documentToPreviewGraph = (
   document: ProjectGraphState,
   fallbackLabel: string
@@ -87,8 +78,6 @@ const PreviewNode = ({ data }: NodeProps<PreviewFlowNode>) => {
       borderWidth="1px"
       fontSize="xs"
       minW="14rem"
-      // Border + matching outline reads as a 2px solid accent ring — visible
-      // at any zoom, where the previous emphasized border was too subtle.
       outlineColor="accent.solid"
       outlineStyle={data.isSelected ? 'solid' : undefined}
       outlineWidth="1px"

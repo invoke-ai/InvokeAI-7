@@ -10,6 +10,7 @@ import type { ComponentModelConfig, GenerateModelConfig, VaeModelConfig } from '
 import {
   getCompatibleSelectedComponentKey,
   isAnimaQwen3Encoder,
+  isErnieImageMistralEncoder,
   isFlux2DiffusersSourceForModel,
   isFlux2MistralEncoder,
   isFlux2Qwen3EncoderForModel,
@@ -127,7 +128,7 @@ describe('Generate component compatibility', () => {
   it('uses Mistral components and dev Diffusers sources for FLUX.2 [dev]', () => {
     const model = flux2Model('dev');
 
-    expect(isFlux2MistralEncoder(candidate({ type: 'mistral_encoder' }))).toBe(true);
+    expect(isFlux2MistralEncoder(candidate({ type: 'mistral_encoder', variant: 'cow_mistral3_small' }))).toBe(true);
     expect(isFlux2MistralEncoder(candidate({ type: 'qwen3_encoder' }))).toBe(false);
     expect(isFlux2Qwen3EncoderForModel(model)(candidate({ variant: 'qwen3_8b' }))).toBe(false);
     expect(
@@ -140,6 +141,20 @@ describe('Generate component compatibility', () => {
         candidate({ base: 'flux2', format: 'diffusers', type: 'main', variant: 'klein_9b' })
       )
     ).toBe(false);
+  });
+
+  it('keeps each Mistral-family encoder out of the other family slot', () => {
+    // Filter variants even when they share a model type.
+    const ministral = candidate({ type: 'mistral_encoder', variant: 'ministral3_3b' });
+    const mistralSmall3 = candidate({ type: 'mistral_encoder', variant: 'cow_mistral3_small' });
+    const mistral24b = candidate({ type: 'mistral_encoder', variant: 'mistral3_24b' });
+
+    expect(isFlux2MistralEncoder(ministral)).toBe(false);
+    expect([mistralSmall3, mistral24b].every(isFlux2MistralEncoder)).toBe(true);
+
+    expect(isErnieImageMistralEncoder(ministral)).toBe(true);
+    expect([mistralSmall3, mistral24b].some(isErnieImageMistralEncoder)).toBe(false);
+    expect(isErnieImageMistralEncoder(candidate({ type: 'qwen3_encoder', variant: 'ministral3_3b' }))).toBe(false);
   });
 
   it('allows only backend-supported Anima VAE families', () => {
@@ -188,9 +203,7 @@ describe('Generate component compatibility', () => {
   });
 
   it('offers each Wan variant only the VAE width its decode accepts', () => {
-    // `wan_model_loader` refuses a 48-channel VAE for A14B and a 16-channel one for TI2V-5B. The
-    // served base row used to accept both widths for every variant, so both pickers offered a VAE
-    // that failed at enqueue.
+    // Wan A14B and 5B require compatible VAE channel widths.
     const wanMain = (variant: string) =>
       ({ base: 'wan', key: `wan-${variant}`, name: `Wan ${variant}`, type: 'main', variant }) as GenerateModelConfig;
     const wanVae = (latentChannels: number) =>
@@ -210,8 +223,7 @@ describe('Generate component compatibility', () => {
 });
 
 describe('the VAE filters and the backend declarations', () => {
-  // With the row's variant: a variant row states what *that* variant accepts, which for Wan TI2V-5B
-  // is a different VAE from the one its base row names.
+  // Exercise each variant row with its own variant.
   const mainOf = (base: string, variant: string | null = null) =>
     ({
       base,
@@ -232,13 +244,7 @@ describe('the VAE filters and the backend declarations', () => {
 
   const ALL_BASES = [...new Set(architectureCapabilitiesFixture.map((row) => row.base))];
 
-  /**
-   * webv2 kept its own copy of which VAE bases a model accepts, and the backend declares the same
-   * fact in `VaeFacet`. Two copies drift: this PR widened qwen-image to accept the anima
-   * registration and the picker kept refusing it, so a VAE the backend would have loaded could not
-   * be selected. Reading the served table is what makes the next widening show up here instead of
-   * in a user's model list.
-   */
+  /** Check parity with served VAE policy instead of duplicating frontend rules. */
   it('accepts every VAE base the backend declares for that architecture', () => {
     const declared = architectureCapabilitiesFixture.filter((row) => row.vae);
     expect(declared.length).toBeGreaterThan(0);
@@ -257,11 +263,7 @@ describe('the VAE filters and the backend declarations', () => {
     }
   });
 
-  /**
-   * The half a one-directional check cannot see. This PR's headline VAE bug was a *narrowing* —
-   * Klein silently losing `flux` — and a filter that returned `true` for everything would satisfy
-   * the loop above while offering VAEs that decode to noise.
-   */
+  /** Negative parity cases must reject an always-true filter. */
   it('rejects every VAE base the backend does not declare for that architecture', () => {
     for (const row of architectureCapabilitiesFixture) {
       const accepted = row.vae?.accepted ?? [{ base: row.base, latent_channels: null }];
@@ -277,8 +279,7 @@ describe('the VAE filters and the backend declarations', () => {
         ).toBe(false);
       }
 
-      // A width constraint is a real constraint: wan ships a 16- and a 48-channel VAE under one
-      // base, and only one of them belongs to the family an architecture decodes with.
+      // Same-base VAEs are still constrained by channel width.
       for (const entry of accepted) {
         if (entry.latent_channels === null) {
           continue;

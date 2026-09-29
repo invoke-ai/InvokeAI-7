@@ -4,21 +4,23 @@ import type {
   QueueEnqueueWorkflowRequest,
   QueueResultImage,
   QueueResultImageOptions,
+  QueueResultVideo,
   QueueResultVideoOptions,
 } from '@features/queue/core/types';
 
 import {
   buildGeneratePromptBatchPlan,
   buildLegacyGeneratePromptBatchPlan,
-  buildWorkflowSeedBatchPlan,
+  buildQueueWorkflowBatchPlan,
   sanitizeBatchCount,
 } from '@features/queue/core/promptBatch';
 import { mapWithConcurrency } from '@platform/core/concurrency';
+import { addOutputImageNames } from '@platform/core/outputImages';
 import { assertAccountScopeCurrent, captureAccountScope } from '@platform/state/accountLifecycle';
 import { normalizeServerTimestamp } from '@platform/time/serverTimestamp';
 import { absolutizeApiUrl, ApiError, apiFetch, apiFetchJson } from '@platform/transport/http';
 
-import type { QueueImageDTO, QueueServerItemDTO } from './serverTypes';
+import type { QueueImageDTO, QueueServerItemDTO, QueueVideoDTO } from './serverTypes';
 
 import { buildQueueItemOrigin } from './events';
 import { getQueueItem } from './serverApi';
@@ -110,7 +112,11 @@ export const enqueueGenerate = async (request: QueueEnqueueGenerateRequest): Pro
 };
 
 export const enqueueWorkflow = async (request: QueueEnqueueWorkflowRequest): Promise<QueueEnqueueResult> => {
-  const plan = buildWorkflowSeedBatchPlan({ batchCount: request.batchCount, seeds: request.seeds });
+  const plan = buildQueueWorkflowBatchPlan({
+    batchCount: request.batchCount,
+    batchData: request.batchData,
+    seeds: request.seeds,
+  });
   const result = await apiFetchJson<unknown>('/api/v1/queue/default/enqueue_batch', {
     body: JSON.stringify({
       batch: {
@@ -121,6 +127,7 @@ export const enqueueWorkflow = async (request: QueueEnqueueWorkflowRequest): Pro
         project_id: request.projectId,
         origin: buildQueueItemOrigin(request.sourceQueueItemId, request.projectId),
         runs: plan.runs,
+        ...(request.workflow ? { workflow: request.workflow } : {}),
       },
       prepend: false,
     }),
@@ -143,7 +150,6 @@ export const enqueueUtility = async (request: {
 };
 
 const getResultImageNames = (queueItem: QueueServerItemDTO, options?: QueueResultImageOptions): string[] => {
-  const imageNames = new Set<string>();
   const results = queueItem.session?.results ?? {};
   const preparedSourceMapping = queueItem.session?.prepared_source_mapping ?? {};
   const resultValues = options?.resultNodeIds
@@ -152,28 +158,10 @@ const getResultImageNames = (queueItem: QueueServerItemDTO, options?: QueueResul
         .map(([, result]) => result)
     : Object.values(results);
 
+  const imageNames = new Set<string>();
   for (const result of resultValues) {
-    if (!result || typeof result !== 'object') {
-      continue;
-    }
-
-    const imageName = (result as { image?: { image_name?: unknown } }).image?.image_name;
-    if (typeof imageName === 'string') {
-      imageNames.add(imageName);
-    }
-
-    const collection = (result as { collection?: unknown }).collection;
-    if (Array.isArray(collection)) {
-      for (const item of collection) {
-        const collectionImageName =
-          item && typeof item === 'object' ? (item as { image_name?: unknown }).image_name : undefined;
-        if (typeof collectionImageName === 'string') {
-          imageNames.add(collectionImageName);
-        }
-      }
-    }
+    addOutputImageNames(result, imageNames);
   }
-
   return [...imageNames];
 };
 
@@ -253,9 +241,8 @@ const collectResultVideoNames = (queueItem: QueueServerItemDTO, options?: QueueR
 };
 
 /**
- * True when the video's DTO reports it as an intermediate. Fail-open on transport
- * errors: the caller's board attach is best-effort, and a wrongly-attached
- * intermediate is invisible in gallery listings (which filter intermediates).
+ * Treat transport errors as non-intermediate for best-effort attachment; gallery listings still hide actual
+ * intermediates.
  */
 const isIntermediateVideo = async (videoName: string, signal: AbortSignal): Promise<boolean> => {
   try {
@@ -274,12 +261,7 @@ const isIntermediateVideo = async (videoName: string, signal: AbortSignal): Prom
   }
 };
 
-/**
- * The names of the videos a completed backend item produced. The queue runtime only
- * routes them onto the destination board, so DTOs are hydrated solely when
- * `excludeIntermediate` needs the `is_intermediate` flag (the video analogue of the
- * image path's filterIntermediateResults).
- */
+/** Fetch result video names; hydrate DTOs only when filtering intermediates requires their flags. */
 export const getResultVideoNames = async (itemId: number, options?: QueueResultVideoOptions): Promise<string[]> => {
   const owner = captureAccountScope();
   const item = await getQueueItem(itemId, owner.signal);
@@ -297,4 +279,59 @@ export const getResultVideoNames = async (itemId: number, options?: QueueResultV
 
   assertAccountScopeCurrent(owner);
   return videoNames.filter((_, index) => !intermediateFlags[index]);
+};
+
+const getResultVideo = async (
+  videoName: string,
+  queuedAt: string,
+  sourceQueueItemId: string,
+  signal: AbortSignal
+): Promise<QueueResultVideo | null> => {
+  try {
+    const video = await apiFetchJson<QueueVideoDTO>(`/api/v1/videos/i/${encodeURIComponent(videoName)}`, { signal });
+
+    if (!Number.isFinite(video.duration)) {
+      return null;
+    }
+
+    return {
+      ...(video.board_id ? { boardId: video.board_id } : {}),
+      category: video.video_category,
+      createdAt: normalizeServerTimestamp(video.created_at),
+      durationSeconds: video.duration,
+      ...(typeof video.fps === 'number' ? { fps: video.fps } : {}),
+      height: video.height,
+      isIntermediate: video.is_intermediate,
+      ...(video.media_origin ? { mediaOrigin: video.media_origin } : {}),
+      queuedAt,
+      sourceQueueItemId,
+      thumbnailUrl: absolutizeApiUrl(video.thumbnail_url),
+      videoName: video.video_name,
+      videoUrl: absolutizeApiUrl(video.video_url),
+      width: video.width,
+    };
+  } catch (error) {
+    if (signal.aborted) {
+      throw error;
+    }
+    // Display hydration is best-effort: a video that is gone or unreadable is simply not selected.
+    return null;
+  }
+};
+
+export const getResultVideos = async (
+  videoNames: string[],
+  sourceQueueItemId: string,
+  queuedAt: string
+): Promise<QueueResultVideo[]> => {
+  const owner = captureAccountScope();
+  const videos = await mapWithConcurrency(
+    videoNames,
+    8,
+    (videoName) => getResultVideo(videoName, queuedAt, sourceQueueItemId, owner.signal),
+    { signal: owner.signal }
+  );
+
+  assertAccountScopeCurrent(owner);
+  return videos.filter((video): video is QueueResultVideo => video !== null);
 };

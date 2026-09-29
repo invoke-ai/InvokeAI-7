@@ -1,9 +1,4 @@
-/**
- * Derives the backend deployment root (origin plus an optional reverse-proxy
- * prefix) from the emitted module URL. Vite emits production chunks beneath
- * `<deployment-root>/assets/`; development modules have no `/assets/` segment
- * and therefore keep the existing origin-root behavior.
- */
+/** Production modules resolve the deployment prefix before /assets/; development falls back to the origin root. */
 export const deriveDeploymentBaseUrl = (
   moduleUrl: string,
   fallbackOrigin: string,

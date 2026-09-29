@@ -1,3 +1,4 @@
+import type { ProjectGraphState, ProjectWorkflowSource } from '@features/workflow/contracts';
 import type { ProjectGraphAction } from '@features/workflow/utility';
 import type { LayoutPreset } from '@workbench/layoutContracts';
 import type { Project, WorkbenchState } from '@workbench/projectContracts';
@@ -7,6 +8,7 @@ import {
   type GalleryImage,
   type GeneratedImageContract,
 } from '@features/gallery/contracts';
+import { recordLogEvent } from '@platform/logging/logger';
 import { createExternalStore } from '@platform/state/externalStore';
 import { closeWidgetOverlays } from '@platform/ui/widgetOverlayRegistry';
 import { hasActiveQueueRuns, hasInFlightQueueRuns } from '@workbench/queue-integration/activeQueueRuns';
@@ -14,11 +16,11 @@ import { hasActiveQueueRuns, hasInFlightQueueRuns } from '@workbench/queue-integ
 import type { CanvasEditIntent } from './autoRoutePolicy';
 import type { CanvasProjectMutation } from './canvasProjectMutations';
 
-import { recordDiagnosticEntry } from './diagnostics/logger';
 import { clearLayerPanelStates, reconcileLayerPanelStates } from './layerPanelState';
 import { createLayoutPresetActivator, loadLayoutPresetWidgets } from './layoutPresetActivation';
 import { resolveSavedLayoutPreset } from './layoutPresetSnapshots';
 import { getLayoutWidgetTypeIds } from './layoutWidgetSet';
+import { createBlankWorkflowDocument, findProjectWorkflow } from './projectWorkflows';
 import { getWorkbenchPreferences } from './settings/store';
 import { areWidgetsLoaded } from './widgetRegistry';
 import {
@@ -27,11 +29,7 @@ import {
   type __WorkbenchReducerActionInternal,
 } from './workbenchState';
 
-/**
- * Which widgets the shell shows: the active project, each region's active
- * instance, and the floating windows. A change hides or replaces widgets, and
- * an overlay open inside one would otherwise outlive it in its portal.
- */
+/** Visible-widget changes dismiss overlays that would otherwise outlive their widgets in portals. */
 const visibleWidgetsKey = (state: WorkbenchState): string => {
   const project = state.projects.find((candidate) => candidate.id === state.activeProjectId);
   if (!project) {
@@ -51,11 +49,7 @@ type MechanicalCommand<Type extends WorkbenchAction['type']> = keyof ActionPaylo
   ? () => void
   : (payload: ActionPayload<Type>) => void;
 
-/**
- * Mechanical commands forward one action to the reducer; their public types derive
- * from the reducer's action union so the two cannot drift. The action union itself
- * stays private — callers only ever see the named command.
- */
+/** Derive named command types from the private reducer action union to prevent drift. */
 const createCommandFactory = (dispatch: WorkbenchDispatch) => {
   function command<Type extends WorkbenchAction['type']>(type: Type): MechanicalCommand<Type>;
   function command<Type extends WorkbenchAction['type'], Args extends unknown[]>(
@@ -172,10 +166,6 @@ const createCommands = (
           projectId,
         })
       ),
-      /**
-       * TODO(Task 6/8): Remove after Gallery Grid, Preview, and the image
-       * command palette dispatch canonical items.
-       */
       selectImage: (
         image: GeneratedImageContract & Partial<GalleryImage>,
         projectId?: string,
@@ -213,6 +203,19 @@ const createCommands = (
         projectId,
         starredOnly,
       })),
+      setSemanticSearchMode: command('setGallerySemanticSearchMode', (enabled: boolean, projectId?: string) => ({
+        enabled,
+        projectId,
+      })),
+      setSemanticSearchText: command('setGallerySemanticSearchText', (text: string, projectId?: string) => ({
+        projectId,
+        text,
+      })),
+      commitSemanticSearch: command('commitGallerySemanticSearch', (text: string, projectId?: string) => ({
+        projectId,
+        text,
+      })),
+      clearSearch: command('clearGallerySearch', (projectId?: string) => ({ projectId })),
       setView: command(
         'setGalleryView',
         (galleryView: ActionPayload<'setGalleryView'>['galleryView'], projectId?: string) => ({
@@ -422,6 +425,7 @@ const createCommands = (
     },
     widgets: {
       dockFloating: command('dockFloatingWidget', (instanceId: string) => ({ instanceId })),
+      closeFloating: command('closeFloatingWidget', (instanceId: string) => ({ instanceId })),
       float: command('floatWidget', (instanceId: string, region?: ActionPayload<'floatWidget'>['region']) =>
         region ? { instanceId, region } : { instanceId }
       ),
@@ -475,16 +479,76 @@ const createCommands = (
       toggle: command('toggleRegionWidget'),
     },
     workflows: {
-      bindLibraryWorkflow: command('setProjectGraphLibraryBinding', (libraryWorkflowId: string) => ({
-        libraryWorkflowId,
-      })),
-      editGraph: command('applyProjectGraphAction', (action: ProjectGraphAction) => ({ action })),
-      replace: command(
-        'replaceProjectGraph',
-        (document: ActionPayload<'replaceProjectGraph'>['document'], label: string) => ({ document, label })
+      /** Adds a workflow to the project and activates it; returns the id it is known by. */
+      add: (
+        document: ProjectGraphState,
+        options: { label: string; projectId?: string; reusePlaceholder?: boolean; source?: ProjectWorkflowSource }
+      ): string => {
+        dispatch({
+          document,
+          label: options.label,
+          projectId: options.projectId,
+          reusePlaceholder: options.reusePlaceholder,
+          source: options.source,
+          type: 'addProjectWorkflow',
+        });
+        return document.id;
+      },
+      create: (projectId?: string): string => {
+        const document = createBlankWorkflowDocument();
+        dispatch({ document, label: 'New workflow', projectId, type: 'addProjectWorkflow' });
+        return document.id;
+      },
+      duplicate: (workflowId: string, copyName: string, projectId?: string): string | null => {
+        const project = getState().projects.find(
+          (candidate) => candidate.id === (projectId ?? getState().activeProjectId)
+        );
+        if (!project || !findProjectWorkflow(project, workflowId)) {
+          return null;
+        }
+        const copyId = createBlankWorkflowDocument().id;
+        dispatch({ copyId, copyName, projectId, type: 'duplicateProjectWorkflow', workflowId });
+        return copyId;
+      },
+      editGraph: command(
+        'applyWorkflowAction',
+        (action: ProjectGraphAction, target?: { projectId: string; workflowId: string }) => ({
+          action,
+          projectId: target?.projectId,
+          workflowId: target?.workflowId,
+        })
       ),
-      redo: command('redoProjectChange'),
-      undo: command('undoProjectChange'),
+      redo: command('redoWorkflowChange', (target?: { projectId?: string; workflowId?: string }) => ({
+        projectId: target?.projectId,
+        workflowId: target?.workflowId,
+      })),
+      remove: command('removeProjectWorkflow', (workflowId: string, projectId?: string) => ({ projectId, workflowId })),
+      rename: (workflowId: string, name: string, projectId?: string): ProjectCommandResult => {
+        if (!name.trim()) {
+          return { ok: false, reason: 'invalid-name' };
+        }
+        dispatch({
+          action: { patch: { name: name.trim() }, type: 'setMetadata' },
+          projectId,
+          type: 'applyWorkflowAction',
+          workflowId,
+        });
+        return { ok: true };
+      },
+      select: command('selectProjectWorkflow', (workflowId: string, projectId?: string) => ({ projectId, workflowId })),
+      /** Records where a workflow was explicitly published; a no-op once the project or workflow is gone. */
+      setSource: command(
+        'setProjectWorkflowSource',
+        (projectId: string, workflowId: string, source: ProjectWorkflowSource | undefined) => ({
+          projectId,
+          source,
+          workflowId,
+        })
+      ),
+      undo: command('undoWorkflowChange', (target?: { projectId?: string; workflowId?: string }) => ({
+        projectId: target?.projectId,
+        workflowId: target?.workflowId,
+      })),
     },
   };
 };
@@ -494,15 +558,8 @@ const createPersistenceAdapter = (dispatch: WorkbenchDispatch, getState: () => W
 
   return {
     /**
-     * A project created by persistence learns its board from the create response.
-     *
-     * Recording the id is the whole write. It does *not* also select the board: the create response
-     * arrives a round trip after the draft appears, and forcing a selection then would overwrite
-     * whatever the person picked in the meantime. Nothing is lost by leaving it —
-     * `getGallerySelectedBoardId` already falls back to the project's board when the saved
-     * selection does not resolve, which is exactly this case. It matches hydration, which passes
-     * `selectBoard: false` for the same reason, and makes this idempotent, which matters because
-     * an assignment can be applied from a save whose snapshot has already moved on.
+     * Record the server-assigned board without selecting it: the user may have changed selection during creation,
+     * and unresolved selections already fall back to the project board.
      */
     assignProjectBoard: ({ boardId, projectId }: { boardId: string; projectId: string }) => {
       dispatch({ boardId, projectId, type: 'setGalleryProjectBoardId' });
@@ -527,6 +584,7 @@ const createPersistenceAdapter = (dispatch: WorkbenchDispatch, getState: () => W
     },
     saveFailed: command('autosaveFailed', (error: string) => ({ error })),
     savePending: command('autosavePending', (error: string) => ({ error })),
+    saveScheduled: command('autosaveScheduled'),
     saveStarted: command('autosaveStarted'),
     saveSucceeded: command('autosaveSucceeded', (savedAt: string) => ({ savedAt })),
   };
@@ -606,6 +664,7 @@ const hasPersistedStateChanged = (previous: WorkbenchState, next: WorkbenchState
 const getDiagnosticProjectId = (state: WorkbenchState, projectId?: string): string | undefined =>
   projectId ?? getActiveProject(state)?.id;
 
+/** The store is the one diagnostic owner for reported errors, widget failures and autosave outcomes. */
 const recordDiagnosticForAction = (
   action: WorkbenchAction,
   previousState: WorkbenchState,
@@ -613,19 +672,22 @@ const recordDiagnosticForAction = (
 ): void => {
   switch (action.type) {
     case 'recordError': {
-      const projectId = getDiagnosticProjectId(nextState, action.projectId);
+      const { error, ...context } = action.context ?? {};
 
-      if (!projectId) {
-        return;
-      }
-
-      recordDiagnosticEntry({
-        context: action.context,
-        level: 'error',
-        message: action.message,
-        namespace: action.namespace ?? 'system',
-        source: { area: action.area ?? 'runtime', kind: 'workbench', projectId },
-      });
+      recordLogEvent(
+        'error',
+        {
+          area: action.area ?? 'runtime',
+          namespace: action.namespace ?? 'system',
+          projectId: getDiagnosticProjectId(nextState, action.projectId),
+        },
+        {
+          context: Object.keys(context).length > 0 ? context : undefined,
+          error,
+          message: action.message,
+          name: `${action.namespace ?? 'system'}.${action.area ?? 'runtime'}`,
+        }
+      );
       break;
     }
     case 'recordWidgetFailure': {
@@ -633,19 +695,15 @@ const recordDiagnosticForAction = (
         return;
       }
 
-      const projectId = getDiagnosticProjectId(nextState);
-
-      if (!projectId) {
-        return;
-      }
-
-      recordDiagnosticEntry({
-        context: { widgetId: action.failure.widgetId },
-        level: 'error',
-        message: action.failure.details,
-        namespace: 'system',
-        source: { area: 'widget-failure', kind: 'workbench', projectId },
-      });
+      recordLogEvent(
+        'error',
+        { area: 'widget-failure', namespace: 'system', projectId: getDiagnosticProjectId(nextState) },
+        {
+          context: { details: action.failure.details, widgetId: action.failure.widgetId },
+          message: action.failure.message,
+          name: 'widget.registration-failed',
+        }
+      );
       break;
     }
     case 'closeProject': {
@@ -653,18 +711,96 @@ const recordDiagnosticForAction = (
         return;
       }
 
-      const projectId = getDiagnosticProjectId(nextState, action.projectId);
-
-      if (!projectId) {
+      recordLogEvent(
+        'error',
+        {
+          area: 'project-lifecycle',
+          namespace: 'system',
+          projectId: getDiagnosticProjectId(nextState, action.projectId),
+        },
+        { message: 'At least one project must remain open.', name: 'project.close-refused' }
+      );
+      break;
+    }
+    case 'markQueueItemBackendSubmitted': {
+      recordLogEvent(
+        'info',
+        { area: 'submission', namespace: 'queue', projectId: action.projectId },
+        {
+          context: {
+            backendBatchId: action.backendBatchId,
+            backendItemIds: action.backendItemIds,
+            queueItemId: action.queueItemId,
+          },
+          message: 'Queue item accepted by the backend',
+          name: 'queue.submitted',
+        }
+      );
+      break;
+    }
+    case 'setQueueItemStatus': {
+      if (Object.is(previousState, nextState)) {
         return;
       }
 
-      recordDiagnosticEntry({
-        level: 'error',
-        message: 'At least one project must remain open.',
-        namespace: 'system',
-        source: { area: 'project-lifecycle', kind: 'workbench', projectId },
-      });
+      const level = action.status === 'failed' ? 'error' : 'debug';
+
+      recordLogEvent(
+        level,
+        { area: 'history', namespace: 'queue', projectId: action.projectId },
+        {
+          context: { queueItemId: action.queueItemId, reason: action.error, status: action.status },
+          message:
+            action.status === 'failed'
+              ? `Queue item failed${action.error ? `: ${action.error}` : ''}`
+              : `Queue item ${action.status}`,
+          name: action.status === 'failed' ? 'queue.item-failed' : 'queue.item-status',
+        }
+      );
+      break;
+    }
+    case 'hydrateWorkbench': {
+      recordLogEvent(
+        'info',
+        { area: 'hydration', namespace: 'persistence' },
+        {
+          context: { activeProjectId: nextState.activeProjectId, projectCount: nextState.projects.length },
+          message: 'Workbench hydrated',
+          name: 'persistence.hydrated',
+        }
+      );
+      break;
+    }
+    case 'autosaveStarted': {
+      recordLogEvent(
+        'debug',
+        { area: 'autosave', namespace: 'persistence', projectId: nextState.activeProjectId },
+        { message: 'Autosave started', name: 'persistence.autosave-started' }
+      );
+      break;
+    }
+    case 'autosaveSucceeded': {
+      recordLogEvent(
+        'debug',
+        { area: 'autosave', namespace: 'persistence', projectId: nextState.activeProjectId },
+        { context: { savedAt: action.savedAt }, message: 'Autosave succeeded', name: 'persistence.autosave-succeeded' }
+      );
+      break;
+    }
+    case 'autosavePending': {
+      recordLogEvent(
+        'warn',
+        { area: 'autosave', namespace: 'persistence', projectId: nextState.activeProjectId },
+        { context: { reason: action.error }, message: 'Autosave needs attention', name: 'persistence.autosave-pending' }
+      );
+      break;
+    }
+    case 'autosaveFailed': {
+      recordLogEvent(
+        'error',
+        { area: 'autosave', namespace: 'persistence', projectId: nextState.activeProjectId },
+        { context: { reason: action.error }, message: 'Autosave failed', name: 'persistence.autosave-failed' }
+      );
       break;
     }
   }

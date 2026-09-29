@@ -8,26 +8,30 @@ import { useInstalledSourceKeys } from '@features/models/ui/shared/useInstalledS
 import { sourceFileName, useSourceNameFilter } from '@features/models/ui/shared/useSourceNameFilter';
 import { useTranslation } from 'react-i18next';
 
+import { InstallOptions } from './InstallOptions';
+
 const urlOf = (url: string): string => url;
 
 export const HuggingFaceFiles = ({
+  fp8Storage,
   lookup,
   onClear,
   onInstall,
   onInstallAll,
+  onSetFp8Storage,
   pendingSources,
 }: {
+  fp8Storage: boolean;
   lookup: HFLookupState;
   onClear: () => void;
   onInstall: (url: string) => void;
   /** Bulk path: the parent queues silently and emits one summary toast. */
   onInstallAll: (urls: string[]) => void;
+  onSetFp8Storage: (fp8Storage: boolean) => void;
   pendingSources: ReadonlySet<string>;
 }) => {
   const { t } = useTranslation();
   const { filter, filteredItems: filteredUrls, setFilter } = useSourceNameFilter(lookup.urls, urlOf);
-  // A model's recorded install source is the URL it was pulled from, so this
-  // marks rows Installed live once the library refresh lands.
   const installedSourceKeys = useInstalledSourceKeys();
 
   const installAll = () => {
@@ -37,6 +41,7 @@ export const HuggingFaceFiles = ({
   return (
     <Stack gap="1.5">
       <ResultsListHeader
+        extra={<InstallOptions fp8Storage={fp8Storage} onSetFp8Storage={onSetFp8Storage} />}
         installAllDisabled={filteredUrls.length === 0}
         installAllLabel={t('models.installAllCount', { count: filteredUrls.length })}
         searchPlaceholder={t('models.filterFiles')}

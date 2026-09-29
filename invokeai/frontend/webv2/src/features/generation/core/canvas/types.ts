@@ -48,11 +48,7 @@ export type CanvasGenerationMode = 'txt2img' | 'img2img' | 'inpaint' | 'outpaint
 /** The generation modes the pure canvas graph compiler supports (full matrix). */
 export type CanvasCompileMode = CanvasGenerationMode;
 
-/**
- * Everything {@link import('./compileCanvasGraph').compileCanvasGraph} needs to
- * build a canvas generation graph. Pure data: the executor (Task 16) supplies
- * the already-uploaded `compositeImageName`; no pixels or engine state leak in.
- */
+/** Pure compiler inputs reference already-uploaded media. */
 export interface CompileCanvasGraphInput {
   /** Prompts / steps / model-adjacent settings, reused verbatim from Generate. */
   settings: GenerateSettings;
@@ -62,24 +58,18 @@ export interface CompileCanvasGraphInput {
   randDevice?: string;
   /** The resolved canvas mode (from `canvasMode.ts`). */
   mode: CanvasCompileMode;
-  /**
-   * The resolved result destination. `canvas` marks the output node intermediate
-   * (staging); `gallery` makes it a durable image, matching `compileGenerateGraph`.
-   */
+  /** Destination selects intermediate canvas output or durable gallery output. */
   destination: ResultDestination;
   /** The generation bounding box, in document space. Its size overrides settings dims. */
   bbox: Rect;
   /** The uploaded bbox composite (executor result). Required for image-referencing modes. */
   compositeImageName: string | null;
   /**
-   * The uploaded grayscale denoise-limit mask (white = keep, dark = inpaint).
-   * Required for `inpaint` / `outpaint`.
+   * Uploaded grayscale mask: white keeps, dark inpaints. Required for inpaint; outpaint can derive its mask from
+   * image alpha.
    */
   maskImageName?: string | null;
-  /**
-   * The uploaded grayscale noise mask, present only when at least one enabled
-   * mask layer defines a `noiseLevel`. Adds an `img_noise` node before encode.
-   */
+  /** An optional noise-level mask adds image noise before encoding. */
   noiseMaskImageName?: string | null;
   /** Denoising strength in (0, 1]. Consulted for `img2img` / `inpaint` / `outpaint`. */
   strength: number;
@@ -87,27 +77,13 @@ export interface CompileCanvasGraphInput {
   compositing: CanvasCompositingSettings;
   /** Processing-size policy; absent means the bbox snapped to the model grid. */
   scaling?: CanvasScalingSettings;
-  /**
-   * Valid, already-resolved control layers (each with its own uploaded composite
-   * image name). The executor filters + composites these; the compiler only
-   * grafts adapter nodes. Present in every mode (control works with all).
-   */
+  /** Prevalidated per-layer composites, each uploaded separately. */
   controlLayers?: readonly ControlLayerGraphInput[];
-  /**
-   * Valid, already-resolved regional-guidance regions (each with its own uploaded
-   * mask image name + resolved reference-image models). The executor filters +
-   * composites these; the compiler only grafts the mask-tensor + conditioning
-   * nodes into the base graph's `pos_cond_collect` / `neg_cond_collect`. Applied
-   * only for supported bases (sd-1 / sdxl / flux).
-   */
+  /** Resolved inputs for each supported region. */
   regionalGuidance?: readonly RegionalGuidanceInput[];
 }
 
-/**
- * Mirrors {@link import('../types').CompiledGenerateGraph} with the resolved
- * canvas mode attached so downstream (Task 18) can label / branch without
- * re-deriving it.
- */
+/** Carry the resolved mode so consumers do not recompute it. */
 export interface CompiledCanvasGraph {
   backendGraph: BackendGraphContract;
   graph: GraphContract;

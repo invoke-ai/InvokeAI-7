@@ -22,6 +22,21 @@ def _mock_flux_vae(element_size_bytes: int = 2) -> MagicMock:
 
 
 class TestFluxWorkingMemoryEstimate:
+    @pytest.fixture(autouse=True)
+    def _fused_non_rocm_build(self, monkeypatch):
+        """`estimate_vae_working_memory_flux` takes no device: it resolves one itself and prices the
+        mid-block score matrix for it. On a ROCm rig that resolves to `cuda`, where the head-dim
+        guard charges 4.25GiB for the 1024px case below -- which the expected value here clears by
+        1%, so these exact-value assertions turn build-dependent the moment either constant moves.
+        Pin the fused, non-HIP regime they are written for; `TestClassicVaeEstimators` in
+        `tests/backend/util/test_rocm_sdpa_head_dim_guard.py` owns the ROCm side of this estimator.
+        """
+        import invokeai.backend.util.attention as attention
+        import invokeai.backend.util.vae_working_memory as vwm
+
+        monkeypatch.setattr(attention, "_IS_ROCM", False)
+        monkeypatch.setattr(vwm.TorchDevice, "choose_torch_device", classmethod(lambda cls: torch.device("cpu")))
+
     def test_the_default_reproduces_the_untiled_estimate(self):
         """Regression guard for the six call sites that pass no tile_size at all."""
         latents = torch.zeros(1, 16, 128, 128)

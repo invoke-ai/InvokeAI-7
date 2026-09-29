@@ -3,17 +3,8 @@ import { FindInGalleryThumbnailButton } from '@features/gallery/mediaSlot';
 import { memo, useEffect, useRef } from 'react';
 
 /**
- * Small always-visible preview of one trim bound. Same seek technique as the
- * workflow editor's frame scrubber: one long-lived muted `<video>` element whose
- * `currentTime` is set to the middle of the frame's display interval
- * (`(frame + 0.5) / fps`), so rounding cannot show the neighbouring frame and
- * browsers display the frame natively without a canvas roundtrip. Remounting per
- * drag tick would spawn a range fetch per movement on multi-MB clips, hence the
- * long-lived element (`key={src}` only).
- *
- * Sized for the trim rows it lives in — a fixed compact tile with the slider to
- * its right — with the badge showing only the bound's name: the paired slider's
- * number input already shows the frame number.
+ * Seek to frame midpoints to avoid rounding into adjacent frames. Keep one video element per source to avoid a
+ * range fetch on every drag tick.
  */
 
 const PREVIEW_VIDEO_STYLE = {

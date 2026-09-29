@@ -6,20 +6,24 @@ import type {
 } from '@features/workflow/contracts';
 import type { ChangeEvent } from 'react';
 
-import { Flex, HStack, Stack, Text, Textarea } from '@chakra-ui/react';
+import { Box, Flex, HStack, Image, Stack, Text, Textarea } from '@chakra-ui/react';
 import { useInvocationTemplatesSelector } from '@features/workflow/react';
 import { workflowSelectionStore } from '@features/workflow/ui/editor/selectionStore';
 import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCommands';
-import { useWorkflowHostCommands, useWorkflowProjectSelector } from '@features/workflow/ui/WorkflowUiContext';
-import { JsonPreview, Scrollable, Tabs } from '@platform/ui';
+import {
+  useWorkflowHostCommands,
+  useWorkflowNodeExecutionState,
+  useWorkflowProjectSelector,
+} from '@features/workflow/ui/WorkflowUiContext';
+import {
+  formatOutputFieldValue,
+  getNodeUpdateStatus,
+  getWorkflowBatchGroupId,
+  isWorkflowBatchNodeType,
+} from '@features/workflow/utility';
+import { Button, JsonPreview, Scrollable, Tabs } from '@platform/ui';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-
-/**
- * Edit-mode inspector for the editor's selected node, with the legacy tab
- * set: Details (summary + notes), Outputs, Data (raw node data), Template
- * (the node's backend definition). Sizing is owned by the panel's Splitter.
- */
 
 type InspectorTab = 'details' | 'outputs' | 'data' | 'template';
 
@@ -41,6 +45,59 @@ const DetailRow = ({ label, value }: { label: string; value: string }) => (
 
 const JsonBlock = ({ label, value }: { label: string; value: unknown }) => <JsonPreview label={label} value={value} />;
 
+/** " (Group 1)" or " (no group)" after a batch node's title; empty for every other node. */
+const getBatchGroupSuffix = (node: WorkflowInvocationNode, t: ReturnType<typeof useTranslation>['t']): string => {
+  if (!isWorkflowBatchNodeType(node.data.type)) {
+    return '';
+  }
+
+  const groupId = getWorkflowBatchGroupId(node);
+
+  return ` (${groupId === 'None' ? t('nodes.noBatchGroup') : groupId})`;
+};
+
+/** The version row's action: update in place when the template allows it, otherwise say why not. */
+const NodeUpdateRow = ({ node, template }: { node: WorkflowInvocationNode; template: InvocationTemplate }) => {
+  const { t } = useTranslation();
+  const { editGraph } = useProjectGraphCommands();
+  const status = getNodeUpdateStatus(node, template);
+  // The button leaves once the node is current; keyboard focus steps to the inspector's active tab first.
+  const onUpdate = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.currentTarget
+        .closest('[data-node-inspector]')
+        ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+        ?.focus();
+      editGraph({ nodeIds: [node.id], templates: { [template.type]: template }, type: 'updateNodes' });
+    },
+    [editGraph, node.id, template]
+  );
+
+  if (status === 'current') {
+    return null;
+  }
+
+  const versions = { from: node.data.version, to: template.version };
+
+  return (
+    <HStack align="start" gap="2">
+      {/* Aligned with the detail values: an empty label cell the width of the label column. */}
+      <Box flexShrink={0} minW="16" />
+      {status === 'updatable' ? (
+        <Button size="2xs" variant="outline" onClick={onUpdate}>
+          {t('nodes.updateNodeTo', { version: template.version })}
+        </Button>
+      ) : (
+        <Text color="fg.warning" fontSize="2xs">
+          {status === 'newer'
+            ? t('nodes.nodeNewerThanBackend', versions)
+            : t('nodes.nodeVersionIncompatible', versions)}
+        </Text>
+      )}
+    </HStack>
+  );
+};
+
 const DetailsTab = ({ node, template }: { node: WorkflowInvocationNode; template: InvocationTemplate | undefined }) => {
   const { t } = useTranslation();
   const { editGraph } = useProjectGraphCommands();
@@ -52,9 +109,13 @@ const DetailsTab = ({ node, template }: { node: WorkflowInvocationNode; template
 
   return (
     <Stack gap="2">
-      <DetailRow label={t('widgets.workflow.title')} value={node.data.label || template?.title || node.data.type} />
+      <DetailRow
+        label={t('widgets.workflow.title')}
+        value={`${node.data.label || template?.title || node.data.type}${getBatchGroupSuffix(node, t)}`}
+      />
       <DetailRow label={t('widgets.workflow.type')} value={node.data.type} />
       <DetailRow label={t('widgets.workflow.version')} value={node.data.version} />
+      {template ? <NodeUpdateRow node={node} template={template} /> : null}
       {template ? <DetailRow label={t('widgets.workflow.class')} value={template.classification} /> : null}
       {template ? <DetailRow label={t('widgets.workflow.pack')} value={template.nodePack} /> : null}
       {template?.description ? <DetailRow label={t('widgets.workflow.about')} value={template.description} /> : null}
@@ -77,23 +138,68 @@ const DetailsTab = ({ node, template }: { node: WorkflowInvocationNode; template
   );
 };
 
-const OutputsTab = ({ template }: { template: InvocationTemplate | undefined }) => {
+const OutputsTab = ({ nodeId, template }: { nodeId: string; template: InvocationTemplate | undefined }) => {
   const { t } = useTranslation();
+  const execution = useWorkflowNodeExecutionState(nodeId);
+  const outputs = template ? Object.values(template.outputs) : [];
+
+  if (!execution) {
+    return (
+      <Stack gap="2">
+        <Text color="fg.subtle" fontSize="2xs">
+          {t('widgets.workflow.noRunRecorded')}
+        </Text>
+        {outputs.length > 0 ? (
+          <Stack gap="1">
+            <Text color="fg.subtle" fontSize="2xs">
+              {t('widgets.workflow.declaredOutputs')}
+            </Text>
+            {outputs.map((output) => (
+              <DetailRow key={output.name} label={output.title} value={output.type.name} />
+            ))}
+          </Stack>
+        ) : null}
+      </Stack>
+    );
+  }
+
+  // The store keeps the previous run's result while a node runs or fails;
+  // showing it under a "Running…" or "Failed" line would pass it off as this run's.
+  const hasResult =
+    execution.status === 'completed' && execution.latestOutput !== null && execution.latestOutput !== undefined;
 
   return (
     <Stack gap="2">
-      <Text color="fg.subtle" fontSize="2xs">
-        {t('widgets.workflow.runOutputsNotRecorded')}
-      </Text>
-      {template ? (
-        <Stack gap="1">
-          <Text color="fg.subtle" fontSize="2xs">
-            {t('widgets.workflow.declaredOutputs')}
-          </Text>
-          {Object.values(template.outputs).map((output) => (
-            <DetailRow key={output.name} label={output.title} value={output.type.name} />
+      <DetailRow
+        label={t('widgets.workflow.status')}
+        value={
+          execution.status === 'failed' && execution.error
+            ? `${t('widgets.workflow.runStatus.failed')} — ${execution.error}`
+            : t(`widgets.workflow.runStatus.${execution.status}`)
+        }
+      />
+      {execution.status === 'completed' && execution.outputImageUrl ? (
+        <Image
+          alt={t('widgets.workflow.outputImage')}
+          bg="bg.muted"
+          h="10rem"
+          objectFit="contain"
+          rounded="sm"
+          src={execution.outputImageUrl}
+          w="full"
+        />
+      ) : null}
+      {hasResult ? (
+        <>
+          {outputs.map((output) => (
+            <DetailRow
+              key={output.name}
+              label={output.title}
+              value={formatOutputFieldValue(execution.latestOutput, output.name)?.full ?? '—'}
+            />
           ))}
-        </Stack>
+          <JsonBlock label={t('widgets.workflow.latestOutput')} value={execution.latestOutput} />
+        </>
       ) : null}
     </Stack>
   );
@@ -124,7 +230,7 @@ const InspectorBody = ({ node, tab }: { node: WorkflowNode; tab: InspectorTab })
     case 'details':
       return <DetailsTab node={node} template={template} />;
     case 'outputs':
-      return <OutputsTab template={template} />;
+      return <OutputsTab nodeId={node.id} template={template} />;
     case 'data':
       return <JsonBlock label={t('widgets.workflow.nodeData')} value={node.data} />;
     case 'template':
@@ -151,7 +257,7 @@ export const NodeInspector = ({ projectGraph }: { projectGraph: ProjectGraphStat
   );
 
   return (
-    <Flex direction="column" h="full" minH="0">
+    <Flex data-node-inspector="" direction="column" h="full" minH="0">
       <HStack flexShrink={0} justify="space-between" px="2" h={10} borderBottomWidth={1}>
         <Text color="fg.muted" fontSize="2xs" fontWeight="600" textTransform="uppercase">
           {t('widgets.workflow.nodeInspector')}

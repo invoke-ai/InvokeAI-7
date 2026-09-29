@@ -2,18 +2,25 @@
 
 MIOpen (ROCm's cuDNN equivalent) has no implicit-GEMM 3D-convolution kernels for
 the shapes used by the Wan VAE on RDNA3 — it falls back to ``Im3d2Col``, which
-materializes every 3x3x3 patch into a matrix before a GEMM. Profiling a Wan 2.1
-VAE decode on a W7900 showed Im3d2Col consuming 61% of GPU time, and neither
-dtype changes nor ``cudnn.benchmark`` kernel search helped (all configs within
-±7%). MIOpen's *2D* convolutions are well optimized, and a stride-1 kT x kH x kW
-conv3d is exactly the sum of kT conv2d taps over shifted temporal slices, so this
-module rebinds ``WanCausalConv3d.forward`` to that decomposition.
+materializes every 3x3x3 patch into a matrix before a GEMM. MIOpen's *2D*
+convolutions are well optimized, and a stride-1 kT x kH x kW conv3d is exactly
+the sum of kT conv2d taps over shifted temporal slices, so this module rebinds
+``WanCausalConv3d.forward`` to that decomposition.
 
-Measured on a W7900 (832x480, 3 latent frames, bf16): 81.6s -> 1.71s (~48x),
-matching NVIDIA wall-clock for the same decode. Numerics: identical math up to
-floating-point summation order — max abs error vs ``F.conv3d`` is ~1e-6 in fp32;
-a full bf16 VAE decode differs by at most ~3/255 in pixel space with 0.1% of
-pixels off by more than 1/255 (bf16 accumulation noise, visually imperceptible).
+The fallback is a size cliff, not a slope: a conv that emits a single output
+frame (an image encode or decode) degenerates to a 2D conv and is fast natively,
+and so are small canvases, but every multi-frame chunk at video size still takes
+Im3d2Col on current MIOpen. Measured on a W7900 with torch 2.13.0+rocm7.2
+(A14B VAE, bf16, 832x480), native vs decomposed: encode 17 frames 103 s vs 2.4 s,
+decode 5 latent frames 162 s vs 3.6 s, peak VRAM 1-3 GiB lower decomposed. So
+the decomposition applies on every HIP version; a single-frame or small-shape
+timing cannot justify a gate (one shipped that way once and regressed every
+I2V encode and video decode). ``tests/backend/wan/test_rocm_causal_conv3d.py``
+has a ``slow`` ROCm test that fails when native conv3d stops taking the fallback.
+
+Numerics: identical math up to floating-point summation order — max abs error vs
+``F.conv3d`` is ~1e-6 in fp32; a full bf16 VAE decode differs from native by at
+most ~3/255 in pixel space (bf16 accumulation noise, visually imperceptible).
 
 The patch is class-level and idempotent, applied only when torch is a ROCm/HIP
 build. It covers every ``AutoencoderKLWan`` consumer (Wan decode/encode nodes,
@@ -36,16 +43,24 @@ def _decomposed_conv3d(module: torch.nn.Conv3d, x: torch.Tensor) -> torch.Tensor
     b, c, t, h, w = x.shape
     k_t = module.weight.shape[2]
     t_out = t - k_t + 1
+    # Every tensor handed to MIOpen, and the activation handed back, is made standard-contiguous.
+    # The natural expressions are legal strided views (a tap input whose channel stride exceeds
+    # its batch stride at B=1, a temporal slice of the weight, a transposed result), and MIOpen in
+    # torch 2.13.0+rocm7.2 faults on them: an A14B encode of 161 frames at 720x1024 aborts with a
+    # GPU memory-access fault (or segfaults the process) every time with the views, never with the
+    # copies. The fault is asynchronous -- HIP_LAUNCH_BLOCKING=1 hides it -- and needs a long clip,
+    # so short repros pass. The copies cost a small fraction of the conv itself.
     out = None
     for k in range(k_t):
-        xs = x[:, :, k : k + t_out].transpose(1, 2).reshape(b * t_out, c, h, w)
-        o = F.conv2d(xs, module.weight[:, :, k], None)
-        out = o if out is None else out + o
+        xs = x[:, :, k : k + t_out].transpose(1, 2).reshape(b * t_out, c, h, w).contiguous()
+        o = F.conv2d(xs, module.weight[:, :, k].contiguous(), None)
+        del xs  # keep at most one tap input live alongside the accumulator
+        out = o if out is None else out.add_(o)
     assert out is not None
     if module.bias is not None:
         out = out + module.bias.view(1, -1, 1, 1)
     oh, ow = out.shape[-2:]
-    return out.reshape(b, t_out, -1, oh, ow).transpose(1, 2)
+    return out.reshape(b, t_out, -1, oh, ow).transpose(1, 2).contiguous()
 
 
 def _decomposed_forward(self, x: torch.Tensor, cache_x: torch.Tensor | None = None) -> torch.Tensor:
@@ -66,7 +81,7 @@ def _decomposed_forward(self, x: torch.Tensor, cache_x: torch.Tensor | None = No
     return _decomposed_conv3d(self, x)
 
 
-# Diagnostic switch for the torch-2.13/rocm7.2 corruption investigation. Values:
+# Diagnostic override for A/B checks against native MIOpen conv3d. Values:
 #   decomposed (default) — the normal patched path.
 #   native               — leave the stock conv3d forward in place (patch becomes a no-op).
 #   verify               — run BOTH the stock forward and the decomposition for every call,
@@ -118,43 +133,22 @@ def _patch_wan_causal_conv3d() -> None:
     setattr(WanCausalConv3d, _SENTINEL, True)
 
 
-def hip_version_at_least(major: int, minor: int) -> bool:
-    """True when this is a ROCm/HIP torch build at least as new as ``major.minor``.
-
-    Parse failures return False (keep the proven old-stack behavior).
-    """
-    hip = torch.version.hip
-    if hip is None:
-        return False
-    try:
-        parts = hip.split(".")
-        return (int(parts[0]), int(parts[1])) >= (major, minor)
-    except (ValueError, IndexError):
-        return False
-
-
 def patch_wan_causal_conv3d_for_rocm() -> None:
-    """Apply the conv2d decomposition on ROCm builds older than HIP 7.2; no-op elsewhere.
+    """Apply the conv2d decomposition on ROCm builds; no-op elsewhere.
 
     Call from any loader that constructs an ``AutoencoderKLWan``. cuDNN has real
-    implicit-GEMM conv3d kernels, so CUDA builds keep the stock path.
-
-    HIP >= 7.2 also keeps the stock path: its MIOpen runs these conv3ds at full speed
-    (making the decomposition unnecessary), and with the decomposition active it produces
-    allocator-state-dependent row corruption in decoded images — horizontal line/tearing
-    artifacts, observed on non-square Anima/Wan decodes on a W7900 with torch
-    2.13.0+rocm7.2. The corruption is a heisenbug: every isolated repro of the
-    decomposition's kernels is numerically clean, and instrumenting the live decode to
-    compare both implementations per call (INVOKEAI_ROCM_CONV3D=verify) finds no
-    divergence AND yields a clean image — the signature of a kernel reading memory whose
-    content depends on allocation history. Native conv3d is deterministic-clean and fast
-    there, so it wins outright. See _MODE above for the diagnostic overrides
-    (INVOKEAI_ROCM_CONV3D=native|verify; verify still patches on any HIP version).
+    implicit-GEMM conv3d kernels, so CUDA builds keep the stock path. There is
+    deliberately no HIP-version gate (see the module docstring). The row tearing once
+    blamed on this decomposition on HIP 7.2 has two known causes, both since fixed: the
+    ROCm fused-SDPA head-dim defect (``install_rocm_sdpa_head_dim_guard`` in
+    ``invokeai.backend.util.attention``; the Wan VAE mid-block attention is wider than its
+    threshold) and MIOpen faulting on the strided views the decomposition used to hand it
+    (see ``_decomposed_conv3d``). With both in place the decomposition matches native
+    conv3d at non-square sizes under allocator churn. ``INVOKEAI_ROCM_CONV3D=native|verify``
+    (``_MODE`` above) remain for A/B checks.
     """
     if torch.version.hip is None:
         return
     if _MODE == "native":
-        return
-    if _MODE != "verify" and hip_version_at_least(7, 2):
         return
     _patch_wan_causal_conv3d()

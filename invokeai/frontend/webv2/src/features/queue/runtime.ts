@@ -5,7 +5,8 @@ import type {
   QueueEnqueueWorkflowRequest,
   QueueResultImage,
   QueueResultImageOptions,
-  QueueWorkflowRunSink,
+  QueueResultVideo,
+  QueueRunOrigin,
 } from '@features/queue/core/types';
 import type { BackendConnectionStatus } from '@platform/transport/types';
 
@@ -14,7 +15,9 @@ import {
   isQueuePromptSeedBehaviour,
   isQueueSeedStep,
   isQueueWorkflowSeed,
+  isQueueWorkflowBatchDatum,
   MAX_QUEUE_BATCH_ITEMS,
+  type QueueWorkflowSeed,
 } from '@features/queue/core/promptBatch';
 import { shouldSubmitPendingQueueItem } from '@features/queue/core/submissionRules';
 import { progressImageStore } from '@features/queue/data/progressImageStore';
@@ -89,8 +92,14 @@ export interface QueueHistoryCommands {
     images: QueueResultImage[];
     projectId: string;
     queueItemId: string;
+    videos: QueueResultVideo[];
   }): void;
-  routeResults(payload: { images: QueueResultImage[]; projectId: string; queueItemId: string }): void;
+  routeResults(payload: {
+    images: QueueResultImage[];
+    projectId: string;
+    queueItemId: string;
+    videos: QueueResultVideo[];
+  }): void;
   setConnectionStatus(payload: { error?: string; status: BackendConnectionStatus }): void;
   setStatus(payload: {
     error?: string;
@@ -113,21 +122,43 @@ export const getQueueItemResultImageOptions = (queueItem: QueueItem): QueueResul
   return queueItem.snapshot.resultNodeIds ? { resultNodeIds: queueItem.snapshot.resultNodeIds } : undefined;
 };
 
-/**
- * The compiled backend graph this item submitted, or undefined for legacy/invalid
- * snapshots. Used to recognize input passthroughs among collected results — see
- * `collectGraphInputMediaNames`.
- */
+/** Where a run's node progress belongs; records queued before projects owned several workflows have none. */
+const getQueueRunOrigin = (projectId: string, queueItem: QueueItem): QueueRunOrigin | undefined => {
+  const submission = (queueItem.snapshot as Partial<QueueItem['snapshot']>).backendSubmission;
+
+  return submission?.kind === 'workflow' && typeof submission.projectWorkflowId === 'string'
+    ? { projectId, workflowId: submission.projectWorkflowId }
+    : undefined;
+};
+
+/** Read compiled graphs to identify input passthroughs; legacy or invalid snapshots may lack them. */
 const getQueueItemCompiledGraph = (queueItem: QueueItem): unknown => {
   const submission = (queueItem.snapshot as Partial<QueueItem['snapshot']>).backendSubmission;
   return submission && typeof submission === 'object' && 'graph' in submission ? submission.graph : undefined;
 };
 
-/**
- * Items queued before seed modes recorded the random toggle instead of a step;
- * the mapped step plus `legacySeedPlan` lets the send path expand them with that
- * version's rules, so recovery replays the seeds exactly as they were planned.
- */
+const queueItemHasWorkflowCall = (queueItem: QueueItem): boolean => {
+  const submission = (queueItem.snapshot as Partial<QueueItem['snapshot']>).backendSubmission;
+  if (!submission || typeof submission !== 'object' || !('kind' in submission) || submission.kind !== 'workflow') {
+    return false;
+  }
+
+  const graph = getQueueItemCompiledGraph(queueItem);
+  if (!graph || typeof graph !== 'object' || Array.isArray(graph) || !('nodes' in graph)) {
+    return false;
+  }
+
+  const nodes = graph.nodes;
+  if (!nodes || typeof nodes !== 'object' || Array.isArray(nodes)) {
+    return false;
+  }
+
+  return Object.values(nodes).some(
+    (node) => node !== null && typeof node === 'object' && 'type' in node && node.type === 'call_saved_workflow'
+  );
+};
+
+/** Recover legacy random-toggle submissions with their original seed expansion rules. */
 const readSubmissionSeedStep = (submission: { seedStep?: unknown; shouldRandomizeSeed?: unknown }) =>
   isQueueSeedStep(submission.seedStep)
     ? submission.seedStep
@@ -154,6 +185,46 @@ const areQueueWorkflowSeedsValid = (seeds: unknown, graph: { nodes?: Record<stri
 
     return targets.has(target) ? false : (targets.add(target), true);
   });
+};
+
+/**
+ * Every group zips datums of one length onto fields of nodes the graph still has, no field is fed twice (by
+ * another group or by a seed), and the product stays within what the queue accepts.
+ */
+const areQueueWorkflowBatchGroupsValid = (
+  batchData: unknown,
+  graph: { nodes?: Record<string, unknown> },
+  seeds: readonly QueueWorkflowSeed[] | undefined,
+  batchCount: number
+): boolean => {
+  if (!Array.isArray(batchData) || batchData.length === 0) {
+    return false;
+  }
+
+  const targets = new Set((seeds ?? []).map((seed) => `${seed.nodeId}:${seed.fieldName}`));
+  let sessions = 1;
+
+  for (const group of batchData) {
+    if (!Array.isArray(group) || group.length === 0 || !group.every(isQueueWorkflowBatchDatum)) {
+      return false;
+    }
+
+    const length = group[0].items.length;
+
+    for (const datum of group) {
+      const target = `${datum.nodeId}:${datum.fieldName}`;
+
+      if (datum.items.length !== length || !graph.nodes || !(datum.nodeId in graph.nodes) || targets.has(target)) {
+        return false;
+      }
+
+      targets.add(target);
+    }
+
+    sessions *= length;
+  }
+
+  return sessions * batchCount <= MAX_QUEUE_BATCH_ITEMS;
 };
 
 export const createQueueItemBackendSubmission = (
@@ -231,9 +302,23 @@ export const createQueueItemBackendSubmission = (
     return { error: 'Queue item has malformed workflow seed metadata.', kind: 'invalid' };
   }
 
-  // `libraryWorkflowId` is provenance for the completed-run sink, not something
-  // the backend enqueue accepts; it stays on the snapshot and off the request.
-  const { kind: _, libraryWorkflowId: _libraryWorkflowId, ...compiled } = submission;
+  if (
+    submission.batchData !== undefined &&
+    !areQueueWorkflowBatchGroupsValid(submission.batchData, submission.graph, submission.seeds, submission.batchCount)
+  ) {
+    return { error: 'Queue item has malformed workflow batch metadata.', kind: 'invalid' };
+  }
+
+  // Workflow provenance stays on the snapshot: the backend enqueue accepts neither the originating project
+  // workflow nor the library binding older records still carry.
+  const {
+    kind: _,
+    projectWorkflowId: _projectWorkflowId,
+    ...compiled
+  } = submission as typeof submission & {
+    libraryWorkflowId?: string;
+  };
+  delete (compiled as { libraryWorkflowId?: string }).libraryWorkflowId;
   return {
     kind: 'workflow',
     request: {
@@ -295,7 +380,6 @@ export const createQueueRuntime = ({
   locks,
   modelLoads,
   nodeExecution,
-  workflowRuns,
 }: {
   backend: QueueBackendPort;
   destinations: QueueResultDestinationPort;
@@ -306,7 +390,6 @@ export const createQueueRuntime = ({
   locks?: QueueRunLockPort;
   modelLoads: QueueModelLoadPort;
   nodeExecution: QueueNodeExecutionPort;
-  workflowRuns?: QueueWorkflowRunSink;
 }): QueueRuntime => {
   const owner = captureAccountScope();
   const commands = history.commands;
@@ -762,6 +845,10 @@ export const createQueueRuntime = ({
     });
     resultReadFlush = flush.finally(() => {
       resultReadFlush = undefined;
+      // A read queued after the loop drained but before this settled found the flush still set and did not start one.
+      if (pendingResultReads.length > 0) {
+        scheduleResultReadFlush();
+      }
     });
   };
   const runResultRead = <T>(operation: () => Promise<T>): Promise<T> =>
@@ -793,61 +880,26 @@ export const createQueueRuntime = ({
   };
 
   /**
-   * Land result videos on the destination board, like images. Videos are born
-   * unassigned server-side (the compiled graph carries no board unless a node
-   * sets one explicitly), so without this step every generated video sits in
-   * Uncategorized regardless of the active board. Only names are fetched — the
-   * gallery hydrates the video itself on its own refresh. Re-attaching a video
-   * that another settlement path already routed is a no-op server-side.
-   *
-   * Board attachment is cosmetic categorization: the run itself succeeded, so a
-   * failure here (transient fetch error, board deleted mid-run) is recorded as a
-   * queue-results error and NEVER thrown — throwing from the run-settlement path
-   * would mark a completed generation "failed" and skip recording its images.
+   * Attach generated videos to the destination board (repeat attachment is idempotent) and hydrate them for display.
+   * Failures are recorded but never turn successful generation into failure.
    */
-  const addResultVideosToDestination = async (
+  const deliverResultVideos = async (
     projectId: string,
     queueItem: QueueItem,
     backendItemIds: number[]
-  ): Promise<void> => {
-    // Skip ids whose backend items were cancelled — their partial videos are not
-    // deliverable results (mirrors waitForResults filtering images to completed
-    // outcomes). The persisted set can miss a cancellation from the current
-    // session on the resumed path; the residual is a best-effort attach of an
-    // already-rendered video, not a correctness problem.
+  ): Promise<QueueResultVideo[]> => {
+    // Skip known cancelled backend items. Resumed cancellation records can be incomplete, so remaining attachments
+    // are best-effort.
     const deliverableItemIds = backendItemIds.filter(
       (backendItemId) => !queueItem.cancelledBackendItemIds?.includes(backendItemId)
     );
 
     if (!isActive() || queueItem.snapshot.destination !== 'gallery' || deliverableItemIds.length === 0) {
-      return;
+      return [];
     }
 
     const boardId = queueItem.snapshot.galleryBoardId;
-
-    if (!boardId || boardId === 'none') {
-      return;
-    }
-
-    try {
-      const imageOptions = getQueueItemResultImageOptions(queueItem);
-      const options = queueItem.snapshot.filterIntermediateResults
-        ? { ...imageOptions, excludeIntermediate: true }
-        : imageOptions;
-      const namesPerItem = await mapWithConcurrency(deliverableItemIds, QUEUE_RUNTIME_CONCURRENCY, (backendItemId) =>
-        runResultRead(() => backend.getResultVideoNames(backendItemId, options))
-      );
-      // A video primitive echoes the run's INPUT video into session.results (e.g. the
-      // source clip of an extend-video workflow) — exclude it like input images.
-      const inputMedia = collectGraphInputMediaNames(getQueueItemCompiledGraph(queueItem));
-      const videoNames = [...new Set(namesPerItem.flat())].filter((name) => !inputMedia.videoNames.has(name));
-
-      if (videoNames.length === 0 || !isActive()) {
-        return;
-      }
-
-      await destinations.addVideosToGalleryBoard(boardId, videoNames);
-    } catch (error) {
+    const recordError = (error: unknown): void => {
       if (isActive()) {
         commands.recordError({
           area: 'queue-results',
@@ -856,15 +908,56 @@ export const createQueueRuntime = ({
           projectId,
         });
       }
+    };
+    let namesPerItem: string[][];
+
+    try {
+      const imageOptions = getQueueItemResultImageOptions(queueItem);
+      const options = queueItem.snapshot.filterIntermediateResults
+        ? { ...imageOptions, excludeIntermediate: true }
+        : imageOptions;
+      namesPerItem = await mapWithConcurrency(deliverableItemIds, QUEUE_RUNTIME_CONCURRENCY, (backendItemId) =>
+        runResultRead(() => backend.getResultVideoNames(backendItemId, options))
+      );
+    } catch (error) {
+      recordError(error);
+      return [];
+    }
+
+    // Exclude video primitives' echoed input clips from generated results.
+    const inputMedia = collectGraphInputMediaNames(getQueueItemCompiledGraph(queueItem));
+    const videoNames = [...new Set(namesPerItem.flat())].filter((name) => !inputMedia.videoNames.has(name));
+
+    if (videoNames.length === 0 || !isActive()) {
+      return [];
+    }
+
+    if (boardId && boardId !== 'none') {
+      try {
+        await destinations.addVideosToGalleryBoard(boardId, videoNames);
+      } catch (error) {
+        // A board-attach failure must not keep a finished video out of view.
+        recordError(error);
+      }
+    }
+
+    if (!isActive()) {
+      return [];
+    }
+
+    try {
+      return await runResultRead(() =>
+        backend.getResultVideos(videoNames, queueItem.id, queueItem.snapshot.submittedAt)
+      );
+    } catch (error) {
+      recordError(error);
+      return [];
     }
   };
 
   /**
-   * Drop input passthroughs and (when the item asks) intermediates, then land what
-   * remains on the item's destination. Session results include every node's output,
-   * so a media primitive echoes the run's INPUT image under its original name — e.g.
-   * the first-frame keyframe of an image-to-video workflow — and routing it would
-   * board-attach the user's source image on every run.
+   * Remove input passthroughs and requested intermediates before routing; echoed source media must not move boards
+   * on every run.
    */
   const deliverVisibleImages = async (
     queueItem: QueueItem,
@@ -881,48 +974,12 @@ export const createQueueRuntime = ({
     return images;
   };
 
-  /**
-   * Reports a settled run back to whoever owns the workflow library, so it can
-   * capture the output as the record's thumbnail and stamp its last-run time.
-   * Only runs compiled from a library-BOUND workflow carry an id, so an ad-hoc
-   * workflow (or any generate run) is never reported.
-   *
-   * Deliberately synchronous, unawaited, and swallowing: last-run capture is
-   * decoration hung off a completed run, and a sink that throws must not turn
-   * that run into a failure or skip its gallery refresh.
-   */
-  const notifyWorkflowRunCompleted = (projectId: string, queueItem: QueueItem, images: QueueResultImage[]): void => {
-    const submission = (queueItem.snapshot as Partial<QueueItem['snapshot']>).backendSubmission;
-
-    if (
-      !workflowRuns ||
-      submission?.kind !== 'workflow' ||
-      typeof submission.libraryWorkflowId !== 'string' ||
-      images.length === 0
-    ) {
-      return;
-    }
-
-    try {
-      workflowRuns.onWorkflowRunCompleted({
-        imageNames: images.map((image) => image.imageName),
-        libraryWorkflowId: submission.libraryWorkflowId,
-        projectId,
-        queueItemId: queueItem.id,
-      });
-    } catch {
-      // The sink owns its own error reporting; the run is already complete.
-    }
-  };
-
   const routeRunResults = async (
     coordinator: QueueCoordinator,
     projectId: string,
     queueItem: QueueItem,
-    // The store is immutable and `queueItem` is a pre-submission closure, so callers must
-    // pass the run's backend item ids explicitly (enqueue result / reconcile outcome /
-    // persisted ids) — reading queueItem.backendItemIds here would always see undefined
-    // on the fresh-submit and adopted paths.
+    // Pass actual backend IDs explicitly; the immutable pre-submit queueItem closure cannot contain newly assigned
+    // IDs.
     backendItemIds: number[],
     attempt: RunAttempt
   ): Promise<void> => {
@@ -946,17 +1003,14 @@ export const createQueueRuntime = ({
       }
 
       const images = await deliverVisibleImages(queueItem, allImages);
-      // The live path also routes videos per backend item as each completes
-      // (routeBackendItemResults); this run-end pass is the retry/backstop and the only
-      // coverage for items completed in a previous session. Never throws.
-      await addResultVideosToDestination(projectId, queueItem, backendItemIds);
+      // The run-end video pass retries live routing and covers earlier-session completions; it must never throw.
+      const videos = await deliverResultVideos(projectId, queueItem, backendItemIds);
 
       if (!isAttemptCurrent(attempt)) {
         return;
       }
 
-      commands.routeResults({ images, projectId, queueItemId: queueItem.id });
-      notifyWorkflowRunCompleted(projectId, queueItem, images);
+      commands.routeResults({ images, projectId, queueItemId: queueItem.id, videos });
       if (queueItem.snapshot.destination === 'gallery') {
         commands.refreshBackendData();
       }
@@ -1009,7 +1063,7 @@ export const createQueueRuntime = ({
 
       const visibleImages = await deliverVisibleImages(queueItem, images);
       // Never throws — a board-attach hiccup must not block routePartialResults below.
-      await addResultVideosToDestination(projectId, queueItem, [backendItemId]);
+      const videos = await deliverResultVideos(projectId, queueItem, [backendItemId]);
 
       if (!isAttemptCurrent(attempt)) {
         return;
@@ -1026,6 +1080,7 @@ export const createQueueRuntime = ({
         images: visibleImages,
         projectId,
         queueItemId: queueItem.id,
+        videos,
       });
       if (queueItem.snapshot.destination === 'gallery') {
         commands.refreshBackendData();
@@ -1227,7 +1282,11 @@ export const createQueueRuntime = ({
     const request =
       submission.kind === 'generate'
         ? coordinator.submitGenerate(currentQueueItem.id, submission.request)
-        : coordinator.submitWorkflow(currentQueueItem.id, submission.request);
+        : coordinator.submitWorkflow(
+            currentQueueItem.id,
+            submission.request,
+            getQueueRunOrigin(project.id, currentQueueItem)
+          );
     submissionOperations.set(runKey, request);
 
     await request
@@ -1543,7 +1602,9 @@ export const createQueueRuntime = ({
         const inputs: ReconcileInput[] = ownedItems.map(({ project, queueItem }) => ({
           backendBatchId: queueItem.backendBatchId,
           backendItemIds: queueItem.backendItemIds,
+          hasWorkflowCall: queueItemHasWorkflowCall(queueItem),
           id: queueItem.id,
+          origin: getQueueRunOrigin(project.id, queueItem),
           projectId: project.id,
           status: queueItem.status === 'running' ? 'running' : 'pending',
         }));
@@ -1871,7 +1932,10 @@ export const createQueueRuntime = ({
     coordinator.dispose();
     pendingResultRoutes.clear();
     await resultRoutingFlush?.catch(() => undefined);
-    await resultReadFlush?.catch(() => undefined);
+    // A settling flush may start another for reads queued while it drained.
+    for (let flush = resultReadFlush; flush; flush = resultReadFlush) {
+      await flush.catch(() => undefined);
+    }
     await Promise.all(
       [...cancellationOperations.values(), ...submissionOperations.values(), ...lockRequests.values()].map(
         (operation) => operation.catch(() => undefined)

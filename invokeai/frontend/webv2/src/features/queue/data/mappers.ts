@@ -6,6 +6,8 @@ import type {
   QueueStatusReadModel,
 } from '@features/queue/core/types';
 
+import { getOutputImageNames } from '@platform/core/outputImages';
+
 import type {
   QueueAndProcessorStatusDTO,
   QueueItemIdsResultDTO,
@@ -20,33 +22,7 @@ const mapNodeFieldValue = (dto: QueueNodeFieldValueDTO): QueueNodeFieldValue => 
 });
 
 const getResultImageNames = (dto: QueueServerItemDTO): string[] => {
-  const imageNames: string[] = [];
-
-  for (const result of Object.values(dto.session?.results ?? {})) {
-    if (!result || typeof result !== 'object') {
-      continue;
-    }
-
-    const image = (result as { image?: { image_name?: unknown } }).image;
-
-    if (typeof image?.image_name === 'string') {
-      imageNames.push(image.image_name);
-    }
-
-    const collection = (result as { collection?: unknown }).collection;
-
-    if (Array.isArray(collection)) {
-      for (const entry of collection) {
-        const imageName = entry && typeof entry === 'object' ? (entry as { image_name?: unknown }).image_name : null;
-
-        if (typeof imageName === 'string') {
-          imageNames.push(imageName);
-        }
-      }
-    }
-  }
-
-  return imageNames;
+  return Object.values(dto.session?.results ?? {}).flatMap(getOutputImageNames);
 };
 
 export const mapQueueItemDTO = (dto: QueueServerItemDTO): QueueItemReadModel => ({

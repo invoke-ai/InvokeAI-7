@@ -9,14 +9,8 @@ import { usePreservedScrollOffset } from './usePreservedScrollOffset';
 const VIEWPORT_STYLE = { height: '100px', overflow: 'auto', width: '100px' } as const;
 
 /**
- * Stands in for a plain, non-virtualized list — the gallery's board list is
- * the real reproduction case — whose content is sized from actual DOM layout
- * rather than from a row count, so it does not survive the container being
- * taken out of layout unchanged. That is what defeats the browser's own
- * scroll restoration, and a container with fixed content would not reproduce
- * the bug at all. A virtualized list does not have this problem: its content
- * height is a pure function of row count and estimated sizes, so it survives
- * unaided and needs no help from this hook.
+ * Use layout-dependent content so hiding changes its size; fixed-height virtualized content would not reproduce
+ * lost browser restoration.
  */
 const Scroller = ({
   contentHeight,
@@ -123,21 +117,13 @@ describe('preserved scroll offset', () => {
 
     await hideAndShow(true);
 
-    // The state, not the node: identity alone was never the thing at risk.
-    //
-    // Chrome restores this much on its own when the scrollable content happens
-    // to survive, so this pins the contract rather than reproducing the bug —
-    // the real reproduction is the `workbench-keep-alive-state` journey, which
-    // runs the gallery's actual non-virtualized board list.
+    // This asserts retained state; the real gallery reproduction lives in workbench-keep-alive-state.
     expect(scroller()).toBe(element);
     expect(element.scrollTop).toBe(500);
   });
 
   it('keeps both axes across a keep-alive hide and show', async () => {
-    // `Scrollable` installs this hook unconditionally regardless of its own
-    // `orientation` prop, and `PreviewFilmstrip` is a horizontal `Scrollable`
-    // inside the keep-alive-able Preview widget — a vertical-only fix would
-    // leave that filmstrip snapping back to its start on every preset switch.
+    // Cover horizontal offsets too: Scrollable installs the hook for filmstrips regardless of orientation.
     mount();
     await render('visible', 2000, true, 2000);
     await scrollToBothAxes(500, 300);

@@ -8,3 +8,4 @@ export {
   type GalleryItemContextMenuTarget,
   type GalleryUiAdapter,
 } from './ui/GalleryUiContext';
+export { useGalleryUploadAction } from './ui/useGalleryUploadAction';

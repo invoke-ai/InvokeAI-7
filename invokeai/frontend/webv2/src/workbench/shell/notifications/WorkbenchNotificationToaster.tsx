@@ -4,6 +4,7 @@ import { toaster } from '@platform/ui';
 import { useWorkbenchPreferenceSelector } from '@workbench/settings/store';
 import { useWorkbenchSelector } from '@workbench/WorkbenchContext';
 import { useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { getToastKey, shouldToastNotification } from './toastPolicy';
 
@@ -14,6 +15,7 @@ const notificationToastType: Record<WorkbenchNotificationKind, 'error' | 'info' 
 };
 
 export const WorkbenchNotificationToaster = () => {
+  const { t } = useTranslation();
   const notifications = useWorkbenchSelector((snapshot) => snapshot.notifications);
   const notifyOnEnqueue = useWorkbenchPreferenceSelector((prefs) => prefs.notifyOnEnqueue);
   const toastedNotificationIdsRef = useRef<Set<string> | null>(null);
@@ -39,13 +41,13 @@ export const WorkbenchNotificationToaster = () => {
 
       queueMicrotask(() => {
         toaster.create({
-          description: notification.message,
-          title: notification.title,
+          description: notification.messageKey ? t(notification.messageKey) : notification.message,
+          title: notification.titleKey ? t(notification.titleKey) : notification.title,
           type: notificationToastType[notification.kind],
         });
       });
     }
-  }, [notifications, notifyOnEnqueue]);
+  }, [notifications, notifyOnEnqueue, t]);
 
   return null;
 };

@@ -101,11 +101,8 @@ describe('strokeSession: selection-constrained painting', () => {
   it('applies the selection clip on the scratch, not by changing the cache composite ops', () => {
     const withMask = runStroke({ withMask: true });
     const noMask = runStroke({ withMask: false });
-    // The clip is a `destination-in` on the SCRATCH; the layer-cache composite op
-    // sequence (source-over blit of the clipped stroke) is unchanged — the clip
-    // never adds a mask op to the cache itself. (The cache's content EXTENT can
-    // differ: without a selection the cache grows to the stroke's true bounds,
-    // while a selection bounds the growth to the mask — content-sized behavior.)
+    // Apply destination-in only to scratch; cache compositing remains unchanged. Selection bounds may limit cache
+    // growth.
     expect(compositeOps(withMask.cache)).toEqual(compositeOps(noMask.cache));
     expect(compositeOps(withMask.cache)).not.toContain('destination-in');
   });
@@ -187,10 +184,7 @@ describe('strokeSession: bbox-clipped painting', () => {
   });
 
   it('still covers the whole stroke when the clip rect contains it', () => {
-    // The stroke spans (10,10)→(40,40) with a 20px brush, so its true content
-    // reaches [0,50] on both axes. A generous clip may trim the region's chunk
-    // PADDING back to the clip boundary — an internal cache extent — but must
-    // never trim painted content.
+    // Clip may remove chunk padding but must retain actual 20px stroke coverage across [0,50] on both axes.
     const { event } = runClipped({ height: 200, width: 200, x: -50, y: -50 });
     const dirty = event!.dirtyRect;
 
@@ -241,10 +235,7 @@ describe('strokeSession: content-sized cache growth', () => {
     session.addPoints([pointer(50, 60)]);
     const event = session.commit();
 
-    // The cache adopted the stroke's content bounds, snapped OUTWARD to the 64px
-    // growth-chunk grid — still content-sized (a couple of chunks), NOT an
-    // origin-anchored document-sized surface. A size-20 dab at (50,60) sits roughly
-    // at [40,60]×[50,70], which chunk-pads to a small chunk-aligned rect.
+    // A dab near (50,60) grows to a small outward chunk-aligned rect, not a document-sized surface.
     expect(entry.rect.width).toBeGreaterThan(0);
     expect(entry.rect.height).toBeGreaterThan(0);
     // Chunk-aligned extent (origin and size are multiples of the 64px chunk).
@@ -306,12 +297,7 @@ describe('strokeSession: content-sized cache growth', () => {
     const surface = entry.surface as StubRasterSurface;
     const resizeCount = (): number => surface.callLog.filter((e) => e.op === 'resize').length;
 
-    // Ten 10px batches extending the stroke 100px rightward within a single chunk
-    // row. Without chunk-padding, growToRect grows to the EXACT union every batch,
-    // so each batch reallocates + full-copies the cache (≈10 resizes). With the
-    // 64px chunk grid, successive small extensions land inside the padded extent,
-    // so the surface reallocates only when the stroke crosses a chunk boundary
-    // (~100 / 64 ≈ 2 times).
+    // Ten small batches should allocate only at 64px chunk crossings, not on every exact-bound extension.
     const batches = 10;
     for (let i = 0; i < batches; i++) {
       session.addPoints([pointer(100 + i * 10, 100)]);
@@ -320,8 +306,6 @@ describe('strokeSession: content-sized cache growth', () => {
 
     const resizes = resizeCount();
     expect(resizes).toBeLessThanOrEqual(2);
-    // Sanity: far fewer reallocations than batches — the unpadded behavior this
-    // regression guards would resize on nearly every batch.
     expect(resizes).toBeLessThan(batches);
   });
 });
@@ -366,8 +350,7 @@ describe('strokeSession: cache version bump (live adjusted-surface invalidation)
     const v1 = entry.version;
     session.addPoints([pointer(40, 40)]);
     const v2 = entry.version;
-    // Each painted frame advances the version — a version-keyed adjusted surface
-    // would otherwise serve stale (pre-stroke) adjusted pixels mid-stroke.
+    // Every painted frame must advance version so adjusted caches show live strokes.
     expect(v1).toBeGreaterThan(v0);
     expect(v2).toBeGreaterThan(v1);
   });
@@ -426,9 +409,7 @@ describe('incremental "before" snapshot', () => {
     const { layers, session } = makeSession(100);
     drag(session, 3000, 50);
     const region = layers.get('L')!.rect;
-    // `growToRect` re-reads the surface when it reallocates (args are its own
-    // full extent from the origin); the session's own snapshot reads are the
-    // strips, and none of them may span the accumulated width.
+    // Session readbacks must cover only newly added strips, never accumulated width.
     const stripReads = surfaceOf(layers)
       .callLog.filter((entry) => entry.op === 'getImageData')
       .filter((entry) => Number(entry.args[0]) !== 0 || Number(entry.args[1]) !== 0);
@@ -441,8 +422,7 @@ describe('incremental "before" snapshot', () => {
 
   it('re-snapshots only when the region actually grows, not on every batch', () => {
     const { layers, session } = makeSession(100);
-    // Many batches inside one chunk: the region never changes, so the retained
-    // snapshot is reused and nothing is read back at all.
+    // Batches within unchanged bounds reuse the before-snapshot without readback.
     session.addPoints([pointer(0, 0)]);
     const baseline = surfaceOf(layers).callLog.filter((e) => e.op === 'getImageData').length;
     for (let i = 0; i < 20; i++) {
@@ -453,8 +433,7 @@ describe('incremental "before" snapshot', () => {
   });
 
   it('reallocates less often for a wide brush than a fixed 64px grid would', () => {
-    // The growth grid scales with the brush, so a 1200px brush crossing 4000px
-    // of travel reallocates on a ~300px pitch rather than every 64px.
+    // Large brushes scale growth pitch: 1200px diameter uses roughly 300px chunks instead of 64px.
     const { layers, session } = makeSession(1200);
     drag(session, 4000, 100);
     const resizes = surfaceOf(layers).callLog.filter((entry) => entry.op === 'resize').length;
@@ -515,8 +494,7 @@ describe('strokeSession: pressure-dependent opacity', () => {
   it('fills the stroke once at full alpha when pressure opacity is off', () => {
     const scratch = runPressureStroke(false, [0.25, 0.5, 1]);
 
-    // One fill for the whole outline: overlapping parts of the stroke union instead of
-    // compounding, which is the guarantee the single-composite design provides.
+    // Fill the whole outline once so overlaps union without compounding opacity.
     expect(scratch.callLog.filter((e) => e.op === 'fill')).toHaveLength(1);
     expect(alphaValues(scratch).every((alpha) => alpha === 1)).toBe(true);
   });

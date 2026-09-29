@@ -1,4 +1,9 @@
-import type { GenerateLora, MainModelConfig, PromptHistoryItem } from '@features/generation/contracts';
+import type {
+  ExpandPromptSuggestion,
+  GenerateLora,
+  MainModelConfig,
+  PromptHistoryItem,
+} from '@features/generation/contracts';
 import type { VideoWidgetValues } from '@features/video/core/types';
 
 import { Stack } from '@chakra-ui/react';
@@ -8,15 +13,12 @@ import { memo, useCallback } from 'react';
 import { areVideoLorasEquivalent, areVideoModelsEquivalent } from './videoComparators';
 
 /**
- * The Video widget's prompt block. The prompt is Video's own widget value, not
- * the project draft Generate and Upscale share: a video prompt describes motion
- * over time and has nothing useful to say to an image model, so the two panels
- * hold independent text. Memoised against content: the widget re-derives
- * `values` on every patch and the prompt editors carry autocomplete state a
- * needless remount would disturb.
+ * Video prompts are independent of the shared image-generation draft. Compare content because patches recreate
+ * values and remounts would lose autocomplete state.
  */
 export const VideoPromptFields = memo(
   function VideoPromptFields({
+    expandPromptSuggestion,
     loras,
     model,
     negativeHelpText,
@@ -30,6 +32,7 @@ export const VideoPromptFields = memo(
     projectId,
     showSyntaxHighlighting,
   }: {
+    expandPromptSuggestion: ExpandPromptSuggestion | null;
     loras: GenerateLora[];
     model: MainModelConfig | null;
     negativeHelpText?: string;
@@ -77,6 +80,7 @@ export const VideoPromptFields = memo(
     return (
       <Stack gap="2" p="2">
         <PositivePromptField
+          expandPromptSuggestion={expandPromptSuggestion}
           heightPx={positivePromptHeightPx}
           loras={loras}
           projectId={projectId}
@@ -106,6 +110,7 @@ export const VideoPromptFields = memo(
     );
   },
   (previous, next) =>
+    previous.expandPromptSuggestion === next.expandPromptSuggestion &&
     previous.negativePrompt === next.negativePrompt &&
     previous.negativePromptEnabled === next.negativePromptEnabled &&
     previous.negativePromptHeightPx === next.negativePromptHeightPx &&

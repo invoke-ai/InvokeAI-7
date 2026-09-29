@@ -8,10 +8,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
 
 /**
- * The high-contrast preference flips `<html data-high-contrast>`; every theme's
- * muted text and borders must then clear the WCAG AA thresholds (4.5:1 for
- * text, 3:1 for a non-text boundary) on the panel surfaces chrome paints on,
- * while muted text stays a visible rank below the foreground.
+ * Require high-contrast muted text ≥4.5:1 and boundaries ≥3:1 across themes, while keeping muted text below fg
+ * emphasis.
  */
 
 let host: HTMLDivElement | null = null;

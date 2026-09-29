@@ -24,9 +24,8 @@ export const LoginScreen = () => {
         try {
           await loginWithCredentials(values.email, values.password, values.rememberMe);
         } catch (error) {
-          // A second submit, logout, or expiry owns the newer identity
-          // transition. The stale submit should neither navigate nor flash an
-          // error over the winning transition.
+          // A newer identity transition supersedes this submit; stale completion must neither navigate nor report
+          // an error.
           if (isLoginAttemptSupersededError(error)) {
             return;
           }

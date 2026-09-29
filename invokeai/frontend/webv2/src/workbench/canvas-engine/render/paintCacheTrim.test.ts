@@ -5,11 +5,7 @@ import { trimPaintCacheToAlpha } from '@workbench/canvas-engine/render/paintCach
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
-/**
- * A real cache store on the stub backend, whose readback is zeroed — so every
- * published surface reads as transparent, making this the home for the `emptied`
- * case and the guard matrix. Real cropping is asserted in the browser suite.
- */
+/** Zero-alpha stub readbacks exercise empty-cache verdicts and guards; browser tests verify actual cropping. */
 const harness = (options: { busy?: boolean } = {}) => {
   const store = createLayerCacheStore(createTestStubRasterBackend({ readbackAlpha: 0 }));
   const isLayerBusy = vi.fn(() => options.busy ?? false);

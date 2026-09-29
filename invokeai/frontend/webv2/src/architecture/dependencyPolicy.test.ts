@@ -233,14 +233,20 @@ describe('feature public-interface registry', () => {
     expect(checkDependency('features/gallery/ui/View.tsx', '@features/queue/publicApi')).toMatchObject([
       { rule: 'feature-public-interface' },
     ]);
-    // Workbench resolves prompt expansion before submitting, so it reads
-    // Generation's prompt cache through the public entry module.
     expect(checkDependency('workbench/invocationSubmit.ts', '@features/generation/prompts')).toEqual([]);
     expect(checkDependency('app/GenerateWidgetSyncRuntime.tsx', '@features/generation/runtime')).toEqual([]);
     expect(checkDependency('workbench/widgets/canvas/invoke.ts', '@features/generation/canvasGraph')).toEqual([]);
+    expect(checkDependency('workbench/WorkbenchContext.tsx', '@features/intermediates/holdLease')).toEqual([]);
+    expect(
+      checkDependency('features/workflow/ui/fields/RecordPickerInput.tsx', '@features/generation/systemPrompts')
+    ).toEqual([]);
+    expect(checkDependency('workbench/invocationSubmit.ts', '@features/workflow/generators')).toEqual([]);
     expect(
       checkDependency('workbench/invocationSubmit.ts', '@features/generation/data/dynamicPromptsQueries')
     ).toMatchObject([{ rule: 'feature-private-interface' }]);
+    expect(
+      checkDependency('features/workflow/ui/fields/RecordPickerInput.tsx', '@features/generation/data/systemPrompts')
+    ).toMatchObject([{ rule: 'feature-public-interface' }]);
   });
 
   it('treats unregistered features as fully private', () => {
@@ -282,7 +288,9 @@ describe('production dependency graph', () => {
       .sort();
 
     expect(violations).toEqual([]);
-  });
+    // A whole-source scan whose cost grows with the codebase; on shared CI runners it already takes 3-5s, so the
+    // default 5s budget turned runner speed into test failures.
+  }, 60_000);
 
   it('has no remaining migration exceptions', () => {
     expect(migrationExceptions).toEqual([]);

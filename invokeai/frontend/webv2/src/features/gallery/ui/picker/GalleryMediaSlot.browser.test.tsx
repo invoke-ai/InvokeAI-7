@@ -159,14 +159,7 @@ const renderSlot = async (props: Partial<Parameters<typeof GalleryMediaSlot>[0]>
                 testId="multi-thumb"
               />
               <div data-testid="slot" style={{ left: 200, position: 'fixed', top: 200, width: 320 }}>
-                <GalleryMediaSlot
-                  accept={['image']}
-                  dropId="test-slot"
-                  uploadBoardId="none"
-                  value={null}
-                  onChange={onChange}
-                  {...props}
-                />
+                <GalleryMediaSlot accept={['image']} dropId="test-slot" value={null} onChange={onChange} {...props} />
               </div>
             </DndContext>
           </GalleryUiProvider>
@@ -284,44 +277,21 @@ describe('GalleryMediaSlot', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it('uploads into the given board and adopts the result', async () => {
-    mocks.uploadGalleryImage.mockResolvedValue({
-      boardId: 'none',
-      createdAt: '2026-09-09T00:00:00.000Z',
-      height: 96,
-      imageCategory: 'user',
-      imageName: 'fresh.png',
-      imageUrl: '/full/fresh.png',
-      queuedAt: '2026-09-09T00:00:00.000Z',
-      sourceQueueItemId: 'queue-1',
-      starred: false,
-      thumbnailUrl: '/thumb/fresh.png',
-      width: 128,
-    });
+  it('offers no file action of its own — the picker carries the gallery upload', async () => {
     await renderSlot();
 
-    expect(host?.querySelector<HTMLInputElement>('input[type="file"]')?.multiple).toBe(false);
-    await changeFile(new File(['image'], 'fresh.png', { type: 'image/png' }));
-
-    expect(mocks.uploadGalleryImage).toHaveBeenCalledExactlyOnceWith(expect.any(File), 'none', expect.anything());
-    expect(onChange).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: 'image', name: 'fresh.png' }));
-    expect(alertText()).toBeNull();
+    expect(actionButton('widgets.gallery.picker.upload')).toBeUndefined();
+    expect(host?.querySelector('input[type="file"]')).toBeNull();
   });
 
-  it('refuses a file of a kind the slot cannot take and reports an upload that yields nothing', async () => {
-    mocks.uploadGalleryImage.mockRejectedValue(new Error('storage offline'));
-    await renderSlot();
+  it('refuses a file of a kind the consumer-owned upload cannot take', async () => {
+    const onUploadFile = vi.fn();
+    await renderSlot({ onUploadFile });
 
     await changeFile(new File(['video'], 'clip.mp4', { type: 'video/mp4' }));
 
-    expect(mocks.uploadGalleryImage).not.toHaveBeenCalled();
+    expect(onUploadFile).not.toHaveBeenCalled();
     expect(alertText()).toBe('widgets.gallery.picker.unsupportedVideo');
-
-    await changeFile(new File(['image'], 'photo.png', { type: 'image/png' }));
-
-    expect(mocks.uploadGalleryImage).toHaveBeenCalledOnce();
-    expect(onChange).not.toHaveBeenCalled();
-    expect(alertText()).toBe('widgets.gallery.picker.uploadFailed');
   });
 
   it('hands an uploaded file to the consumer instead of the gallery and shows a custom thumbnail', async () => {
@@ -337,7 +307,6 @@ describe('GalleryMediaSlot', () => {
     await changeFile(file);
 
     expect(onUploadFile).toHaveBeenCalledExactlyOnceWith(file);
-    expect(mocks.uploadGalleryImage).not.toHaveBeenCalled();
     expect(onChange).not.toHaveBeenCalled();
   });
 
@@ -367,13 +336,8 @@ describe('GalleryMediaSlot', () => {
 
     expect(find).not.toBeNull();
 
-    // Hidden until the slot is hovered or holds focus. A mouse hover cannot be
-    // synthesised, but both come from the same `.group` ancestor, so focus
-    // proves the wiring the badge depends on entirely.
-    //
-    // `pointer-events` rather than `opacity`: the reveal sets both under one
-    // selector, but only opacity is transitioned, so opacity answers for where
-    // the animation has got to rather than for whether the badge is revealed.
+    // Assert focus-based reveal via pointer-events; opacity transitions cannot reliably indicate whether the badge
+    // is revealed.
     expect(getComputedStyle(find!).pointerEvents).toBe('none');
     expect(getComputedStyle(find!).opacity).toBe('0');
 
@@ -383,9 +347,7 @@ describe('GalleryMediaSlot', () => {
 
     expect(getComputedStyle(find!).pointerEvents).toBe('auto');
 
-    // The badge is a SIBLING of the slot's face — the face is a <button> and
-    // may not contain one — so its position is hand-mirrored from the value
-    // row's box metrics. Nothing but this ties the two together.
+    // The badge must remain beside the button face; its copied box metrics must align it with the thumbnail.
     const tile = host?.querySelector('img')?.parentElement?.getBoundingClientRect();
     const badge = find!.getBoundingClientRect();
 
@@ -402,9 +364,7 @@ describe('GalleryMediaSlot', () => {
   it('leaves the badge off a slot with nothing to reveal', async () => {
     const value: GalleryMediaSlotValue = { height: 96, kind: 'image', name: 'chosen.png', width: 128 };
 
-    // A slot whose media the gallery does not own (the prompt-template editor
-    // holds its own upload) passes no `onFind`, and an empty slot has nothing
-    // to find — neither may show the badge.
+    // Empty slots and media outside the gallery must not expose reveal badges.
     await renderSlot({ value });
 
     expect(host?.querySelector('button[aria-label^="widgets.gallery.findNamedInGallery"]')).toBeNull();

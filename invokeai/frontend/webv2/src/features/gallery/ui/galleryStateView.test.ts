@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   getBoardCounts,
+  getGalleryDestinationBoardId,
   getGallerySelectedBoardId,
   getGallerySelectedImageQuery,
   getGallerySemanticImageQuery,
@@ -85,9 +86,8 @@ describe('gallery state view', () => {
   });
 
   /**
-   * A project arriving from another install — or one whose pre-migration board was rejected as
-   * ambiguous — names a destination that does not exist here. Its own board is a better answer
-   * than Uncategorized, which would quietly scatter the project's output.
+   * Missing imported destinations fall back to the project's board instead of scattering output into
+   * Uncategorized.
    */
   it('falls back to the project board before uncategorized', () => {
     const projectBoards = [...boards, { ...boards[1]!, id: 'project-board', name: 'My Project', projectId: 'p1' }];
@@ -110,10 +110,7 @@ describe('gallery state view', () => {
     expect(getGallerySelectedBoardId(values, boards)).toBe('none');
   });
 
-  /**
-   * Never having chosen a destination is not a choice of Uncategorized. A project saved before it
-   * owned a board should still work on its own board, where everything else it has made lives.
-   */
+  /** An absent saved destination is not an explicit choice of Uncategorized; use the project's board. */
   it('uses the project board when nothing was ever selected', () => {
     const projectBoards = [...boards, { ...boards[1]!, id: 'project-board', name: 'My Project', projectId: 'p1' }];
 
@@ -282,6 +279,16 @@ describe('gallery state view', () => {
     expect(gallery.selectedItemKeys).toEqual(['image:selected.png']);
   });
 
+  it('treats a selection in the starred strip as visible, though the listing does not hold it', () => {
+    const starred = { ...createImageItem('starred.png'), starred: true };
+    const values = { selectedImageName: 'image:starred.png' };
+
+    expect(getGalleryStateView(values, boards, [createImageItem('regular.png')], false).selectedItemKey).toBeNull();
+    expect(
+      getGalleryStateView(values, boards, [createImageItem('regular.png')], false, [starred]).selectedItemKey
+    ).toBe('image:starred.png');
+  });
+
   it('projects same-name images and videos independently by qualified key', () => {
     const image = createImageItem('shared');
     const video = createVideoItem('shared');
@@ -329,5 +336,20 @@ describe('gallery state view', () => {
     );
     expect(ranked.semanticImageQuery).toEqual({ imageName: 'ref.png', kind: 'image' });
     expect(getGalleryStateView({ selectedBoardId: 'board-1' }, boards, [], false).semanticImageQuery).toBeNull();
+  });
+});
+
+describe('getGalleryDestinationBoardId', () => {
+  it('sends results to the picked board, keeping an explicit Uncategorized choice', () => {
+    expect(getGalleryDestinationBoardId({ projectBoardId: 'project', selectedBoardId: 'picked' })).toBe('picked');
+    expect(getGalleryDestinationBoardId({ projectBoardId: 'project', selectedBoardId: 'none' })).toBe('none');
+  });
+
+  it('falls back to the project board when nothing is picked or a date bucket is', () => {
+    expect(getGalleryDestinationBoardId({ projectBoardId: 'project' })).toBe('project');
+    expect(getGalleryDestinationBoardId({ projectBoardId: 'project', selectedBoardId: 'by_date:2026-07-15' })).toBe(
+      'project'
+    );
+    expect(getGalleryDestinationBoardId({})).toBeNull();
   });
 });

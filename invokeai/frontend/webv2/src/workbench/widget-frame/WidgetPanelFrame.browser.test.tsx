@@ -16,9 +16,7 @@ const frameMocks = vi.hoisted(() => ({
   sizePx: 450,
 }));
 
-// The frame reads the region's persisted size and writes back through the
-// layout commands; both are stubbed so the drag arithmetic is what is under
-// test, not the reducer.
+// Stub persisted size and commands to isolate frame drag arithmetic from reducer behavior.
 vi.mock('@workbench/WorkbenchContext', async (importOriginal) => ({
   ...(await importOriginal<typeof workbenchContext>()),
   shallowEqual: Object.is,
@@ -129,8 +127,6 @@ describe('WidgetPanelFrame resize', () => {
     await dragTo(separator, { widthPx: 260 });
 
     expect(frameMocks.setRegionCollapsed).toHaveBeenCalledExactlyOnceWith('left', true);
-    // The width the user chose survives the collapse, so the rail button
-    // reopens the panel where they left it rather than at the floor.
     expect(frameMocks.setRegionSize).not.toHaveBeenCalled();
   });
 
@@ -159,9 +155,7 @@ describe('WidgetPanelFrame resize', () => {
     expect(separator.getAttribute('aria-valuemax')).toBe('720');
   });
 
-  // The frame clips its overflow, so a handle hung outside the panel edge
-  // loses that half — leaving a sliver behind the border people aim at, and a
-  // gesture that silently does nothing.
+  // Keep handles inside clipped bounds so the whole target receives pointer gestures.
   it.each(['left', 'right', 'bottom'] as const)('keeps the whole %s handle inside the clip', async (region) => {
     const separator = await renderFrame(region);
     const handle = separator.getBoundingClientRect();
@@ -258,9 +252,7 @@ describe('WidgetPanelFrame resize', () => {
   });
 });
 
-// A viewport too narrow for the stored size (a portrait tablet) squeezes the
-// side panel below its floor on screen. The gesture, the keyboard floor and
-// the announced value then work from the width that is actually there.
+// Use actual squeezed width for gestures, keyboard floors, and announced values.
 describe('WidgetPanelFrame squeezed by the viewport', () => {
   const renderSqueezed = async () => {
     host!.style.cssText = 'display:flex;height:600px;width:400px;';

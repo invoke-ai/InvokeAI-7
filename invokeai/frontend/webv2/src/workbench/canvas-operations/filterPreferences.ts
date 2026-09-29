@@ -2,11 +2,7 @@ import { isSupportedFilterType } from './filterGraphs';
 
 const STORAGE_KEY = 'invokeai:v7:webv2:last-filter-type';
 
-/**
- * The user's last-chosen filter type, remembered per user. A fresh filter
- * operation on a layer without its own filter starts here instead of the
- * hard-coded default; unknown or unreadable values fall back silently.
- */
+/** Remember the last filter per user for layers without one; unknown or unreadable preferences use the default. */
 export const readLastUsedFilterType = (): string | null => {
   if (typeof window === 'undefined') {
     return null;

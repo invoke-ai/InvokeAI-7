@@ -13,13 +13,8 @@ import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 /**
- * The first-run gap this closes: a fresh install used to show an empty project
- * grid and a "New project" button that dropped you into an editor which could
- * not generate anything, with no mention that models were the missing piece.
- *
- * It renders only while that is actually true — no models installed, or a
- * starter bundle still downloading — and disappears for good once the library
- * has something in it.
+ * Explain missing models during first-run setup or starter downloads; hide the notice once usable library content
+ * exists.
  */
 
 const EMPTY_BUNDLES: Record<string, StarterModelBundle> = {};
@@ -48,8 +43,7 @@ export const ModelsNotice = () => {
     ensureInstallsLoaded();
   });
 
-  // Nothing to say until the library has actually been read; guessing "you
-  // have no models" during the first fetch would be a lie half the time.
+  // Wait for authoritative library data before claiming no models are installed.
   if (modelsStatus !== 'loaded' || modelCount > 0) {
     return activeInstallCount > 0 ? <InstallProgress count={activeInstallCount} /> : null;
   }
@@ -108,8 +102,6 @@ const StarterBundles = ({ bundles }: { bundles: Record<string, StarterModelBundl
 const StarterBundleButton = ({ bundle, bundleKey }: { bundle: StarterModelBundle; bundleKey: string }) => {
   const navigate = useNavigate();
 
-  // Opens the bundle in the model manager rather than installing blind — the
-  // user sees what the pack contains and installs from there.
   const handleOpen = useCallback(() => {
     openAddModelsWithBundle(bundle.name || bundleKey);
     void navigate({ to: '/models' });

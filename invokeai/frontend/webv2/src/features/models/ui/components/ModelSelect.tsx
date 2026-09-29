@@ -4,12 +4,13 @@ import type { PickerGroup, PickerOptionState } from '@platform/ui/Picker';
 
 import { Badge, Box, HStack, Icon, Image, Popover, Portal, Spacer, Stack, Text } from '@chakra-ui/react';
 import { getModelBaseColorPalette, getModelBaseLabel, getModelBaseLongLabel } from '@features/models/core/baseIdentity';
-import { getModelPickerGroups } from '@features/models/core/library';
-import { formatBytes, getModelTypeLabel, getModelTypePluralLabel } from '@features/models/core/taxonomy';
+import { getModelPickerGroups, hasModelPickerCandidates } from '@features/models/core/library';
+import { getModelTypeLabel, getModelTypePluralLabel } from '@features/models/core/taxonomy';
 import { getModelImageUrl } from '@features/models/data/api';
 import { ensureModelsLoaded, useModelsSelector } from '@features/models/data/modelsStore';
 import { useModelsUi } from '@features/models/ui/ModelsUiContext';
 import { setPickerBaseFilters, setPickerCompactView, useModelsUiSelector } from '@features/models/ui/uiStore';
+import { formatBytes } from '@platform/i18n/languages';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { areArraysEqual } from '@platform/state/selectors';
 import { Button, CloseButton, IconButton, PopoverContent, Tooltip } from '@platform/ui';
@@ -36,12 +37,7 @@ const EMPTY_KEYS: ReadonlySet<string> = new Set();
 
 const getOptionId = (model: ModelConfig): string => model.key;
 
-/**
- * Related-model pinning for an open picker. The generation form mounts
- * pickers during the editor's initial paint, so the relationships store must
- * stay out of the eager graph (the architecture browser budget) — it is
- * imported on first open and subscribed to manually instead of via its hook.
- */
+/** Load and subscribe to relationships only when the picker opens to keep it outside the editor's initial graph. */
 const useLazyRelatedModelKeys = (modelKey: string | null): readonly string[] | null => {
   const [relatedKeys, setRelatedKeys] = useState<readonly string[] | null>(null);
 
@@ -119,7 +115,7 @@ export const ModelSelect = ({
   const loadError = useModelsSelector((snapshot) => snapshot.error);
   const loadStatus = useModelsSelector((snapshot) => snapshot.status);
   const [isOpen, setIsOpen] = useState(false);
-  const [lastDisabled, setLastDisabled] = useState(disabled);
+  const [lastDisabled, setLastDisabled] = useState(Boolean(disabled));
 
   const pickerId = id ?? `models:${modelTypes.join('+')}`;
   const isCompact = useModelsUiSelector((snapshot) => snapshot.pickerCompactViews[pickerId] ?? false);
@@ -139,10 +135,18 @@ export const ModelSelect = ({
     void ensureModelsLoaded();
   });
 
-  if (disabled !== lastDisabled) {
-    setLastDisabled(disabled);
+  // Disable empty-library triggers after loading; preserve clearing for stale selections.
+  const hasCandidates = useMemo(
+    () => loadStatus !== 'loaded' || hasModelPickerCandidates(models, { excludeKeys, filter, modelTypes }),
+    [excludeKeys, filter, loadStatus, modelTypes, models]
+  );
+  const isEmpty = !hasCandidates && !value;
+  const isInert = disabled || isEmpty;
 
-    if (disabled) {
+  if (isInert !== lastDisabled) {
+    setLastDisabled(isInert);
+
+    if (isInert) {
       setIsOpen(false);
     }
   }
@@ -224,7 +228,7 @@ export const ModelSelect = ({
           strategy: 'fixed',
         }}
         onOpenChange={(event) => {
-          if (disabled) {
+          if (isInert) {
             setIsOpen(false);
             return;
           }
@@ -240,7 +244,7 @@ export const ModelSelect = ({
               className={className}
               borderColor={invalid ? undefined : isOpen ? 'accent.solid' : 'border'}
               colorPalette={invalid ? 'red' : 'gray'}
-              disabled={disabled}
+              disabled={isInert}
               justifyContent="space-between"
               minW="0"
               pe={canClear ? '7' : '2'}
@@ -259,10 +263,12 @@ export const ModelSelect = ({
                 <ModelButtonContent model={selectedModel} />
               ) : (
                 <Text as="span" color="fg.muted" fontSize="xs" minW="0" truncate>
-                  {placeholder ?? t('models.scopeSelect', { scope: scopeLabel })}
+                  {isEmpty
+                    ? t('models.scopeNoCompatibleInstalled', { scope: scopeLabel })
+                    : (placeholder ?? t('models.scopeSelect', { scope: scopeLabel }))}
                 </Text>
               )}
-              {canClear ? null : <Icon as={ChevronDownIcon} boxSize="3" flexShrink={0} />}
+              {canClear || isEmpty ? null : <Icon as={ChevronDownIcon} boxSize="3" flexShrink={0} />}
             </Button>
           </Popover.Trigger>
           {canClear ? (

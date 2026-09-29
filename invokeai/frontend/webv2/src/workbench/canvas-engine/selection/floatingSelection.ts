@@ -1,32 +1,8 @@
 /**
- * The floating selection: pixels lifted out of a layer and held in flight.
- *
- * Dragging inside the marching ants cuts the selected pixels off the layer into
- * a transient float that follows the pointer, leaving a hole behind. The float
- * stays live — re-draggable, transformable — until it is committed (baked back
- * into the same layer as ONE undo entry) or cancelled (the hole refilled). This
- * module owns the geometry and the pixel extraction; `FloatingSelectionController`
- * owns the lifecycle, history, and persistence around it.
- *
- * ## Coordinate spaces
- *
- * The distinction that makes this work: **the selection mask is in DOCUMENT
- * space, the layer cache is in LAYER-LOCAL space.** They coincide only when the
- * layer's transform is the identity — which the existing `selectionOps` fill and
- * erase happen to assume. A float cannot assume it: it lands back in the layer
- * cache, so it must be exact under rotation and scale.
- *
- * So the float keeps its pixels and its live transform in **layer-local** space:
- *
- * - The lift maps the mask into layer-local through the inverse layer matrix,
- *   which resamples the MASK (cheap, and only its coverage matters) rather than
- *   the content.
- * - The lifted content is never resampled — a plain blit out and, for a pure
- *   translate at whole pixels, a plain blit back.
- * - The move tool converts its document-space pointer delta into layer-local
- *   before applying it (see {@link documentDeltaToLocal}).
- *
- * Zero React, zero import-time side effects.
+ * Owns float geometry and extraction; the controller owns lifecycle/history/persistence. Document-space masks map
+ * through the inverse layer transform into local space, resampling coverage rather than content. Pixels and live
+ * transforms stay layer-local; whole-pixel translations preserve exact blits, and pointer deltas convert via
+ * {@link documentDeltaToLocal}.
  */
 
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
@@ -43,12 +19,8 @@ export interface FloatingSelection {
   /** The lifted pixels, placed at their lift-time rect in LAYER-LOCAL space. */
   readonly pixels: PlacedSurface;
   /**
-   * `pixels` with the layer's display-only effects baked in (control
-   * transparency / raster adjustments), or `null` when the layer has none. The
-   * compositor draws THIS; the bake writes back the untouched `pixels`, so the
-   * effect is never burned into the document. Computed once at lift: the effects
-   * are per-pixel, so the float's transform cannot change them, and a change to
-   * the layer's display properties cancels the float outright.
+   * Effect-baked display copy; raw `pixels` alone are written back. Per-pixel effects are computed at lift and
+   * unaffected by transforms; appearance changes cancel the float.
    */
   readonly display: RasterSurface | null;
   /** The layer cache's pre-lift pixels over the cut region, for cancel and the undo entry. */
@@ -108,10 +80,7 @@ export const floatDocumentMatrix = (layerMatrix: Mat2d, floatMatrix: Mat2d): Mat
   return inverse ? multiply(multiply(layerMatrix, floatMatrix), inverse) : null;
 };
 
-/**
- * Draws a document-space placed surface into a fresh surface covering `region`
- * in LAYER-LOCAL space, projecting through `inverseLayerMatrix`.
- */
+/** Projects a placed document surface through the inverse layer matrix into a fresh local-region surface. */
 const projectIntoLocal = (
   backend: RasterBackend,
   source: PlacedSurface,
@@ -133,13 +102,8 @@ const projectIntoLocal = (
 };
 
 /**
- * Copies the layer's content within the selection into a detached surface, and
- * returns the layer-local stencil that produced it. Returns `null` when the
- * selection does not overlap the layer's content — there would be nothing to
- * float.
- *
- * This does NOT modify the cache: punching the hole is the caller's step, done
- * with the returned `localMask` so the two agree exactly.
+ * Copies selected layer content and returns its exact local stencil, or null without overlap. Does not mutate
+ * cache; callers cut with the same stencil.
  */
 export const liftSelectedPixels = ({
   backend,
@@ -174,10 +138,7 @@ export const liftSelectedPixels = ({
   return { localMask, pixels: { rect: region, surface } };
 };
 
-/**
- * Re-places a document-space mask through `matrix`, returning a fresh placed
- * surface — how the selection outline follows a committed float.
- */
+/** Repositions the document mask through a matrix so committed selection outlines follow the float. */
 export const transformPlacedMask = (
   backend: RasterBackend,
   mask: PlacedSurface,

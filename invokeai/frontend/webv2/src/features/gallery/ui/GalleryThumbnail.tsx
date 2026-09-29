@@ -1,7 +1,7 @@
 import type { GalleryItem, GalleryItemRef } from '@features/gallery/core/items';
 import type { GalleryThumbnailFit } from '@features/gallery/core/settings';
 
-import { Badge } from '@chakra-ui/react';
+import { Badge, chakra } from '@chakra-ui/react';
 import { useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { formatGalleryVideoDuration, toGalleryItemRef } from '@features/gallery/core/items';
@@ -14,11 +14,7 @@ import { useTranslation } from 'react-i18next';
 import { getGalleryItemDragData, getGalleryItemDragId } from './galleryDnd';
 import { GalleryTileFrame } from './GalleryTileFrame';
 
-/**
- * Desaturation is the touch drag cue: the tile while dragged, or while a
- * sustained hold has armed the drag gate (`data-drag-armed`, set by the
- * hold-to-drag sensor). The portalled preview carries the same filter.
- */
+/** Desaturate armed and active touch drags, including the portalled preview. */
 const THUMBNAIL_DRAG_CSS = { filter: 'saturate(0)' } as const;
 const THUMBNAIL_ARMED_CSS = { '&[data-drag-armed=true]': { filter: 'saturate(0)' } } as const;
 
@@ -30,6 +26,14 @@ const PREVIEW_IMAGE_STYLE = {
   objectFit: 'cover',
   width: '100%',
 } as const;
+
+/** Leaves room for the star button in the opposite corner. */
+const LABEL_MAX_WIDTH = 'calc(100% - 2.25rem)';
+/**
+ * A label that resolves mid-hover mounts already revealed; fade it in like the overlays it joins. Important
+ * because the tile's hover reveal outranks a single-class rule.
+ */
+const LABEL_CSS = { '@starting-style': { opacity: '0 !important' } } as const;
 
 const THUMBNAIL_BUTTON_STYLE = {
   background: 'transparent',
@@ -50,6 +54,7 @@ const GalleryThumbnail = ({
   dragItems,
   dragScope,
   fit,
+  getItemLabel,
   isPrimary,
   isSelected,
   item,
@@ -63,6 +68,8 @@ const GalleryThumbnail = ({
   /** Separates this gallery's drags from another instance showing the same item. */
   dragScope: string;
   fit: GalleryThumbnailFit;
+  /** Null while image-map labels are unavailable. */
+  getItemLabel: ((item: GalleryItemRef) => Promise<string | null>) | null;
   isPrimary: boolean;
   isSelected: boolean;
   item: GalleryItem;
@@ -79,10 +86,7 @@ const GalleryThumbnail = ({
     id: getGalleryItemDragId(toGalleryItemRef(item), 'gallery-grid', dragScope),
   });
 
-  // The preview is portalled from where the tile started rather than moved in
-  // place: the grid scrolls inside `overflow: hidden` and its virtual rows carry
-  // their own transform, so a moved tile is clipped as soon as it leaves the
-  // grid — which is most of the way to any board.
+  // Portal the drag preview to escape the grid's overflow clipping and transformed virtual rows.
   const tileRef = useRef<HTMLDivElement | null>(null);
   const [dragOrigin, setDragOrigin] = useState<DOMRect | null>(null);
 
@@ -154,6 +158,15 @@ const GalleryThumbnail = ({
     }
   }, []);
 
+  // Fetched on reveal rather than per rendered tile: labels cost a request each, and the cache makes repeat
+  // reveals free while still picking up a rebuilt vocabulary.
+  const [label, setLabel] = useState<string | null>(null);
+  const handleRevealLabel = useCallback(() => {
+    if (getItemLabel) {
+      void getItemLabel(toGalleryItemRef(item)).then(setLabel);
+    }
+  }, [getItemLabel, item]);
+
   const handleToggleStarred = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
       event.stopPropagation();
@@ -174,13 +187,11 @@ const GalleryThumbnail = ({
       item={item}
       opacity={isDragging ? 0.4 : undefined}
       role="listitem"
-      // Pan, don't drag: `none` would hand every touch-drag to the drag
-      // sensor before the browser could scroll the grid. Allowing the pan
-      // lets a moving finger scroll (the hold-to-drag sensor releases the
-      // gesture when the browser claims it); dragging still works after a
-      // sustained hold.
+      // Allow touch panning; the hold sensor yields to scrolling and arms drag only after a sustained hold.
       touchAction="pan-y"
       onContextMenu={handleContextMenu}
+      onFocus={handleRevealLabel}
+      onPointerEnter={handleRevealLabel}
     >
       <button
         aria-current={isPrimary ? 'true' : undefined}
@@ -203,6 +214,29 @@ const GalleryThumbnail = ({
           style={imageStyle}
         />
       </button>
+      {/* The compare role owns this corner while comparing. */}
+      {label && getItemLabel && !compareRole ? (
+        <Badge
+          // Hover-dependent and heuristic: keep it out of the tile's accessible text, which the name already covers.
+          aria-hidden="true"
+          className="gallery-thumb-overlay"
+          css={LABEL_CSS}
+          insetInlineStart="1"
+          maxW={LABEL_MAX_WIDTH}
+          opacity={0}
+          pointerEvents="none"
+          position="absolute"
+          size="xs"
+          top="1"
+          transition="opacity var(--wb-motion-duration-medium) ease"
+          variant="solid"
+          zIndex="1"
+        >
+          <chakra.span minW="0" truncate>
+            {label}
+          </chakra.span>
+        </Badge>
+      ) : null}
       {compareRole && (
         <Badge
           insetInlineStart="1"
@@ -248,10 +282,7 @@ const GalleryThumbnail = ({
   );
 };
 
-/**
- * Resolves the drag payload per item so the grid can hand down one stable
- * callback rather than an array prop that changes identity every render.
- */
+/** Resolve payloads per item so the grid passes one stable callback rather than recreated arrays. */
 export const GalleryThumbnailCell = ({
   getDragItems,
   item,

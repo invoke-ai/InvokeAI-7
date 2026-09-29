@@ -1,10 +1,4 @@
-/**
- * The shape generation policy speaks about an architecture.
- *
- * Split out of `baseGenerationPolicies.ts` so that `architectureCapabilities.ts` -- which maps the
- * backend's wire rows onto this shape -- and the policy accessors that consume it can both refer to
- * it without importing each other.
- */
+/** Shared types avoid a mapper/policy circular dependency. */
 
 export type SchedulerSetId = 'standard' | 'flow' | 'flow-no-lcm' | 'anima';
 
@@ -15,11 +9,7 @@ export type GuidanceLabel = 'CFG' | 'Guidance';
 export interface BaseGenerationConfig {
   dimensions: {
     grid: number;
-    /**
-     * The side of the model's optimal square canvas. Consumers square it back into an area
-     * (`importGalleryImages` passes `optimal ** 2` to `calculateNewSize`), so it is derived from
-     * the declared area rather than from width alone.
-     */
+    /** optimal is the square root of pixel area, not source width. */
     optimalSide: number;
   };
   defaults: {
@@ -31,11 +21,7 @@ export interface BaseGenerationConfig {
   schedulerSet: SchedulerSetId;
   schedulerAppliesToGraph: boolean;
   guidanceLabel: GuidanceLabel;
-  /**
-   * What the denoise node behind the single guidance control actually validates, not what the
-   * slider's track shows: `min` is a floor the node enforces (`0` where it enforces none, since no
-   * sampler here reads a negative guidance), `max` a ceiling, or `null` where the node has none.
-   */
+  /** Denoise validation bounds differ from the slider track; max=null means unbounded. */
   guidance: {
     min: number;
     max: number | null;

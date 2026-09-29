@@ -1,11 +1,7 @@
 /**
- * Per-group memoized document-space composites of composited groups (adjustment
- * stack, opacity, or blend mode). Keyed on the scope shape plus every drawn
- * member's cache version, appearance, and effective matrix (so a transform
- * session inside a composited group rebuilds per tick); the scope's own
- * opacity/blend land at draw time and stay out of the key. Accepted tradeoff:
- * document resolution, so transformed members resample twice and zoom > 100%
- * upscales the group surface.
+ * Document-space group composites cache scope shape and member versions, appearance and effective matrices. Own
+ * opacity/blend apply at draw time. Document-resolution buffers resample transformed members twice and upscale
+ * above 100% zoom.
  */
 
 import type { CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
@@ -167,8 +163,7 @@ export const createGroupSurfaceCache = (deps: GroupSurfaceDeps): GroupSurfaceCac
     ctx.clearRect(0, 0, rect.width, rect.height);
     const view: Mat2d = { a: 1, b: 0, c: 0, d: 1, e: -rect.x, f: -rect.y };
     drawRange(ctx, view, members, memberMatrices, excludeIds, baseIndex, scope.start, scope.end, scope.children);
-    // A group scoped only for opacity/blend has an identity stack: skip the
-    // full-surface pixel round trip.
+    // Opacity/blend-only groups have identity adjustments; skip pixel readback.
     if (!isIdentityAdjustments(scope.adjustments)) {
       const pixels = ctx.getImageData(0, 0, rect.width, rect.height);
       applyAdjustments(pixels, scope.adjustments);

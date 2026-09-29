@@ -13,13 +13,14 @@ let root: Root | null = null;
 
 const onChange = vi.fn();
 
-const renderField = async (value: string, isInvalid = false) => {
+const renderField = async (value: string, isInvalid = false, mode: 'metadata' | 'semantic' = 'metadata') => {
   await act(() =>
     root?.render(
       <ChakraProvider value={system}>
         <GallerySearchField
           ariaLabel="Search gallery items"
           isInvalid={isInvalid}
+          mode={mode}
           placeholder="Search items"
           value={value}
           onChange={onChange}
@@ -95,6 +96,14 @@ describe('getGallerySearchSegments', () => {
 });
 
 describe('GallerySearchField', () => {
+  it('draws no chips in semantic mode, where a token is just words', async () => {
+    await renderField('sunset from:7d', false, 'semantic');
+
+    expect(getChips()).toHaveLength(0);
+    expect(getMirror().textContent).toBe('sunset from:7d');
+    expect(getInput().closest('[data-mode]')?.getAttribute('data-mode')).toBe('semantic');
+  });
+
   it('renders a chip for the token and leaves the rest plain', async () => {
     await renderField('from:7d sunset');
 

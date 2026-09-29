@@ -24,10 +24,8 @@ export interface GalleryPickerScope {
 }
 
 /**
- * The picker's local view of the gallery: seeded from the Gallery widget's
- * values when the picker mounts (the popover unmounts on close, so mounting is
- * opening) and never written back. The search field serves whichever pane is
- * showing, so a pane switch clears it.
+ * Seed local scope on open without writing back. Clear search when switching panes because each pane interprets it
+ * differently.
  */
 export const useGalleryPickerScope = () => {
   const { galleryValues } = useGalleryUi();

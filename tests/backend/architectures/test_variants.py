@@ -27,16 +27,17 @@ from invokeai.backend.model_manager.taxonomy import (
     MistralVariantType,
     ModelType,
     Qwen3VariantType,
+    Qwen3VLVariantType,
     variant_type_adapter,
 )
 
-BASE_AGNOSTIC_VARIANT_ENUMS = frozenset({ClipVariantType, Qwen3VariantType, MistralVariantType})
+BASE_AGNOSTIC_VARIANT_ENUMS = frozenset({ClipVariantType, Qwen3VariantType, Qwen3VLVariantType, MistralVariantType})
 """Variant enums that cannot be declared by any architecture.
 
-All three sit on `base=Any` configs -- CLIP embedders, Qwen3 and Mistral text encoders are
-components shared across architectures, not architectures. `Any` is a sentinel the registry refuses to register, so
-these are named here to keep the completeness check against `AnyVariant` total rather than quietly
-partial.
+All four sit on `base=Any` configs -- CLIP embedders and the Qwen3, Qwen3-VL and Mistral text
+encoders are components shared across architectures, not architectures. `Any` is a sentinel the
+registry refuses to register, so these are named here to keep the completeness check against
+`AnyVariant` total rather than quietly partial.
 """
 
 

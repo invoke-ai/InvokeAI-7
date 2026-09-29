@@ -1,9 +1,9 @@
+import type { Logger, LogNamespace } from '@platform/logging/contracts';
 import type { SettingsContribution } from '@platform/ui/settings/contracts';
 import type { TFunction } from 'i18next';
 import type { ComponentType, ExoticComponent, JSXElementConstructor, SVGProps } from 'react';
 
 import type { DeferredResource, DeferredResourceStatus } from './deferredResource';
-import type { DeveloperLogNamespace } from './diagnostics/contracts';
 import type { GraphId } from './graphContracts';
 import type { InvocationSourceId } from './invocationContracts';
 import type { WidgetRegion } from './layoutContracts';
@@ -142,14 +142,8 @@ export interface WidgetRuntimeApi<State extends Record<string, unknown> = Record
 }
 
 export interface WidgetDiagnosticsApi {
-  logger: (namespace: DeveloperLogNamespace) => {
-    debug: (messageOrContext: string | Record<string, unknown>, message?: string) => void;
-    error: (messageOrContext: string | Record<string, unknown>, message?: string) => void;
-    fatal: (messageOrContext: string | Record<string, unknown>, message?: string) => void;
-    info: (messageOrContext: string | Record<string, unknown>, message?: string) => void;
-    trace: (messageOrContext: string | Record<string, unknown>, message?: string) => void;
-    warn: (messageOrContext: string | Record<string, unknown>, message?: string) => void;
-  };
+  /** A logger attributed to this widget instance and its project. */
+  logger: (namespace: LogNamespace) => Logger;
 }
 
 export interface WidgetRuntimeStateApi<State extends Record<string, unknown> = Record<string, unknown>> {
@@ -300,15 +294,7 @@ export interface WidgetManifest {
    * failure state, and retry; callers never invoke this directly.
    */
   load: () => Promise<WidgetImplementation>;
-  /**
-   * A singleton runtime the editor mounts once at boot, in its own chunk.
-   *
-   * Deliberately separate from `load`: hosts are data runtimes and dialog
-   * shells that must run whether or not the widget is on screen, so sharing a
-   * module with the view meant every boot paid for the view. Splitting the
-   * loader makes it impossible to declare an always-on part without giving it
-   * its own chunk.
-   */
+  /** Load always-on runtimes and dialog shells separately so boot does not download their widget views. */
   loadHost?: () => Promise<WidgetHost>;
   /** Shared definitions for the shell's quick controls and full settings dialog. */
   settings?: SettingsContribution;

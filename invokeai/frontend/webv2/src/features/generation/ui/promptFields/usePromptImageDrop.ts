@@ -6,10 +6,6 @@ import { useCallback, useId, useMemo, useState } from 'react';
 
 const DROP_DATA = { kind: 'prompt-image' } as const;
 
-/**
- * An image handed to the prompt box by a drag, waiting for the image-to-prompt
- * popover to pick it up.
- */
 export interface DroppedPromptImage {
   /** The dropped image, or null when the popover should follow the gallery selection. */
   image: GenerationSelectedImage | null;
@@ -25,12 +21,7 @@ export interface PromptImageDrop {
   setNodeRef: (element: HTMLElement | null) => void;
 }
 
-/**
- * Makes an element a drop target for a gallery image and holds what landed on
- * it. Dropping is the direct way to describe an image that is not the gallery's
- * current selection — the popover reads this in preference to that selection,
- * until it is done and clears it.
- */
+/** Dropped images override gallery selection until consumed and cleared. */
 export const usePromptImageDrop = ({ disabled = false }: { disabled?: boolean } = {}): PromptImageDrop => {
   const dropId = useId();
   const [image, setImage] = useState<GenerationSelectedImage | null>(null);

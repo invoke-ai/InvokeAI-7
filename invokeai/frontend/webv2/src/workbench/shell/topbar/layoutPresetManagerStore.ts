@@ -1,11 +1,7 @@
 import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
 
-/**
- * Open/close state for the layout preset manager. Addressable from anywhere the
- * `Manage presets` entry appears; the dialog itself is hosted once by the top
- * bar so opening it never depends on which menu is currently mounted.
- */
+/** Share preset-manager visibility across triggers; the topbar hosts one dialog independently of menu mounting. */
 interface LayoutPresetManagerSnapshot {
   deletePresetId: string | null;
   editPresetId: string | null;

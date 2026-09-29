@@ -19,12 +19,8 @@ import { useMemo, type ChangeEvent, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 /**
- * One box to add a node pack: a validated Git-URL install plus the manual
- * drop-in path. The typed source lives in the nodes UI store because the
- * detail tabs unmount their content — a tab flip must not lose it — and the
- * busy state is derived from the shared install log so a remount mid-install
- * still shows the install running. Validation mirrors the backend's rules so
- * a doomed source is rejected before the POST.
+ * Persist typed source and derive busy state from shared install activity so tab remounts preserve work; validate
+ * before POST.
  */
 export const AddNodesView = () => {
   const { t } = useTranslation();

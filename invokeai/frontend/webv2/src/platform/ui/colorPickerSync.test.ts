@@ -9,22 +9,16 @@ describe('shouldSyncExternalColor', () => {
   });
 
   it('does not sync when the external value changed to exactly what we last emitted (our own round trip)', () => {
-    // This is the grey-hue-loss scenario: the user drags the hue slider at
-    // S=0, we emit "#808080", the consumer stores it and passes it back as
-    // the new `value` prop -- that must not force a re-parse that would
-    // collapse the hue we're holding onto internally.
+    // Echoing grey hex must not discard the picker's hidden hue.
     expect(shouldSyncExternalColor('#808080', '#7f7f7f', '#808080', true)).toBe(false);
   });
 
   it('syncs an external change back to the last-emitted value once its echo was consumed', () => {
-    // An X swap and swap back lands on the color we last emitted long after
-    // the echo settled; with no emit outstanding this is a genuine change.
+    // After the echo settles, returning to the last emitted value is an independent change.
     expect(shouldSyncExternalColor('#808080', '#7f7f7f', '#808080', false)).toBe(true);
   });
 
   it('syncs when the external value changed to something other than what we last emitted', () => {
-    // A genuine external change (e.g. a programmatic reset, or a different
-    // control writing to the same underlying value) should still win.
     expect(shouldSyncExternalColor('#ff0000', '#808080', '#808080', true)).toBe(true);
   });
 
@@ -49,8 +43,6 @@ describe('shouldSyncExternalColor', () => {
   });
 
   it('syncs when only the alpha differs', () => {
-    // Under `withAlpha`, a consumer changing just the opacity is a real
-    // external change even though the RGB triplet is untouched.
     expect(shouldSyncExternalColor('#ff000080', '#ff0000ff', '#ff0000ff', true)).toBe(true);
   });
 
@@ -59,8 +51,7 @@ describe('shouldSyncExternalColor', () => {
   });
 
   it('passes non-hex values through without treating them as equal', () => {
-    // Fallback-verbatim normalization means unparseable values still compare
-    // as themselves rather than collapsing to a shared sentinel.
+    // Unparseable colors compare verbatim, not through a shared sentinel.
     expect(shouldSyncExternalColor('transparent', 'currentColor', 'currentColor', true)).toBe(true);
     expect(shouldSyncExternalColor('transparent', 'currentColor', 'transparent', true)).toBe(false);
   });

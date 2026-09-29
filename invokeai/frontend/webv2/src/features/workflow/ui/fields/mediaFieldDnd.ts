@@ -1,10 +1,5 @@
 import { isGalleryItemDragData } from '@features/gallery/utility';
 
-/**
- * Drop plumbing for the media (image/video) workflow field inputs: a gallery
- * item dragged onto a field's input row sets that field's value.
- */
-
 export type WorkflowMediaKind = 'image' | 'video';
 
 export interface WorkflowMediaDropItem {
@@ -23,12 +18,7 @@ export const getWorkflowMediaFieldDropItems = (
     ? activeData.items.map((item) => ({ kind, name: item.name }))
     : [];
 
-/**
- * Resolves a gallery drag payload to the single item a media field can accept,
- * or null. Multi-item drags are rejected outright: a single-value field
- * silently keeping only the first of several dragged items would misread the
- * user's intent.
- */
+/** Reject multi-item drags for single-value media fields instead of silently taking the first. */
 export const getWorkflowMediaFieldDropItem = (
   activeData: unknown,
   kind: WorkflowMediaKind

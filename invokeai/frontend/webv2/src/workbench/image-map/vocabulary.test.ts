@@ -96,8 +96,7 @@ describe('updateImageMapVocab rebuild watcher', () => {
     await updateImageMapVocab(['zebra', 'okapi']);
     await advancePolls(2);
 
-    // Two PUTs, one poll: the second save reused the live watcher, which acts
-    // on the final state rather than on which save produced it.
+    // Two saves share one watcher observing final rebuild state, not individual save identity.
     expect(mocks.apiFetchJson).toHaveBeenCalledTimes(3);
     expect(mocks.refetchClusterLabels).toHaveBeenCalledTimes(1);
   });

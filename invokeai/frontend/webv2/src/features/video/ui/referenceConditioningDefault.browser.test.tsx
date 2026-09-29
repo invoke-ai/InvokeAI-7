@@ -16,11 +16,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VideoReferenceListField } from './VideoReferenceListField';
 
 /**
- * The starting conditioning of an added video reference is decided from the resolved gallery
- * item's `mediaOrigin`. That decision is one call in one callback, and the helper behind it is
- * unit-tested on its own -- so without this test, deleting the call and hardcoding
- * `'video_audio'` again leaves the suite green while every wrapped audio upload silently goes
- * back to conditioning the model on a picture of its own waveform.
+ * Verify gallery mediaOrigin reaches conditioning defaults so wrapped audio cannot condition on its waveform
+ * image.
  */
 
 const galleryMocks = vi.hoisted(() => ({ resolve: vi.fn(), uploadVideo: vi.fn() }));
@@ -119,8 +116,6 @@ const addUploadedVideo = async (mediaOrigin?: string): Promise<VideoReferenceIte
     );
   });
 
-  // The video picker is the file input that also accepts audio -- audio uploads are how a
-  // wrapped waveform clip enters the list in the first place.
   const inputs = [...container.querySelectorAll<HTMLInputElement>('input[type="file"]')];
   const videoInput = inputs.find((input) => input.accept.includes('audio/*'));
 

@@ -41,12 +41,7 @@ const MACHINE_FORMAT: Record<ColorPickerFormat, 'rgba' | 'hsla' | 'hsba'> = {
   rgb: 'rgba',
 };
 
-/**
- * The checkerboard behind transparent colors. This is a CSS *length* (it drives
- * `background-size` on a conic gradient), not a size token — passing `"xs"`
- * yields an invalid `background-size` and the gradient renders once, stretched,
- * instead of tiling. Chakra's own default is `0.6rem`.
- */
+/** Checkerboard size must be a CSS length, not a Chakra size token. */
 const TRANSPARENCY_CHECK_SIZE = '0.5rem';
 
 const SWATCH_GROUP_CSS = {
@@ -185,8 +180,6 @@ export const ColorPicker = ({
   const [color, setColor] = useState<Color>(() => parseColor(value));
   const [lastEmittedValue, setLastEmittedValue] = useState(() => toEmitted(color));
 
-  // Sync external -> internal only when the prop genuinely changed to
-  // something other than our own emit's round trip (see `shouldSyncExternalColor`).
   if (value !== previousExternalValue) {
     setPreviousExternalValue(value);
     if (shouldSyncExternalColor(value, previousExternalValue, lastEmittedValue, isAwaitingEcho)) {
@@ -214,9 +207,7 @@ export const ColorPicker = ({
 
   const handleValueChange = useCallback(
     (details: ColorPickerValueChangeDetails) => {
-      // A swatch pick is both a change and a commit; Zag only reports the
-      // change, so `CommittingSwatch` arms the commit and it lands here in the
-      // right order.
+      // Zag emits only change for swatches; arm a commit so onChangeEnd follows onChange.
       const isCommit = isSwatchCommitArmed.current;
       isSwatchCommitArmed.current = false;
       emit(details.value, isCommit);
@@ -322,11 +313,7 @@ export const ColorPicker = ({
                   <Icon as={Pipette} boxSize="4" />
                 </IconButton>
               ) : canUseScreenEyeDropper ? (
-                // `EyeDropperTrigger` is a bare Ark part, not an IconButton —
-                // rendered directly it has no icon and drops `variant`/`size`
-                // onto the DOM as raw attributes, collapsing to a 0x0 button.
-                // `asChild` puts the machine's behavior on workbench chrome, so
-                // both eyedropper branches look identical.
+                // Use asChild with IconButton: Ark's bare trigger has no icon or workbench styling.
                 <ChakraColorPicker.EyeDropperTrigger asChild>
                   <IconButton aria-label={t('common.colorPicker.sampleFromScreen')} size="xs" variant="ghost">
                     <Icon as={Pipette} boxSize="4" />

@@ -40,11 +40,7 @@ export interface GeneratePresetRecord {
   values: Record<string, unknown>;
 }
 
-/**
- * Generation's UI port, grouped into sub-ports by backing concern. The context
- * is a dependency-direction port (the feature may not import workbench), not a
- * test seam; no second adapter is expected.
- */
+/** This port keeps Generation independent of Workbench. */
 export interface GenerationUiAdapter {
   CanvasGenerationSections: ComponentType;
   account: {
@@ -58,11 +54,7 @@ export interface GenerationUiAdapter {
     canManageSharedSystemPrompts: boolean;
   };
   gallery: {
-    /**
-     * Locate one image in the Gallery grid and put it in front of the user:
-     * the Gallery and Preview widgets come on screen and the grid lands on the
-     * image's board, page, and cell.
-     */
+    /** Raise Gallery/Preview and locate the image's board, page, and cell. */
     findImage(imageName: string): void;
     selectedImage: GenerationSelectedImage | null;
     touchImages(): void;
@@ -74,10 +66,7 @@ export interface GenerationUiAdapter {
     error: string | null;
     getBaseColorPalette(base: string): string;
     getBaseLabel(base: string): string;
-    /**
-     * Navigates to the model manager, which opens on Add Models by default;
-     * `modelType` pre-filters its starter catalog to the missing kind.
-     */
+    /** Apply the optional model-type filter when opening Add Models. */
     openManager(options?: { modelType?: string }): void;
     status: 'error' | 'idle' | 'loaded' | 'loading';
   };

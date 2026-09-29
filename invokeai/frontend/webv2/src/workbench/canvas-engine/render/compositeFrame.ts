@@ -55,48 +55,27 @@ export interface CompositeFrame {
     floatFrame: FloatingSelectionFrame | null,
     samPreview: SamPreviewState | null,
     /**
-     * The regions this frame must repaint, in their layers' local spaces, or
-     * `null` to repaint everything. Supplied by the render scheduler, which only
-     * produces a non-null value when every invalidation in the frame named the
-     * region it changed.
+     * Layer-local repaint regions; null means full repaint. Partial damage is valid only when every invalidation
+     * named its region.
      */
     damage?: LayerDamage[] | null
   ): void;
 }
 
 /**
- * Draws the document onto the screen surface.
- *
- * This is the expensive half of a frame and runs only when pixels, layer order
- * or the viewport actually changed — an overlay-only invalidation reuses the
- * last composite. Before drawing it works out which layers the frame really
- * demands (visible, in view, not isolated away) and kicks off rasterization for
- * any of those whose cache is stale; after drawing it enforces the surface
- * budget against exactly that set, so a layer the user is looking at is never
- * the one evicted.
- *
- * SAM isolation makes this frame describe one layer instead of the document:
- * the composite is narrowed to the isolated layer through `isolationLayerId`
- * and clipped to the preview rect, and every other in-flight embellishment — filter previews, the
- * staged candidate, the floating selection, transform overrides — is suppressed,
- * because none of them describe what the user is being asked to judge.
+ * Composite only for pixel/order/view changes. Rasterize demanded visible layers and protect them during post-draw
+ * eviction. SAM isolation restricts drawing and clipping to its layer/rect, suppressing unrelated previews, floats
+ * and transform overrides.
  */
 export const createCompositeFrame = (deps: CreateCompositeFrameDeps): CompositeFrame => {
   const { derivedSurfaceCache, diagnostics, layerCache, memory, previews, stores, transformOverrides, viewport } = deps;
 
   /**
-   * Ensures every layer this frame demands has a cache entry, and starts a
-   * rasterization for any that is stale.
-   *
-   * Creation must never resize an existing entry: a paint layer's live cache can
-   * have grown past its persisted content rect (fresh unflushed strokes), and
-   * shrinking it back to the contract size here would destroy those pixels. The
-   * rasterizer owns sizing the surface and placing its content rect.
+   * Create missing caches and rasterize stale ones, but never resize existing entries here: unflushed paint may
+   * exceed persisted bounds. Rasterization owns bounds changes.
    */
   const ensureLayerCaches = (doc: CanvasDocumentContractV3, activeFrameLayerIds: ReadonlySet<string>): void => {
     for (const layer of getDocumentLeaves(doc)) {
-      // The layer's rasterizable source: a raster/control `source`, or a mask
-      // layer's alpha bitmap viewed as a paint source (colorized at composite).
       if (!isLayerContributing(layer) || !renderableSourceOf(layer) || !activeFrameLayerIds.has(layer.id)) {
         continue;
       }
@@ -126,11 +105,7 @@ export const createCompositeFrame = (deps: CreateCompositeFrameDeps): CompositeF
     };
   };
 
-  /**
-   * Trims cached surfaces back inside the budget, protecting the layers this
-   * frame drew and anything pinned by in-flight background work. Runs after the
-   * composite so the frame the user is looking at is never the eviction victim.
-   */
+  /** Evict after drawing, protecting displayed layers and background-work pins. */
   const enforceBudget = (activeFrameLayerIds: ReadonlySet<string>): void => {
     deps.syncMemoryBaselines();
     const snapshot = memory.snapshot();
@@ -146,10 +121,7 @@ export const createCompositeFrame = (deps: CreateCompositeFrameDeps): CompositeF
       diagnostics
     );
     deps.syncMemoryBaselines();
-    // Prune version-keyed dependents for every evicted id (mirrors dropLayer):
-    // the evicted surface is gone, so its adjusted-surface memo and thumbnail
-    // state must not linger keyed to a version the re-rasterized entry will
-    // exceed (the cache floor keeps versions monotonic across the recreate).
+    // Eviction must prune adjusted-surface and thumbnail dependents; recreated cache versions remain monotonic.
     for (const id of evictedBaseLayerIds) {
       deps.deleteDerivedSurfaces(id);
       stores.thumbnailVersion.delete(id);
@@ -181,36 +153,19 @@ export const createCompositeFrame = (deps: CreateCompositeFrameDeps): CompositeF
       ensureLayerCaches(doc, activeFrameLayerIds);
 
       compositeDocument(screen, doc, layerCache, view, {
-        // Confines the clear, the checkerboard and every layer blit to the pixels
-        // that actually changed; `null` repaints the whole viewport.
         damage: isolatedGuard ? null : damage,
-        // Memoized adjusted surfaces for raster layers with brightness/contrast/
-        // saturation/curves. Memoized on the layer's cache version, so an idle
-        // frame costs nothing — but a live stroke bumps that version every tick,
-        // and the memo misses. What keeps that affordable is that the miss then
-        // refreshes only the band the stroke reported writing, rather than
-        // re-deriving from the whole layer (see adjustedSurfaceCache).
         adjustedSurface: deps.getAdjustedSurface,
         groupSurface: deps.getGroupSurface,
-        // The raster backend + mask fill tile resolver drive the mask colorize
-        // path (alpha stencil → source-in fill colour/pattern, above all layers).
         backend: deps.backend,
-        // Feed the cached checkerboard tile only while the toggle is ON; passing
-        // `null` renders transparent documents without a checkerboard.
         checkerboardTile: stores.checkerboard.get() ? deps.getCheckerboardTile() : null,
         clipRect: isolatedGuard && samPreview ? samPreview.rect : null,
         derivedSurfaces: derivedSurfaceCache,
         diagnostics,
         // Pixels in flight, drawn directly above the layer they were cut from.
         floatingSelection: isolatedGuard ? null : (floatFrame?.composite ?? null),
-        // Crisp + cheap when zoomed in (nearest-neighbor up-scale), smooth when
-        // shrinking (bilinear down-scale). See `shouldSmoothAtZoom`.
         imageSmoothing: shouldSmoothAtZoom(viewport.getZoom()),
         isolationLayerId: isolatedGuard?.layerId ?? null,
-        // Non-destructive control-filter previews, drawn in place of the layer's
-        // committed pixels. Snapshotted only when one is actually active — this
-        // runs every composite frame, so an unconditional copy would allocate a
-        // map per frame for the overwhelmingly common case of none.
+        // Snapshot filter previews only when active, avoiding an empty map allocation every frame.
         layerPreviews: !isolatedGuard && previews.filterCount() > 0 ? previews.filterSnapshot() : null,
         maskPatternTile: deps.getMaskPatternTile,
         // Screen frames are display-time: the region tint may draw.
@@ -232,8 +187,7 @@ export const createCompositeFrame = (deps: CreateCompositeFrameDeps): CompositeF
                 surface: stagedPreview.surface,
               }
             : null,
-        // While a text-edit session is open on a layer, skip it in the composite —
-        // the contenteditable portal shows its live text instead (avoids double-draw).
+        // Skip the edited text layer because its portal renders live content.
         skipLayerId: stores.textEditSession.get()?.layerId ?? null,
         transformOverrides: !isolatedGuard && transformOverrides.size > 0 ? transformOverrides : null,
       });

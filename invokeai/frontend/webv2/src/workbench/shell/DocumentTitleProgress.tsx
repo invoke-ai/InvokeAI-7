@@ -6,13 +6,7 @@ import { useTranslation } from 'react-i18next';
 
 import { DOCUMENT_TITLE_BASE, formatDocumentTitle } from './documentTitle';
 
-/**
- * Writes generation progress into the browser tab. Renders nothing — it is the
- * effect adapter for a piece of chrome React does not own.
- *
- * Percent is rounded before it reaches the title so a batch writes `document.title`
- * about a hundred times instead of once per progress frame.
- */
+/** Write rounded progress to document.title to avoid updating on every progress frame. */
 export const DocumentTitleProgress = () => {
   const { t } = useTranslation();
   const { progress, summary } = useActiveQueueProgress();

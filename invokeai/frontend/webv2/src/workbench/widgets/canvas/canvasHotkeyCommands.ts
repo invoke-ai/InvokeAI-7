@@ -43,11 +43,7 @@ const REORDER_KINDS: Record<string, LayerStackMoveKind> = {
   'canvas.layerToFront': 'front',
 };
 
-/**
- * Everything the canvas hotkey dispatcher reads or drives. The widget supplies
- * these from its render scope; keeping them as an explicit parameter is what
- * makes the ~35-command dispatch table testable without mounting React.
- */
+/** Pass hotkey dependencies explicitly so dispatch can be tested without mounting React. */
 export interface CanvasHotkeyContext {
   readonly document: CanvasDocumentContractV3;
   readonly engine: CanvasEngine | null;
@@ -146,8 +142,7 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
   }
 
   if (commandId === 'canvas.deleteSelected') {
-    // With a live pixel selection, Delete clears the selected PIXELS — the
-    // Photoshop meaning. Only with no selection does it delete the layer.
+    // Delete clears selected pixels before falling back to layer deletion.
     if (engine?.interaction.get('hasSelection')) {
       engine.selection.eraseSelection();
     } else if (engine && selected && !selectedFrozen) {
@@ -162,9 +157,7 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
   } else if (commandId === 'canvas.pasteImage') {
     ctx.pasteFromClipboard();
   } else if (commandId === 'canvas.toggleNonRasterLayers') {
-    // Hide, never disable: this is the "get the overlays out of my way" shortcut, and it must
-    // leave the generated image untouched. Hiding turns off the overlay roots; showing turns on
-    // every node hidden in its own right, so nothing stays gated behind a hidden group.
+    // Hide overlays without disabling generation content; showing restores individually hidden nodes too.
     const overlays = index.nodes.filter((entry) => isOverlayStack(entry.stack));
     const leaves = compileDocumentLeaves(document).filter((leaf) => isOverlayStack(leaf.stack));
     if (engine && leaves.length > 0) {
@@ -186,11 +179,7 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
       engine.layers.clearMask(selectedLayer.id);
     }
   } else if (commandId === 'canvas.undo') {
-    // Canvas undo/redo is engine-scoped: it drives the engine-owned pixel/
-    // structural history, NOT project-level (reducer) undo. When the canvas
-    // history is empty this is a no-op — it deliberately does not fall back to
-    // `undoProjectChange` (project undo keeps its own commands/hotkeys, e.g.
-    // the workflow editor's `workflows.undo`).
+    // Use engine pixel/structural history only; empty canvas history never falls back to project undo.
     engine?.history.undo();
   } else if (commandId === 'canvas.redo') {
     engine?.history.redo();
@@ -210,8 +199,7 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
     engine?.tools.setTool('eraser');
   } else if (commandId === 'canvas.tool.lasso') {
     if (engine) {
-      // Pressing the shortcut while already on the tool cycles its shape
-      // (Photoshop-style) rather than re-selecting the tool it is already on.
+      // Repeating the active tool shortcut cycles its shape.
       if (engine.interaction.get('activeTool') === 'lasso') {
         const lasso = engine.interaction.get('lassoOptions');
         engine.interaction.set('lassoOptions', {
@@ -299,12 +287,7 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
       ctx.reportPreparedCommit(ungroupLayers(engine, ctx.selectedLayerIds, t('widgets.canvas.commands.ungroupLayers')));
     }
   } else if (commandId === 'canvas.mergeDown') {
-    // Gate on the SAME predicate the layers panel's context menu uses to
-    // enable/disable its "Merge Down" item (`canMergeLayerDown`), so the hotkey
-    // can never fire where the menu would refuse — e.g. a mask layer selected,
-    // or a mask directly below the selection. `engine.layers.mergeLayerDown` also
-    // guards this itself (defense in depth for callers other than this hotkey),
-    // but checking here keeps the two surfaces visibly in lockstep.
+    // Share canMergeLayerDown with the layer menu so shortcuts respect identical eligibility.
     if (engine && selectedLayer && canMergeLayerDown(document, selectedLayer.id, true)) {
       engine.layers.mergeLayerDown(selectedLayer.id);
     }
