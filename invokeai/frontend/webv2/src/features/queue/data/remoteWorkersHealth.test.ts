@@ -5,7 +5,6 @@ const transport = vi.hoisted(() => ({ apiFetchJson: vi.fn() }));
 vi.mock('@platform/transport/http', () => transport);
 
 import {
-  getOnlineRemoteWorkerUrls,
   invalidateRemoteWorkerHealth,
   refreshRemoteWorkerHealth,
   remoteWorkersHealthStore,
@@ -22,7 +21,7 @@ import {
 const worker1 = 'http://192.168.1.101:9090';
 const worker2 = 'http://192.168.1.102:9090';
 
-describe('Remote worker availability', () => {
+describe('Remote worker health', () => {
   beforeEach(() => {
     accountLifecycle.activate('worker-health-test-user');
     setRemoteWorkersSettings({
@@ -40,7 +39,7 @@ describe('Remote worker availability', () => {
     await refreshRemoteWorkerHealth([worker1, worker2]);
 
     expect(transport.apiFetchJson).not.toHaveBeenCalled();
-    expect(getOnlineRemoteWorkerUrls([worker1, worker2])).toEqual([]);
+    expect(remoteWorkersHealthStore.getSnapshot().byUrl).toEqual({});
   });
 
   it('does not ping a worker disabled with its power toggle', async () => {
@@ -52,7 +51,7 @@ describe('Remote worker availability', () => {
     expect(transport.apiFetchJson).toHaveBeenCalledTimes(1);
     expect(String(transport.apiFetchJson.mock.calls[0]?.[0])).toContain(encodeURIComponent(worker2));
     expect(remoteWorkersHealthStore.getSnapshot().byUrl[worker1]).toBeUndefined();
-    expect(getOnlineRemoteWorkerUrls([worker1, worker2])).toEqual([worker2]);
+    expect(remoteWorkersHealthStore.getSnapshot().byUrl[worker2]?.status).toBe('online');
   });
 
   it('ignores an in-flight result if the worker is disabled before it completes', async () => {
@@ -70,20 +69,19 @@ describe('Remote worker availability', () => {
     finish({ status: 'online' });
     await pending;
 
-    expect(getOnlineRemoteWorkerUrls([worker1])).toEqual([]);
     expect(remoteWorkersHealthStore.getSnapshot().byUrl[worker1]?.status).not.toBe('online');
   });
 
-  it('excludes an offline worker and automatically makes it eligible after recovery', async () => {
+  it('reports an offline worker online after recovery', async () => {
     transport.apiFetchJson.mockResolvedValueOnce({ status: 'offline' }).mockResolvedValueOnce({ status: 'online' });
 
     await refreshRemoteWorkerHealth([worker1]);
-    expect(getOnlineRemoteWorkerUrls([worker1])).toEqual([]);
+    expect(remoteWorkersHealthStore.getSnapshot().byUrl[worker1]?.status).toBe('offline');
 
     remoteWorkersHealthStore.setSnapshot({ byUrl: { [worker1]: { status: 'offline', checkedAt: 0 } } });
     await refreshRemoteWorkerHealth([worker1]);
 
-    expect(getOnlineRemoteWorkerUrls([worker1])).toEqual([worker1]);
+    expect(remoteWorkersHealthStore.getSnapshot().byUrl[worker1]?.status).toBe('online');
   });
 
   it('stores the disabled choice per URL and retains it across the global toggle', () => {
@@ -113,7 +111,7 @@ describe('Remote worker availability', () => {
     await refreshRemoteWorkerHealth([worker1]);
 
     expect(transport.apiFetchJson).toHaveBeenCalledTimes(1);
-    expect(getOnlineRemoteWorkerUrls([worker1])).toEqual([worker1]);
+    expect(remoteWorkersHealthStore.getSnapshot().byUrl[worker1]?.status).toBe('online');
   });
 
   it('does not mark a worker online when its saved login is rejected', async () => {
@@ -121,7 +119,6 @@ describe('Remote worker availability', () => {
 
     await refreshRemoteWorkerHealth([worker1]);
 
-    expect(getOnlineRemoteWorkerUrls([worker1])).toEqual([]);
     expect(remoteWorkersHealthStore.getSnapshot().byUrl[worker1]?.status).toBe('login_required');
   });
 
@@ -145,6 +142,6 @@ describe('Remote worker availability', () => {
     finish({ status: 'online' });
     await pending;
 
-    expect(getOnlineRemoteWorkerUrls([worker1])).toEqual([]);
+    expect(remoteWorkersHealthStore.getSnapshot().byUrl[worker1]).toBeUndefined();
   });
 });

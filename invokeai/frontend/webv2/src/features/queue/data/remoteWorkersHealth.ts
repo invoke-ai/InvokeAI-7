@@ -27,19 +27,6 @@ registerAccountOwnedResource({
   },
 });
 
-/** Only a recent, authenticated, successfully contacted worker can receive a new job. */
-export const getOnlineRemoteWorkerUrls = (urls: readonly string[]): string[] => {
-  if (!getRemoteWorkersSettings().enabled) {
-    return [];
-  }
-  const now = Date.now();
-  const { byUrl } = remoteWorkersHealthStore.getSnapshot();
-  return urls.filter((url) => {
-    const health = byUrl[url];
-    return isRemoteWorkerEnabled(url) && health?.status === 'online' && now - health.checkedAt < HEALTH_STALE_MS;
-  });
-};
-
 /**
  * Discards cached/in-flight health for one worker after its authentication changes.
  * Any older probe may still finish at the transport layer, but its result cannot
