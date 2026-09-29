@@ -342,6 +342,11 @@ class RemoteInvokeClient:
         encoded = urllib.parse.quote(str(key), safe="")
         return self._request_json("GET", f"/api/v2/models/i/{encoded}")
 
+    def get_model_layout(self, key: str) -> dict[str, Any]:
+        """Return the Remote Workers layout signature for one registered model."""
+        encoded = urllib.parse.quote(str(key), safe="")
+        return self._request_json("GET", f"/api/v1/remote_workers/models/{encoded}/layout")
+
     def get_model_by_hash(self, model_hash: str) -> dict[str, Any] | None:
         """Return the remote model record with this content hash, or None when it is absent."""
         encoded = urllib.parse.quote(str(model_hash), safe="")
@@ -403,6 +408,7 @@ class RemoteInvokeClient:
         self,
         graph: dict[str, Any],
         missing_model_handler: Callable[[dict[str, Any]], None] | None = None,
+        model_match_validator: Callable[[dict[str, Any], dict[str, Any]], bool] | None = None,
     ) -> list[str]:
         """Replace local model keys with the matching remote installation keys.
 
@@ -413,6 +419,9 @@ class RemoteInvokeClient:
         If ``missing_model_handler`` is supplied, it is called once for a required model
         that cannot be found remotely. The handler may transfer/install the model; resolution
         is then retried before the graph is rejected.
+
+        ``model_match_validator`` can reject a same-hash candidate when installation-local
+        details (such as directory layout) are incompatible with the primary model.
         """
         remote_models = self.list_models()
         details_cache: dict[str, dict[str, Any]] = {}
@@ -443,12 +452,25 @@ class RemoteInvokeClient:
                     result[k] = detail[k]
             return result
 
+        def candidate_is_compatible(value: dict[str, Any], detail: dict[str, Any]) -> bool:
+            local_hash = str(value.get("hash") or "").strip()
+            if model_match_validator is None or not local_hash:
+                return True
+            return bool(model_match_validator(deepcopy(value), self._model_payload(detail)))
+
         def resolve(value: dict[str, Any]) -> dict[str, Any] | None:
             local_hash = str(value.get("hash") or "").strip()
             if local_hash:
-                by_hash = self.get_model_by_hash(local_hash)
-                if by_hash is not None:
-                    return by_hash
+                # Do not use /get_by_hash here: that endpoint returns only the first
+                # record, but multiple installs can legitimately share a weight hash
+                # while having different directory layouts.
+                for model in remote_models:
+                    payload = self._model_payload(model)
+                    if str(payload.get("hash") or "").strip() != local_hash:
+                        continue
+                    detail = detail_for(model)
+                    if candidate_is_compatible(value, detail):
+                        return detail
 
             local_name = value.get("name")
             local_base = value.get("base")
@@ -456,9 +478,9 @@ class RemoteInvokeClient:
             candidates = [
                 model
                 for model in remote_models
-                if model.get("name") == local_name
-                and model.get("base") == local_base
-                and model.get("type") == local_type
+                if self._model_payload(model).get("name") == local_name
+                and self._model_payload(model).get("base") == local_base
+                and self._model_payload(model).get("type") == local_type
             ]
             verified: list[dict[str, Any]] = []
             for candidate in candidates:
@@ -466,6 +488,8 @@ class RemoteInvokeClient:
                 payload = self._model_payload(detail)
                 remote_hash = str(payload.get("hash") or "").strip()
                 if local_hash and remote_hash and local_hash != remote_hash:
+                    continue
+                if not candidate_is_compatible(value, detail):
                     continue
                 verified.append(detail)
 

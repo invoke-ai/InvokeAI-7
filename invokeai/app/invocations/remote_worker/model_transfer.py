@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import mimetypes
 import secrets
 import socket
@@ -28,6 +29,27 @@ class LocalModelFile:
 def _enum_value(value: Any) -> str:
     raw = getattr(value, "value", value)
     return "" if raw is None else str(raw)
+
+
+def model_layout_signature(path: Path) -> tuple[str, str]:
+    """Return a cheap, cross-platform signature of a model's on-disk layout.
+
+    InvokeAI's model hash intentionally hashes model weight contents but not their
+    relative paths or tokenizer/config files. For directories, this signature hashes
+    the sorted relative path of every regular file so two installs with identical
+    weights but incompatible directory layouts do not compare as equivalent.
+    """
+    if path.is_file():
+        return "file", ""
+    if not path.is_dir():
+        raise ModelTransferError(f"Model path is not a file or directory: {path}")
+
+    digest = hashlib.sha256()
+    for child in sorted((entry for entry in path.rglob("*") if entry.is_file()), key=lambda entry: entry.as_posix()):
+        relative = child.relative_to(path).as_posix()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+    return "directory", digest.hexdigest()
 
 
 def resolve_local_model_file(services: Any, identifier: dict[str, Any]) -> LocalModelFile:

@@ -5,6 +5,7 @@ Only a saved/not-saved indicator and email are returned; no passwords or JWTs.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import HTTPException, Query
@@ -26,6 +27,7 @@ from invokeai.app.invocations.remote_worker.diffusers_transfer import (
     get_directory_install_job,
     start_directory_install,
 )
+from invokeai.app.invocations.remote_worker.model_transfer import model_layout_signature
 from invokeai.app.invocations.remote_worker.remote_client import RemoteConfig, RemoteInvokeClient, RemoteInvokeError
 
 remote_workers_router = APIRouter(prefix="/v1/remote_workers", tags=["remote_workers"])
@@ -157,6 +159,31 @@ def remove_remote_worker_credentials(
         return RemoteWorkerCredentialStatus(saved=False)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+class RemoteModelLayout(BaseModel):
+    kind: Literal["file", "directory"]
+    signature: str
+
+
+@remote_workers_router.get("/models/{key}/layout", response_model=RemoteModelLayout)
+def get_remote_model_layout(current_user: CurrentUserOrDefault, key: str) -> RemoteModelLayout:
+    """Return a non-secret signature of one registered model's file layout."""
+    services = ApiDependencies.invoker.services
+    try:
+        config = services.model_manager.store.get_model(key)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Model not found") from exc
+
+    model_path = Path(str(getattr(config, "path", "") or ""))
+    if not model_path.is_absolute():
+        model_path = Path(services.configuration.models_path) / model_path
+    model_path = model_path.resolve()
+    if not model_path.exists():
+        raise HTTPException(status_code=404, detail="Model files not found")
+
+    kind, signature = model_layout_signature(model_path)
+    return RemoteModelLayout(kind=kind, signature=signature)
 
 
 @remote_workers_router.post("/diffusers/install")

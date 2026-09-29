@@ -7,6 +7,7 @@ from invokeai.app.invocations.remote_worker.early_dispatch import AUTOMATIC_REMO
 from invokeai.app.invocations.remote_worker.model_transfer import (
     ModelTransferError,
     TemporaryModelServer,
+    model_layout_signature,
     resolve_local_model_file,
 )
 from invokeai.app.invocations.remote_worker.model_transfer_state import (
@@ -92,6 +93,53 @@ class RemoteModelTransferCancelled(CanceledException):
     """The local generation was canceled while preparing a worker model."""
 
 
+def _remote_model_matches_local(
+    remote_client: RemoteInvokeClient,
+    model: Any,
+    candidate: dict[str, Any],
+    expected_layout: tuple[str, str] | None = None,
+) -> bool:
+    """True only when a same-hash remote record also has a compatible on-disk layout."""
+    payload = candidate.get("model") if isinstance(candidate.get("model"), dict) else candidate
+    if str(payload.get("hash") or "").strip() != model.hash:
+        return False
+
+    # A single model file has no subdirectory layout to validate; the content hash
+    # already identifies its bytes.
+    if model.path.is_file():
+        return True
+
+    key = str(payload.get("key") or "").strip()
+    if not key:
+        return False
+    local_kind, local_signature = expected_layout or model_layout_signature(model.path)
+    try:
+        remote_layout = remote_client.get_model_layout(key)
+    except RemoteInvokeError as exc:
+        if "HTTP 404" in str(exc):
+            return False
+        raise
+    return (
+        str(remote_layout.get("kind") or "") == local_kind
+        and str(remote_layout.get("signature") or "") == local_signature
+    )
+
+
+def _find_compatible_remote_model(remote_client: RemoteInvokeClient, model: Any) -> dict[str, Any] | None:
+    """Find a remote copy matching the model hash and, for directories, its on-disk layout."""
+    if model.path.is_file():
+        return remote_client.get_model_by_hash(model.hash)
+
+    expected_layout = model_layout_signature(model.path)
+    for candidate in remote_client.list_models():
+        payload = candidate.get("model") if isinstance(candidate.get("model"), dict) else candidate
+        if str(payload.get("hash") or "").strip() != model.hash:
+            continue
+        if _remote_model_matches_local(remote_client, model, candidate, expected_layout):
+            return candidate
+    return None
+
+
 def _transfer_missing_model_to_remote(
     *,
     context: InvocationContext,
@@ -108,7 +156,7 @@ def _transfer_missing_model_to_remote(
     except ModelTransferError as exc:
         raise RemoteInvokeError(str(exc)) from exc
 
-    existing = remote_client.get_model_by_hash(model.hash)
+    existing = _find_compatible_remote_model(remote_client, model)
     if existing is not None:
         return
 
@@ -237,7 +285,7 @@ def _transfer_missing_model_to_remote(
                 raise RemoteModelTransferCancelled("Remote model transfer cancelled")
             lock_acquired = transfer.shared_lock.acquire(timeout=0.25)
         check_cancellation()
-        if remote_client.get_model_by_hash(model.hash) is not None:
+        if _find_compatible_remote_model(remote_client, model) is not None:
             return
         check_cancellation()
         _emit_model_transfer_progress(
@@ -317,7 +365,7 @@ def _transfer_missing_model_to_remote(
             context.logger.info(f"Remote #{remote_index}: model install job {job_id} completed with status {status}")
 
         check_cancellation()
-        installed = remote_client.get_model_by_hash(model.hash)
+        installed = _find_compatible_remote_model(remote_client, model)
         check_cancellation()
         if installed is None:
             raise RemoteInvokeError(
@@ -334,7 +382,7 @@ def _transfer_missing_model_to_remote(
         )
         remote_payload = installed.get("model") if isinstance(installed.get("model"), dict) else installed
         context.logger.info(
-            f"Remote #{remote_index}: verified transferred model '{model.name}' by hash; "
+            f"Remote #{remote_index}: verified transferred model '{model.name}' by hash/layout; "
             f"remote key={remote_payload.get('key', 'unknown')}"
         )
     except RemoteModelTransferCancelled:

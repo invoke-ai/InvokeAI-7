@@ -551,10 +551,12 @@ def _dispatch_remote(
     settings: PoolSettings,
     worker: WorkerSpec,
 ) -> tuple[Any, int, str, list[str], list[str]]:
+    from invokeai.app.invocations.remote_worker.model_transfer import resolve_local_model_file
     from invokeai.app.invocations.remote_worker.remote_nodes import (
         RemoteModelTransferCancelled,
         _graph_media_references,
         _remote_client,
+        _remote_model_matches_local,
         _transfer_missing_model_to_remote,
         _transfer_source_images_to_remote,
         _transfer_source_videos_to_remote,
@@ -581,8 +583,22 @@ def _dispatch_remote(
                 timeout_seconds=settings.model_transfer_timeout_seconds,
             )
 
+    local_models: dict[str, Any] = {}
+
+    def model_match_validator(identifier: dict[str, Any], candidate: dict[str, Any]) -> bool:
+        local_key = str(identifier.get("key") or "")
+        model = local_models.get(local_key)
+        if model is None:
+            model = resolve_local_model_file(context._services, identifier)
+            local_models[local_key] = model
+        return _remote_model_matches_local(client, model, candidate)
+
     try:
-        client.remap_model_identifiers(graph, missing_model_handler=missing_handler)
+        client.remap_model_identifiers(
+            graph,
+            missing_model_handler=missing_handler,
+            model_match_validator=model_match_validator,
+        )
     except RemoteModelTransferCancelled:
         raise
 
