@@ -3,7 +3,6 @@ import type { ChangeEvent } from 'react';
 
 import { Badge, Box, Button, HStack, Input, NativeSelect, Stack, Switch, Text, Textarea } from '@chakra-ui/react';
 import {
-  getRemoteWorkerName,
   getRemoteWorkerUrls,
   invalidateRemoteWorkerHealth,
   refreshRemoteWorkerHealth,
@@ -50,12 +49,15 @@ interface CredentialStatus {
 }
 
 /** The password never enters queue settings, localStorage, or the workflow graph. */
-const WorkerAuthRow = ({ enabled, name, slot, url }: { enabled: boolean; name: string; slot: number; url: string }) => {
+const WorkerAuthRow = ({ enabled, slot, url }: { enabled: boolean; slot: number; url: string }) => {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const workerEnabled = remoteWorkersStore.useSelector(
     (settings) => !settings.disabledWorkerUrls.includes(url.toLowerCase())
   );
+  const savedName = remoteWorkersStore.useSelector((settings) => settings.workerNames[url.toLowerCase()]?.trim() ?? '');
+  const defaultName = t('widgets.remoteWorkers.worker.defaultName', { slot });
+  const name = savedName || defaultName;
   const availability = remoteWorkersHealthStore.useSnapshot().byUrl[url]?.status ?? 'checking';
   const availabilityLabel = !workerEnabled
     ? t('widgets.remoteWorkers.status.disabled')
@@ -114,11 +116,15 @@ const WorkerAuthRow = ({ enabled, name, slot, url }: { enabled: boolean; name: s
   const handlePasswordChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     setPassword(event.target.value);
   }, []);
-  const handleNameChange = useCallback(
+  const handleNameBlur = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
-      setRemoteWorkerName(url, event.target.value);
+      const value = event.currentTarget.value;
+      setRemoteWorkerName(url, value);
+      if (!value.trim()) {
+        event.currentTarget.value = defaultName;
+      }
     },
-    [url]
+    [defaultName, url]
   );
   const refreshHealthAfterCredentialChange = useCallback(() => {
     invalidateRemoteWorkerHealth(url);
@@ -249,10 +255,11 @@ const WorkerAuthRow = ({ enabled, name, slot, url }: { enabled: boolean; name: s
         <Stack gap="2" pb="2" pt="2" px="1">
           <Input
             aria-label={t('widgets.remoteWorkers.worker.nameLabel', { slot })}
-            onChange={handleNameChange}
-            placeholder={t('widgets.remoteWorkers.worker.defaultName', { slot })}
+            key={`${url}:${savedName}:${defaultName}`}
+            defaultValue={name}
+            onBlur={handleNameBlur}
+            placeholder={defaultName}
             size="sm"
-            value={name}
           />
           <Badge alignSelf="start" colorPalette={saved ? 'green' : 'gray'} variant="subtle">
             {checkingLogin
@@ -391,13 +398,7 @@ export const RemoteWorkersWidgetView = (_props: WidgetViewProps) => {
           ) : (
             <Stack gap="1">
               {urls.map((url, index) => (
-                <WorkerAuthRow
-                  enabled={settings.enabled}
-                  key={`${accountId}:${url}`}
-                  name={getRemoteWorkerName(url, index)}
-                  slot={index + 1}
-                  url={url}
-                />
+                <WorkerAuthRow enabled={settings.enabled} key={`${accountId}:${url}`} slot={index + 1} url={url} />
               ))}
             </Stack>
           )}
