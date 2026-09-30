@@ -34,7 +34,7 @@ export const QueueItemRow = memo(
     const meta = extractGenerationMeta(item);
     const duration = formatDuration(item.startedAt, item.completedAt);
     const age = formatCompactAge(item.completedAt ?? item.createdAt);
-    const ageLabel = [duration, age].filter(Boolean).join(' Â· ');
+    const ageLabel = [duration, age].filter(Boolean).join(' · ');
     const isFailed = item.status === 'failed';
     const isCancellable = (item.status === 'pending' || item.status === 'in_progress') && canManageItem(item);
     const canExpand = canViewItemDetails(item);
@@ -91,7 +91,7 @@ export const QueueItemRow = memo(
                     (deviceLabel ? t('widgets.queue.device.shortLabel', { index: deviceLabel.index }) : null),
                 ]
                   .filter(Boolean)
-                  .join(' Â· ')}
+                  .join(' · ')}
               </Text>
             </HStack>
           }

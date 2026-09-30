@@ -834,7 +834,7 @@ const LivePreview = ({
   // Use the followed slot's own frame so another slot's progress or release cannot replace it.
   const progressImage = useQueueItemProgressImage(placeholder.queueItemId, placeholder.itemIndex);
   // The previous slot's last frame stands in until this slot produces one of
-  // its own (model load, text encoding) â€” otherwise a sequential batch drops
+  // its own (model load, text encoding) — otherwise a sequential batch drops
   // to an empty card between items.
   const bridgeProgressImage = useQueueItemBridgeProgressImage(placeholder.queueItemId);
   const previewImage = useStreamingImageSource({
