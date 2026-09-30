@@ -21,6 +21,8 @@ KNOWN_IMPORT_ERRORS = {
     "invokeai.backend.image_util.normal_bae.nets.submodules.efficientnet_repo.hubconf",
     "invokeai.backend.quantization.bnb_nf4",
     "invokeai.backend.quantization.bnb_llm_int8",
+    # mediapipe has no Windows ARM64 build; this module is imported lazily by the face nodes.
+    "invokeai.backend.image_util.mediapipe_face.mediapipe_face_common",
 }
 
 

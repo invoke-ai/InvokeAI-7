@@ -4,7 +4,7 @@ try:
     from bitsandbytes.nn.modules import Params4bit
 
     bnb_available: bool = True
-except ImportError:
+except (ImportError, OSError, RuntimeError):  # bnb may import and then fail loading its native library
     bnb_available: bool = False
 
 

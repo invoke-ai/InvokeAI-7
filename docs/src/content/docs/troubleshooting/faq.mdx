@@ -46,6 +46,10 @@ Follow the same steps to scan and import the missing models.
 
 This can be safely ignored. Invoke doesn't use Triton, but if you are on Linux and wish to dismiss the error, you can install Triton.
 
+## No ffmpeg exe could be found (Windows on ARM64)
+
+Video nodes and video thumbnails use `ffmpeg`. On every other platform the `imageio-ffmpeg` package bundles the binary; it has no Windows ARM64 build, so on ARM64 Invoke uses the `ffmpeg` on your `PATH`. Install one (an x64 build runs under Windows' emulation) or point the `IMAGEIO_FFMPEG_EXE` environment variable at an `ffmpeg.exe`, then restart Invoke.
+
 ## Unable to Copy on Firefox
 
 Firefox does not allow Invoke to directly access the clipboard by default. As a result, you may be unable to use certain copy functions. You can fix this by configuring Firefox to allow access to write to the clipboard:
