@@ -19,6 +19,7 @@ import { captureAccountScope } from '@platform/state/accountLifecycle';
 import { apiFetchJson, getApiErrorMessage } from '@platform/transport/http';
 import { ChevronDownIcon, ChevronUpIcon, PencilIcon, PowerIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 const handleEnabledChange = (details: { checked: boolean }): void => {
   setRemoteWorkersSettings({ enabled: details.checked });
@@ -51,20 +52,21 @@ interface CredentialStatus {
 
 /** The password never enters queue settings, localStorage, or the workflow graph. */
 const WorkerAuthRow = ({ enabled, name, slot, url }: { enabled: boolean; name: string; slot: number; url: string }) => {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const workerEnabled = isRemoteWorkerEnabled(url);
   const availability = remoteWorkersHealthStore.useSnapshot().byUrl[url]?.status ?? 'checking';
   const availabilityLabel = !workerEnabled
-    ? 'Disabled'
+    ? t('widgets.remoteWorkers.status.disabled')
     : !enabled
-      ? 'Paused'
+      ? t('widgets.remoteWorkers.status.paused')
       : availability === 'online'
-        ? 'Online'
+        ? t('widgets.remoteWorkers.status.online')
         : availability === 'offline'
-          ? 'Offline'
+          ? t('widgets.remoteWorkers.status.offline')
           : availability === 'login_required'
-            ? 'Login required'
-            : 'Checking';
+            ? t('widgets.remoteWorkers.status.loginRequired')
+            : t('widgets.remoteWorkers.status.checking');
   const availabilityColor =
     !workerEnabled || !enabled
       ? 'gray'
@@ -97,13 +99,13 @@ const WorkerAuthRow = ({ enabled, name, slot, url }: { enabled: boolean; name: s
       .catch((error: unknown) => {
         if (active) {
           setCheckingLogin(false);
-          setMessage(getApiErrorMessage(error, 'Could not load saved login status'));
+          setMessage(getApiErrorMessage(error, t('widgets.remoteWorkers.login.loadError')));
         }
       });
     return () => {
       active = false;
     };
-  }, [url]);
+  }, [t, url]);
 
   const handleEmailChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     setEmail(event.target.value);
@@ -135,13 +137,13 @@ const WorkerAuthRow = ({ enabled, name, slot, url }: { enabled: boolean; name: s
       setEmail(status.email ?? '');
       setPassword('');
       refreshHealthAfterCredentialChange();
-      setMessage('Login saved on this InvokeAI server.');
+      setMessage(t('widgets.remoteWorkers.login.savedMessage'));
     } catch (error) {
-      setMessage(getApiErrorMessage(error, 'Could not save worker login'));
+      setMessage(getApiErrorMessage(error, t('widgets.remoteWorkers.login.saveError')));
     } finally {
       setBusy(false);
     }
-  }, [url, email, password, refreshHealthAfterCredentialChange]);
+  }, [url, email, password, refreshHealthAfterCredentialChange, t]);
   const handleRemove = useCallback(async () => {
     setBusy(true);
     setMessage('');
@@ -153,13 +155,13 @@ const WorkerAuthRow = ({ enabled, name, slot, url }: { enabled: boolean; name: s
       setEmail('');
       setPassword('');
       refreshHealthAfterCredentialChange();
-      setMessage('Saved login removed.');
+      setMessage(t('widgets.remoteWorkers.login.removedMessage'));
     } catch (error) {
-      setMessage(getApiErrorMessage(error, 'Could not remove worker login'));
+      setMessage(getApiErrorMessage(error, t('widgets.remoteWorkers.login.removeError')));
     } finally {
       setBusy(false);
     }
-  }, [url, refreshHealthAfterCredentialChange]);
+  }, [url, refreshHealthAfterCredentialChange, t]);
 
   const toggleExpanded = useCallback(() => setExpanded((open) => !open), []);
   const toggleWorkerEnabled = useCallback(() => setRemoteWorkerEnabled(url, !workerEnabled), [url, workerEnabled]);
@@ -169,7 +171,7 @@ const WorkerAuthRow = ({ enabled, name, slot, url }: { enabled: boolean; name: s
       <HStack align="center" gap="1">
         <Button
           aria-expanded={expanded}
-          aria-label={`Remote worker ${slot} settings`}
+          aria-label={t('widgets.remoteWorkers.worker.settings', { slot })}
           color="fg"
           flex="1"
           h="auto"
@@ -200,7 +202,12 @@ const WorkerAuthRow = ({ enabled, name, slot, url }: { enabled: boolean; name: s
           </Badge>
         </Button>
         <Button
-          aria-label={`${workerEnabled ? 'Disable' : 'Enable'} remote worker ${slot} for new jobs`}
+          aria-label={t(
+            workerEnabled
+              ? 'widgets.remoteWorkers.worker.disableForNewJobs'
+              : 'widgets.remoteWorkers.worker.enableForNewJobs',
+            { slot }
+          )}
           aria-pressed={workerEnabled}
           color={workerEnabled ? 'green.400' : 'fg.muted'}
           h="7"
@@ -208,7 +215,12 @@ const WorkerAuthRow = ({ enabled, name, slot, url }: { enabled: boolean; name: s
           onClick={toggleWorkerEnabled}
           px="0"
           size="xs"
-          title={`${workerEnabled ? 'Disable' : 'Enable'} remote worker ${slot} for new jobs`}
+          title={t(
+            workerEnabled
+              ? 'widgets.remoteWorkers.worker.disableForNewJobs'
+              : 'widgets.remoteWorkers.worker.enableForNewJobs',
+            { slot }
+          )}
           type="button"
           variant="ghost"
         >
@@ -216,7 +228,10 @@ const WorkerAuthRow = ({ enabled, name, slot, url }: { enabled: boolean; name: s
         </Button>
         <Button
           aria-expanded={expanded}
-          aria-label={`${expanded ? 'Collapse' : 'Expand'} remote worker ${slot} settings`}
+          aria-label={t(
+            expanded ? 'widgets.remoteWorkers.worker.collapseSettings' : 'widgets.remoteWorkers.worker.expandSettings',
+            { slot }
+          )}
           color="fg.muted"
           h="7"
           minW="6"
@@ -232,22 +247,26 @@ const WorkerAuthRow = ({ enabled, name, slot, url }: { enabled: boolean; name: s
       {expanded ? (
         <Stack gap="2" pb="2" pt="2" px="1">
           <Input
-            aria-label={`Remote worker ${slot} name`}
+            aria-label={t('widgets.remoteWorkers.worker.nameLabel', { slot })}
             onChange={handleNameChange}
-            placeholder={`Remote ${slot}`}
+            placeholder={t('widgets.remoteWorkers.worker.defaultName', { slot })}
             size="sm"
             value={name}
           />
           <Badge alignSelf="start" colorPalette={saved ? 'green' : 'gray'} variant="subtle">
-            {checkingLogin ? 'Checking login' : saved ? 'Login saved' : 'No saved login'}
+            {checkingLogin
+              ? t('widgets.remoteWorkers.login.checking')
+              : saved
+                ? t('widgets.remoteWorkers.login.saved')
+                : t('widgets.remoteWorkers.login.none')}
           </Badge>
           <Text color="fg.muted" fontSize="xs">
-            Optional. For this worker's multi-user login, enter your own account credentials.
+            {t('widgets.remoteWorkers.login.description')}
           </Text>
           <Input
             autoComplete="off"
             onChange={handleEmailChange}
-            placeholder="Remote InvokeAI email"
+            placeholder={t('widgets.remoteWorkers.login.emailPlaceholder')}
             size="sm"
             type="email"
             value={email}
@@ -255,17 +274,21 @@ const WorkerAuthRow = ({ enabled, name, slot, url }: { enabled: boolean; name: s
           <Input
             autoComplete="new-password"
             onChange={handlePasswordChange}
-            placeholder={saved ? 'New password (to replace saved login)' : 'Remote InvokeAI password'}
+            placeholder={
+              saved
+                ? t('widgets.remoteWorkers.login.replacePasswordPlaceholder')
+                : t('widgets.remoteWorkers.login.passwordPlaceholder')
+            }
             size="sm"
             type="password"
             value={password}
           />
           <HStack gap="2">
             <Button disabled={busy || !email.trim() || !password} onClick={handleSave} size="sm">
-              Save login
+              {t('widgets.remoteWorkers.login.save')}
             </Button>
             <Button disabled={busy || !saved} onClick={handleRemove} size="sm" variant="outline">
-              Remove login
+              {t('widgets.remoteWorkers.login.remove')}
             </Button>
           </HStack>
         </Stack>
@@ -281,6 +304,7 @@ const WorkerAuthRow = ({ enabled, name, slot, url }: { enabled: boolean; name: s
 
 /** Availability polling is display-only; backend workers decide job eligibility. */
 export const RemoteWorkersWidgetView = (_props: WidgetViewProps) => {
+  const { t } = useTranslation();
   const settings = remoteWorkersStore.useSnapshot();
   const urls = useMemo(() => getRemoteWorkerUrls(settings.workerUrls), [settings.workerUrls]);
   const accountId = captureAccountScope().accountId;
@@ -312,37 +336,39 @@ export const RemoteWorkersWidgetView = (_props: WidgetViewProps) => {
     <Stack gap="5" p="3">
       <Stack gap="3">
         <HStack justify="space-between">
-          <Text fontWeight="semibold">Distributed rendering</Text>
-          <Badge colorPalette={settings.enabled ? 'green' : 'gray'}>{settings.enabled ? 'Enabled' : 'Disabled'}</Badge>
+          <Text fontWeight="semibold">{t('widgets.remoteWorkers.title')}</Text>
+          <Badge colorPalette={settings.enabled ? 'green' : 'gray'}>
+            {settings.enabled ? t('widgets.remoteWorkers.enabled') : t('widgets.remoteWorkers.disabled')}
+          </Badge>
         </HStack>
         <Switch.Root checked={settings.enabled} onCheckedChange={handleEnabledChange}>
           <Switch.HiddenInput />
           <Switch.Control>
             <Switch.Thumb />
           </Switch.Control>
-          <Switch.Label>Enable distributed rendering</Switch.Label>
+          <Switch.Label>{t('widgets.remoteWorkers.enable')}</Switch.Label>
         </Switch.Root>
         <Text color="fg.muted" fontSize="xs">
-          Send new generations to Local, remote workers, or both. Worker logins are private to each InvokeAI user.
+          {t('widgets.remoteWorkers.description')}
         </Text>
       </Stack>
 
       <Box borderColor="border.subtle" borderTopWidth="1px" pt="4">
         <Stack gap="2">
           <Text fontSize="sm" fontWeight="semibold">
-            Dispatch
+            {t('widgets.remoteWorkers.dispatch.title')}
           </Text>
           <NativeSelect.Root size="sm" disabled={!settings.enabled}>
             <NativeSelect.Field value={settings.dispatchMode} onChange={handleDispatchModeChange}>
-              <option value="distributed">Distributed</option>
-              <option value="remote_only">Remote Only</option>
+              <option value="distributed">{t('widgets.remoteWorkers.dispatch.distributed')}</option>
+              <option value="remote_only">{t('widgets.remoteWorkers.dispatch.remoteOnly')}</option>
             </NativeSelect.Field>
             <NativeSelect.Indicator />
           </NativeSelect.Root>
           <Text color="fg.muted" fontSize="xs">
             {settings.dispatchMode === 'remote_only'
-              ? 'Only enabled remotes consume these queue items. Local does not render them.'
-              : 'Local and enabled remotes share the real InvokeAI queue. Whichever worker is free takes the next job.'}
+              ? t('widgets.remoteWorkers.dispatch.remoteOnlyDescription')
+              : t('widgets.remoteWorkers.dispatch.distributedDescription')}
           </Text>
         </Stack>
       </Box>
@@ -351,15 +377,15 @@ export const RemoteWorkersWidgetView = (_props: WidgetViewProps) => {
         <Stack gap="2">
           <HStack justify="space-between" gap="2">
             <Text fontSize="sm" fontWeight="semibold">
-              Workers
+              {t('widgets.remoteWorkers.workers.title')}
             </Text>
             <Badge colorPalette="gray" variant="subtle">
-              {urls.length} configured
+              {t('widgets.remoteWorkers.workers.configured', { count: urls.length })}
             </Badge>
           </HStack>
           {urls.length === 0 ? (
             <Text color={settings.enabled ? 'fg.warning' : 'fg.muted'} fontSize="xs">
-              Add a valid http(s) worker URL to use distributed rendering.
+              {t('widgets.remoteWorkers.workers.none')}
             </Text>
           ) : (
             <Stack gap="1">
@@ -376,15 +402,17 @@ export const RemoteWorkersWidgetView = (_props: WidgetViewProps) => {
           )}
           <Button alignSelf="start" onClick={toggleWorkerEditor} size="xs" variant="outline">
             <PencilIcon size={13} />
-            {showWorkerEditor ? 'Done editing addresses' : 'Edit worker addresses'}
+            {showWorkerEditor
+              ? t('widgets.remoteWorkers.workers.doneEditingAddresses')
+              : t('widgets.remoteWorkers.workers.editAddresses')}
           </Button>
           {showWorkerEditor ? (
             <Stack gap="1">
               <Text color="fg.muted" fontSize="xs">
-                One URL per line. Worker names can be changed in each worker's expanded settings.
+                {t('widgets.remoteWorkers.workers.editorDescription')}
               </Text>
               <Textarea
-                aria-label="Remote worker URLs"
+                aria-label={t('widgets.remoteWorkers.workers.urlsLabel')}
                 fontFamily="mono"
                 fontSize="sm"
                 onChange={handleWorkerUrlsChange}
@@ -396,11 +424,7 @@ export const RemoteWorkersWidgetView = (_props: WidgetViewProps) => {
             </Stack>
           ) : null}
           <Text color="fg.muted" fontSize="xs">
-            Paused means no availability checks while distributed rendering is off. When enabled: green = online, red =
-            offline, orange = login required. These badges are display-only; the backend verifies reachability before a
-            worker claims a job. The power icon excludes a worker from new jobs without stopping running ones. Offline
-            workers remain configured and can rejoin pending work when they recover. Passwords are encrypted on the
-            primary instance; protect its runtime directory and use HTTPS across untrusted networks.
+            {t('widgets.remoteWorkers.workers.statusHelp')}
           </Text>
         </Stack>
       </Box>
@@ -408,21 +432,21 @@ export const RemoteWorkersWidgetView = (_props: WidgetViewProps) => {
       <Box borderColor="border.subtle" borderTopWidth="1px" pt="4">
         <Stack gap="3">
           <Text fontSize="sm" fontWeight="semibold">
-            Model transfer
+            {t('widgets.remoteWorkers.modelTransfer.title')}
           </Text>
           <Switch.Root checked={settings.autoTransferMissingModels} onCheckedChange={handleAutoTransferChange}>
             <Switch.HiddenInput />
             <Switch.Control>
               <Switch.Thumb />
             </Switch.Control>
-            <Switch.Label>Transfer missing models</Switch.Label>
+            <Switch.Label>{t('widgets.remoteWorkers.modelTransfer.transferMissing')}</Switch.Label>
           </Switch.Root>
           <Switch.Root checked={settings.keepRemoteCopies} onCheckedChange={handleKeepCopiesChange}>
             <Switch.HiddenInput />
             <Switch.Control>
               <Switch.Thumb />
             </Switch.Control>
-            <Switch.Label>Keep copies on remote workers</Switch.Label>
+            <Switch.Label>{t('widgets.remoteWorkers.modelTransfer.keepCopies')}</Switch.Label>
           </Switch.Root>
           {settings.autoTransferMissingModels ? (
             <>
@@ -431,17 +455,17 @@ export const RemoteWorkersWidgetView = (_props: WidgetViewProps) => {
                 <Switch.Control>
                   <Switch.Thumb />
                 </Switch.Control>
-                <Switch.Label>Advanced model transfer settings</Switch.Label>
+                <Switch.Label>{t('widgets.remoteWorkers.modelTransfer.advanced')}</Switch.Label>
               </Switch.Root>
               {showAdvanced ? (
                 <Stack gap="1">
                   <Text fontSize="sm" fontWeight="medium">
-                    Primary host address for model transfers (optional)
+                    {t('widgets.remoteWorkers.modelTransfer.hostLabel')}
                   </Text>
                   <Input
                     fontFamily="mono"
                     onChange={handleTransferHostChange}
-                    placeholder="Auto-detect primary host LAN IP"
+                    placeholder={t('widgets.remoteWorkers.modelTransfer.hostPlaceholder')}
                     size="sm"
                     value={settings.modelTransferHost}
                   />
@@ -454,8 +478,7 @@ export const RemoteWorkersWidgetView = (_props: WidgetViewProps) => {
 
       <Box borderColor="border.subtle" borderTopWidth="1px" pt="4">
         <Text color="fg.muted" fontSize="xs">
-          Results follow your selected destination: Gallery uses the board selected when you invoke; Canvas receives
-          staging candidates you can accept.
+          {t('widgets.remoteWorkers.destinationHelp')}
         </Text>
       </Box>
     </Stack>

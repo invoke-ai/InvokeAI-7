@@ -9,7 +9,7 @@ export const remoteWorkersWidgetManifest: WidgetManifest = {
   failurePolicy: { isolateRenderFailure: true, onRegistrationFailure: 'disable' },
   icon: NetworkIcon,
   id: 'remote-workers',
-  label: 'Remote Workers',
+  label: (t) => t('widgets.labels.remoteWorkers'),
   load: () => import('./implementation').then((module) => module.widgetImplementation),
   version: 1,
 };
