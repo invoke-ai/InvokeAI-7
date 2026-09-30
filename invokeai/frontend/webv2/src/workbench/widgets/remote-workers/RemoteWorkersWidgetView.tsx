@@ -6,7 +6,6 @@ import {
   getRemoteWorkerName,
   getRemoteWorkerUrls,
   invalidateRemoteWorkerHealth,
-  isRemoteWorkerEnabled,
   refreshRemoteWorkerHealth,
   remoteWorkersHealthStore,
   remoteWorkersStore,
@@ -54,7 +53,9 @@ interface CredentialStatus {
 const WorkerAuthRow = ({ enabled, name, slot, url }: { enabled: boolean; name: string; slot: number; url: string }) => {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  const workerEnabled = isRemoteWorkerEnabled(url);
+  const workerEnabled = remoteWorkersStore.useSelector(
+    (settings) => !settings.disabledWorkerUrls.includes(url.toLowerCase())
+  );
   const availability = remoteWorkersHealthStore.useSnapshot().byUrl[url]?.status ?? 'checking';
   const availabilityLabel = !workerEnabled
     ? t('widgets.remoteWorkers.status.disabled')
