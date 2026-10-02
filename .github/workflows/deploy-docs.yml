@@ -12,12 +12,13 @@ on:
   workflow_dispatch:
     inputs:
       deploy_target:
-        description: 'Deploy target (custom = invoke.ai, ghpages = invoke-ai.github.io/InvokeAI)'
+        description: 'Deploy target (auto = custom for invoke-ai/InvokeAI, ghpages elsewhere; custom = invoke.ai; ghpages = <owner>.github.io/<repo>)'
         type: choice
         options:
+          - auto
           - custom
           - ghpages
-        default: custom
+        default: auto
 
 permissions:
   contents: read
@@ -68,6 +69,10 @@ jobs:
       (github.event_name == 'push' && needs.changes.outputs.docs == 'true')
     runs-on: ubuntu-22.04
     timeout-minutes: 20
+    env:
+      # Only the upstream repo owns the invoke.ai domain; other copies and forks serve from
+      # their GitHub Pages project URL.
+      DEPLOY_TARGET: ${{ (github.event_name == 'workflow_dispatch' && inputs.deploy_target != 'auto') && inputs.deploy_target || (github.repository == 'invoke-ai/InvokeAI' && 'custom' || 'ghpages') }}
     steps:
       - name: checkout
         uses: actions/checkout@v6
@@ -119,15 +124,12 @@ jobs:
         run: pnpm build
         working-directory: docs
         env:
-          DEPLOY_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target || 'custom' }}
-          ENABLE_ANALYTICS: ${{ github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.deploy_target == 'custom') }}
+          ENABLE_ANALYTICS: ${{ github.ref == 'refs/heads/main' && env.DEPLOY_TARGET == 'custom' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: verify deploy output
         run: pnpm run check-deploy-output
         working-directory: docs
-        env:
-          DEPLOY_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target || 'custom' }}
 
       # Upload artifact for deploy (main branch only)
       - name: upload pages artifact
