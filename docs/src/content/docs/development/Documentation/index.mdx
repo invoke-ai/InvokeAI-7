@@ -313,6 +313,8 @@ Once you've submitted your updated docs, either via pull request or a main push 
 
 The `deploy-docs` action will install the necessary dependencies, run a build, test and serve the docs on github pages. Any failing deployments will require fixing before deploying.
 
+The action picks the deploy target from the repository: `invoke-ai/InvokeAI` builds for `custom` (https://invoke.ai), and any other repository, such as a fork, builds for `ghpages` with its base path set to the repository name (`https://<owner>.github.io/<repo>/`). A manual run can override this with the `deploy_target` input. Locally, a `ghpages` build uses `/InvokeAI` unless you set `GITHUB_REPOSITORY=<owner>/<repo>`.
+
 ## Troubleshooting
 
 #### All the styles are missing and the links are wrong, what happened?

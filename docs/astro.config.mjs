@@ -7,6 +7,7 @@ import starlight from '@astrojs/starlight';
 import starlightLinksValidator from 'starlight-links-validator';
 import starlightLlmsText from 'starlight-llms-txt';
 import starlightChangelogs from 'starlight-changelogs';
+import { resolveDeployTarget } from './src/lib/deploy-target.mjs';
 import { rehypePrefixBaseToRootLinks } from './plugins/rehype-prefix-base-to-root-links.mjs';
 import { remarkSortPrefixSlug } from './plugins/remark-sort-prefix-slug.mjs';
 import starlightContextualMenu from 'starlight-contextual-menu';
@@ -20,13 +21,9 @@ import {
 } from './src/config';
 
 // Deployment target: 'custom' (default, custom domain at invoke.ai) or 'ghpages'
-// (GitHub Pages project URL at invoke-ai.github.io/InvokeAI). Drive site/base from this
-// so the same source can be deployed to either target.
-const deployTarget = process.env.DEPLOY_TARGET ?? 'custom';
-const isGhPages = deployTarget === 'ghpages';
+// (GitHub Pages project URL). See src/lib/deploy-target.mjs.
+const { base, isGhPages, site } = resolveDeployTarget();
 const enableAnalytics = process.env.ENABLE_ANALYTICS === 'true';
-const base = isGhPages ? '/InvokeAI' : '';
-const site = isGhPages ? 'https://invoke-ai.github.io' : 'https://invoke.ai';
 
 const redirects = createRedirects(base);
 const head = createHeadConfig({ base, enableAnalytics, isGhPages, site });

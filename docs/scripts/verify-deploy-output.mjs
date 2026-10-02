@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs';
 
-const deployTarget = process.env.DEPLOY_TARGET ?? 'custom';
-const base = deployTarget === 'ghpages' ? '/InvokeAI' : '';
+import { resolveDeployTarget } from '../src/lib/deploy-target.mjs';
+
+const { deployTarget, base } = resolveDeployTarget();
+// Custom builds must not carry a project prefix; check against the one ghpages would use.
+const projectBase = resolveDeployTarget({ ...process.env, DEPLOY_TARGET: 'ghpages' }).base;
 const withBase = (path) => `${base}${path}`;
 
 const expectations = [
@@ -12,14 +15,14 @@ const expectations = [
       `src="${withBase('/_astro/')}`,
       `href="${withBase('/start-here/installation/')}`,
     ],
-    excludes: deployTarget === 'custom' ? ['href="/InvokeAI/', 'src="/InvokeAI/'] : ['href="/_astro/', 'src="/_astro/'],
+    excludes: deployTarget === 'custom' ? [`href="${projectBase}/`, `src="${projectBase}/`] : ['href="/_astro/', 'src="/_astro/'],
   },
   {
     file: 'contributing/index.html',
     includes: [`href="${withBase('/contributing/new-contributor-guide/')}`],
     excludes: [
       deployTarget === 'custom'
-        ? 'href="/InvokeAI/contributing/new-contributor-guide/"'
+        ? `href="${projectBase}/contributing/new-contributor-guide/"`
         : 'href="/contributing/new-contributor-guide/"',
       'newContributorChecklist.md',
     ],
@@ -33,9 +36,9 @@ const expectations = [
     ],
     excludes: deployTarget === 'custom'
       ? [
-          'Redirecting to: /InvokeAI/contributing/new-contributor-guide',
-          'content="0;url=/InvokeAI/contributing/new-contributor-guide',
-          'href="/InvokeAI/contributing/new-contributor-guide',
+          `Redirecting to: ${projectBase}/contributing/new-contributor-guide`,
+          `content="0;url=${projectBase}/contributing/new-contributor-guide`,
+          `href="${projectBase}/contributing/new-contributor-guide`,
         ]
       : [
           'Redirecting to: /contributing/new-contributor-guide',
